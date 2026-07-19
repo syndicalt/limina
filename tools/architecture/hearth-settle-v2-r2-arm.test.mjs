@@ -1,5 +1,45 @@
-import assert from"node:assert/strict";import{readFile}from"node:fs/promises";
-const c=JSON.parse(await readFile(new URL("../../assets/buildings/authoring/furniture/hearth-settle-v2-r2/design-contract.json",import.meta.url),"utf8")),parts=new Map(c.parts.map(p=>[p.id,p]));
-assert.equal(c.id,"furniture/hearth-settle/v2-r2");for(const side of["left","right"]){const leg=parts.get(`leg/front-${side}`),support=parts.get(`arm-support/${side}`),arm=parts.get(`arm/${side}`);assert.equal(support.kind,"tapered-member");const supportBottom=support.center[1]-support.geometry.lengthM/2,supportTop=support.center[1]+support.geometry.lengthM/2,legTop=leg.center[1]+leg.geometry.lengthM/2,armBottom=arm.center[1]+Math.min(...arm.geometry.profile.map(p=>p[1]));assert.ok(supportBottom<=legTop&&legTop-supportBottom<=.02,`${side} leg-to-pedestal overlap`);assert.ok(supportTop>=armBottom&&supportTop-armBottom<=.08,`${side} pedestal-to-arm overlap`);assert.ok(c.joints.some(j=>j.members.includes(`leg/front-${side}`)&&j.members.includes(`arm-support/${side}`)),`${side} base joint missing`);assert.ok(c.joints.some(j=>j.members.includes(`arm-support/${side}`)&&j.members.includes(`arm/${side}`)),`${side} arm joint missing`)}
-const preserved=JSON.parse(await readFile(new URL("../../assets/buildings/authoring/furniture/hearth-settle-v2/design-contract.json",import.meta.url),"utf8"));assert.deepEqual(c.dimensions,preserved.dimensions);assert.deepEqual(parts.get("seat/plank").geometry,preserved.parts.find(p=>p.id==="seat/plank").geometry);for(const id of["back-post/left","back-post/right","rail/back-low","rail/back-high","crest"])assert.deepEqual(parts.get(id),preserved.parts.find(p=>p.id===id),`${id} must remain unchanged`);
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+const c = JSON.parse(
+    await readFile(
+      new URL("../../assets/buildings/authoring/furniture/hearth-settle-v2-r2/design-contract.json", import.meta.url),
+      "utf8",
+    ),
+  ),
+  parts = new Map(c.parts.map((p) => [p.id, p]));
+assert.equal(c.id, "furniture/hearth-settle/v2-r2");
+for (const side of ["left", "right"]) {
+  const leg = parts.get(`leg/front-${side}`),
+    support = parts.get(`arm-support/${side}`),
+    arm = parts.get(`arm/${side}`);
+  assert.equal(support.kind, "tapered-member");
+  const supportBottom = support.center[1] - support.geometry.lengthM / 2,
+    supportTop = support.center[1] + support.geometry.lengthM / 2,
+    legTop = leg.center[1] + leg.geometry.lengthM / 2,
+    armBottom = arm.center[1] + Math.min(...arm.geometry.profile.map((p) => p[1]));
+  assert.ok(supportBottom <= legTop && legTop - supportBottom <= 0.02, `${side} leg-to-pedestal overlap`);
+  assert.ok(supportTop >= armBottom && supportTop - armBottom <= 0.08, `${side} pedestal-to-arm overlap`);
+  assert.ok(
+    c.joints.some((j) => j.members.includes(`leg/front-${side}`) && j.members.includes(`arm-support/${side}`)),
+    `${side} base joint missing`,
+  );
+  assert.ok(
+    c.joints.some((j) => j.members.includes(`arm-support/${side}`) && j.members.includes(`arm/${side}`)),
+    `${side} arm joint missing`,
+  );
+}
+const preserved = JSON.parse(
+  await readFile(
+    new URL("../../assets/buildings/authoring/furniture/hearth-settle-v2/design-contract.json", import.meta.url),
+    "utf8",
+  ),
+);
+assert.deepEqual(c.dimensions, preserved.dimensions);
+assert.deepEqual(parts.get("seat/plank").geometry, preserved.parts.find((p) => p.id === "seat/plank").geometry);
+for (const id of ["back-post/left", "back-post/right", "rail/back-low", "rail/back-high", "crest"])
+  assert.deepEqual(
+    parts.get(id),
+    preserved.parts.find((p) => p.id === id),
+    `${id} must remain unchanged`,
+  );
 console.log("hearth settle v2-r2 arm checks passed: continuous front-leg → pedestal → arm load paths");

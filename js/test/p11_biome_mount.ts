@@ -125,7 +125,11 @@ assert(pineLayer.instances >= rockLayer.instances, `pines (${pineLayer.instances
 // The captured InstancedMeshes themselves carry real, written instance counts (> 0). Every
 // pine sub-mesh InstancedMesh has the SAME count as the pine layer's placement total.
 const instMeshes = added.filter((o): o is THREE.InstancedMesh => o instanceof THREE.InstancedMesh);
-assert(instMeshes.length === pineLayer.mounted + rockLayer.mounted, `scene.add count ${instMeshes.length} != total mounted ${pineLayer.mounted + rockLayer.mounted}`);
+const layerMounted = scattered.layers.reduce((sum, layer) => sum + layer.mounted, 0);
+assert(scattered.mounted === layerMounted,
+  `whole-population mounted total ${scattered.mounted} != layer sum ${layerMounted}`);
+assert(instMeshes.length === scattered.mounted,
+  `scene.add count ${instMeshes.length} != whole-population mounted ${scattered.mounted}`);
 assert(instMeshes.every((m) => m.count > 0), "a mounted InstancedMesh has count 0 (no instances written to the buffer)");
 const pineMeshes = instMeshes.filter((m) => m.count === pineLayer.instances);
 assert(pineMeshes.length === 2, `expected 2 pine sub-mesh InstancedMeshes of count ${pineLayer.instances}, found ${pineMeshes.length}`);

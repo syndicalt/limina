@@ -122,6 +122,35 @@ assert(phys !== null, "rapier-compat could not be instantiated in this binary â€
   }
 }
 
+// Browser collision parity: events are retained across later steps until the
+// skill polls them, and the retained queue is bounded to the native 4096-event
+// contract with an explicit, reset-on-read overflow counter.
+{
+  const p = phys;
+  p.op_physics_create_world(0);
+  const a = p.op_physics_add_sphere(0, 0, 0, 1, 0.5, 0);
+  const b = p.op_physics_add_sphere(0.5, 0, 0, 1, 0.5, 0);
+  p.op_physics_step();
+  p.op_physics_step();
+  const retained = p.op_physics_drain_collisions();
+  const retainedStart = retained.find((event) => event.kind === 1 && event.a === a && event.b === b);
+  assert(retainedStart !== undefined,
+    "collision start was lost when polling was delayed beyond its step");
+  assert(retainedStart.point !== null && retainedStart.normal !== null,
+    "retained collision start lost the contact geometry captured on its source step");
+  assert(p.op_physics_drain_collisions().length === 0, "collision drain did not consume the retained queue");
+
+  p.op_physics_create_world(0);
+  const overlappingBodies = 92; // 92 choose 2 = 4186 collision starts.
+  for (let i = 0; i < overlappingBodies; i++) p.op_physics_add_sphere(0, 0, 0, 1, 0.5, 0);
+  p.op_physics_step();
+  const bounded = p.op_physics_drain_collisions();
+  const overflow = p.op_physics_take_collision_overflow_count();
+  assert(bounded.length === 4096, `browser collision queue retained ${bounded.length}, expected its 4096 cap`);
+  assert(overflow === 90, `browser collision overflow counted ${overflow}, expected 90`);
+  assert(p.op_physics_take_collision_overflow_count() === 0, "collision overflow counter did not reset on read");
+}
+
 {
   const p = await WasmRapierPhysics.create(RAPIER);
   p.op_physics_create_world(-9.81);

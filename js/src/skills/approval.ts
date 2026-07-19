@@ -119,7 +119,9 @@ export function reviewProfileGate(reviewProfiles: ReadonlySet<string>): Approval
 //    actually applies it. Denied actions therefore never enter authoritative replay.
 //    p57_approval_recording replays this stream into a fresh world and verifies the
 //    reviewed mutation applies exactly once.
-// 4. The pending map is capacity-bounded by SkillRegistry.setApprovalQueueLimit
-//    and fails closed when full. It still intentionally has no TTL/dedup because
-//    duplicate-looking proposals can differ by tick/provenance and need explicit
-//    reviewer handling.
+// 4. The pending map is capacity-bounded and every reservation expires after the
+//    registry's bounded hold timeout (15 minutes by default). Expiry drops the
+//    intent and emits skill.approval.denied. Proposal-time quota/call usage is not
+//    refunded: retaining that charge prevents approval spam and the policy's own
+//    window resets it. Duplicate-looking proposals remain distinct because their
+//    tick/provenance can differ and need explicit reviewer handling.

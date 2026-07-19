@@ -29,6 +29,7 @@ const runLiveStart = entry.indexOf("export async function runLive");
 const runLiveEnd = entry.indexOf("// ---- Auto-bootstrap", runLiveStart);
 const runLiveSource = runLiveStart >= 0 && runLiveEnd > runLiveStart ? entry.slice(runLiveStart, runLiveEnd) : "";
 const live = read("browser/live-runtime.ts");
+const engineOpComposition = read("browser/engine-op-composition.ts");
 const workerEntry = read("browser/sim-worker-entry.ts");
 
 console.log("Phase 8 M5 — live runtime composition guard");
@@ -91,9 +92,17 @@ expect(/@dimforge\/rapier3d-compat/.test(workerEntry), "worker entry bundles rap
 expect(/WorkerGlobalScope/.test(workerEntry), "worker entry is gated on WorkerGlobalScope (inert at non-worker import)");
 
 // ── NO STUBS in the live integration path: the render side never fabricates poses
-//    or fakes physics transforms — it reads them from the JOINed SAB. ──
+//    or fakes physics transforms — it reads them from the JOINed SAB. The binding table now
+//    lives in the shared realm-safe composition module; check both the live caller and that
+//    authority instead of pinning the pre-refactor inline spelling. Behavioral receiver/output
+//    proof lives in p_engine_op_composition.ts and runs in the aggregate Limina suite. ──
 expect(!/stubScene|stubCamera|fakeTransform|TODO|FIXME/.test(live), "live-runtime carries no scene/camera stubs or TODO placeholders");
-expect(/P\.op_physics_body_transform\.bind\(P\)/.test(live), "authoring ops bind the REAL physics body transform (no fabricated transforms)");
+expect(/import\s*\{\s*composePortableEngineOps\s*\}\s*from\s*"\.\/engine-op-composition\.ts"/.test(live)
+  && /return\s+composePortableEngineOps\(P,\s*\{\s*readAsset\s*\}\)/.test(live),
+"authoring ops delegate to the shared portable engine-op authority");
+expect(/op_physics_body_transform:\s*provider\.op_physics_body_transform\.bind\(provider\)/.test(engineOpComposition)
+  && /\.\.\.bindPhysicsEngineOps\(physics\)/.test(engineOpComposition),
+"shared composition binds the REAL physics body transform (no fabricated transforms)");
 
 for (const o of ok) console.log("  PASS  " + o);
 if (fails.length > 0) {

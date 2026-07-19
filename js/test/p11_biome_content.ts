@@ -207,6 +207,8 @@ const regionId = gen.regionId as string;
 const content = await scatterBiomeContent({ registry: skreg, source: skcore.terrain.source, regionId, type: "mountains", pack: TEST_PACK, bounds: BOUNDS, seed: SEED, base: skbase });
 assert(content.instances > 0 && content.layers.length === BIOME_CONTENT.mountains.length, "scatterBiomeContent placed nothing / wrong layer count");
 assert(content.layers.every((l) => l.mounted >= 1), "a biome-content layer mounted no InstancedMesh (render path inert)");
+assert(content.mounted === content.layers.reduce((sum, layer) => sum + layer.mounted, 0),
+  "scatterBiomeContent whole-population mounted total does not equal its layer sum");
 assert(content.layers[0].assetHashes[TEST_PACK.conifer!.id] === skcore.assets.resolve(TEST_PACK.conifer!.id).hash, "scatterBiomeContent did not pin the pine hash");
 // The helper's resolved configs match the pure path (same survey → same gates).
 assert(content.configs[0].elevationMax !== undefined && Math.abs(content.configs[0].elevationMax! - treeLine) < 1e-9, "helper resolved a different tree line than the pure path");
@@ -226,7 +228,7 @@ try {
   emptyThrew = true;
 }
 assert(!emptyThrew, "scatterBiomeContent THREW on an empty pack — an absent project pack must be graceful, not a broken world");
-assert(emptyContent !== undefined && emptyContent.instances === 0 && emptyContent.layers.length === 0, "empty pack scattered instances (should place nothing for unmapped roles)");
+assert(emptyContent !== undefined && emptyContent.instances === 0 && emptyContent.mounted === 0 && emptyContent.layers.length === 0, "empty pack scattered instances or mounted meshes (should produce nothing for unmapped roles)");
 
 // ── 7. BEACH PARITY: the catalog reproduces the beach recipe bit-for-bit under a pack ───
 const seaLevel = 3.19;

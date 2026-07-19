@@ -2,15 +2,7 @@
 
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import {
-  chmod,
-  copyFile,
-  lstat,
-  mkdir,
-  open,
-  readdir,
-  unlink,
-} from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
 import { createServer } from "node:http";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,8 +21,11 @@ function sha256(bytes) {
 }
 
 function inspectPng(bytes) {
-  if (bytes.byteLength < 24 || !bytes.subarray(0, 8).equals(PNG_SIGNATURE)
-      || bytes.toString("ascii", 12, 16) !== "IHDR") {
+  if (
+    bytes.byteLength < 24 ||
+    !bytes.subarray(0, 8).equals(PNG_SIGNATURE) ||
+    bytes.toString("ascii", 12, 16) !== "IHDR"
+  ) {
     throw new Error("artifact is not a PNG with an IHDR header");
   }
   const width = bytes.readUInt32BE(16);
@@ -40,15 +35,17 @@ function inspectPng(bytes) {
 }
 
 function isSafeArtifactName(name) {
-  return typeof name === "string"
-    && name.length > 0
-    && Buffer.byteLength(name, "utf8") <= 240
-    && name === basename(name)
-    && !name.startsWith(".")
-    && !name.includes("/")
-    && !name.includes("\\")
-    && !/[\0-\x1f\x7f]/.test(name)
-    && extname(name).toLowerCase() === ".png";
+  return (
+    typeof name === "string" &&
+    name.length > 0 &&
+    Buffer.byteLength(name, "utf8") <= 240 &&
+    name === basename(name) &&
+    !name.startsWith(".") &&
+    !name.includes("/") &&
+    !name.includes("\\") &&
+    !/[\0-\x1f\x7f]/.test(name) &&
+    extname(name).toLowerCase() === ".png"
+  );
 }
 
 function assertArtifactName(name) {
@@ -157,19 +154,22 @@ export async function listReviewArtifacts(artifactDirectory = DEFAULT_ARTIFACT_D
       if (!["ENOENT", "ELOOP"].includes(error?.code)) throw error;
     }
   }
-  artifacts.sort((left, right) => right.modifiedAtMs - left.modifiedAtMs
-    || left.name.localeCompare(right.name, "en"));
+  artifacts.sort((left, right) => right.modifiedAtMs - left.modifiedAtMs || left.name.localeCompare(right.name, "en"));
   return artifacts;
 }
 
 function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (character) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "\"": "&quot;",
-    "'": "&#39;",
-  })[character]);
+  return String(value).replace(
+    /[&<>"']/g,
+    (character) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[character],
+  );
 }
 
 function publicMetadata(artifact) {
@@ -180,16 +180,15 @@ function publicMetadata(artifact) {
     height: artifact.height,
     byteLength: artifact.byteLength,
     sha256: artifact.sha256,
-    reviewStatus: artifact.sha256 === APPROVED_CHECKPOINT_SHA256
-      ? "approved laptop checkpoint"
-      : "review required",
+    reviewStatus: artifact.sha256 === APPROVED_CHECKPOINT_SHA256 ? "approved laptop checkpoint" : "review required",
   };
 }
 
 function renderGallery(artifacts) {
-  const cards = artifacts.map((artifact) => {
-    const metadata = publicMetadata(artifact);
-    return `<article class="card">
+  const cards = artifacts
+    .map((artifact) => {
+      const metadata = publicMetadata(artifact);
+      return `<article class="card">
       <a href="/artifacts/${encodeURIComponent(artifact.name)}"><img src="/artifacts/${encodeURIComponent(artifact.name)}" alt="${escapeHtml(artifact.name)}"></a>
       <div class="details">
         <h2>${escapeHtml(artifact.name)}</h2>
@@ -202,20 +201,42 @@ function renderGallery(artifacts) {
         </dl>
       </div>
     </article>`;
-  }).join("\n");
-  const empty = "<p class=\"empty\">No staged review artifacts.</p>";
+    })
+    .join("\n");
+  const empty = '<p class="empty">No staged review artifacts.</p>';
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Limina private visual review</title>
 <style>
-:root{color-scheme:dark;background:#101512;color:#edf4ee;font:16px/1.45 system-ui,sans-serif}body{margin:0 auto;max-width:1500px;padding:28px}header{margin-bottom:24px}h1{margin:0 0 6px;font-size:clamp(1.5rem,4vw,2.5rem)}header p{color:#aebbb1;margin:.3rem 0}.grid{display:grid;gap:24px}.card{background:#18201a;border:1px solid #334338;border-radius:12px;overflow:hidden;box-shadow:0 10px 30px #0006}.card img{display:block;width:100%;height:auto;background:#090c0a}.details{padding:18px}h2{font-size:1.05rem;margin:0 0 10px;overflow-wrap:anywhere}.status{display:inline-block;margin:0 0 12px;padding:4px 9px;border-radius:999px;font-size:.8rem;text-transform:uppercase;letter-spacing:.04em}.approved{background:#1f5937;color:#d8ffe5}.pending{background:#664c1d;color:#fff0c5}dl{display:grid;grid-template-columns:max-content 1fr;gap:5px 14px;margin:0}dt{color:#9eafa2}dd{margin:0;min-width:0;overflow-wrap:anywhere}code{font-size:.82rem}.empty{padding:40px;background:#18201a;border-radius:12px}@media(min-width:1100px){.card{display:grid;grid-template-columns:minmax(0,2fr) minmax(360px,1fr);align-items:start}}
+:root{color-scheme:dark;background:#101512;color:#edf4ee;font:16px/1.45 system-ui,sans-serif}
+body{margin:0 auto;max-width:1500px;padding:28px}
+header{margin-bottom:24px}
+h1{margin:0 0 6px;font-size:clamp(1.5rem,4vw,2.5rem)}
+header p{color:#aebbb1;margin:.3rem 0}
+.grid{display:grid;gap:24px}
+.card{background:#18201a;border:1px solid #334338;border-radius:12px;overflow:hidden;box-shadow:0 10px 30px #0006}
+.card img{display:block;width:100%;height:auto;background:#090c0a}
+.details{padding:18px}
+h2{font-size:1.05rem;margin:0 0 10px;overflow-wrap:anywhere}
+.status{display:inline-block;margin:0 0 12px;padding:4px 9px;border-radius:999px;font-size:.8rem;text-transform:uppercase;letter-spacing:.04em}
+.approved{background:#1f5937;color:#d8ffe5}
+.pending{background:#664c1d;color:#fff0c5}
+dl{display:grid;grid-template-columns:max-content 1fr;gap:5px 14px;margin:0}
+dt{color:#9eafa2}
+dd{margin:0;min-width:0;overflow-wrap:anywhere}
+code{font-size:.82rem}
+.empty{padding:40px;background:#18201a;border-radius:12px}
+@media(min-width:1100px){
+  .card{display:grid;grid-template-columns:minmax(0,2fr) minmax(360px,1fr);align-items:start}
+}
 </style></head><body><header><h1>Limina private visual review</h1><p>Newest artifact first. Spark captures remain unapproved until reviewed on this target.</p></header><main class="grid">${cards || empty}</main></body></html>`;
 }
 
 function securityHeaders(contentType) {
   return {
     "Cache-Control": "no-store",
-    "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    "Content-Security-Policy":
+      "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
     "Cross-Origin-Resource-Policy": "same-origin",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
     "Referrer-Policy": "no-referrer",
@@ -237,8 +258,7 @@ function send(response, status, contentType, body, method = "GET", extraHeaders 
 
 function validHost(request) {
   const port = request.socket.localPort;
-  return request.headers.host === `${LOOPBACK_HOST}:${port}`
-    || request.headers.host === `localhost:${port}`;
+  return request.headers.host === `${LOOPBACK_HOST}:${port}` || request.headers.host === `localhost:${port}`;
 }
 
 export function createReviewServer({ artifactDirectory = DEFAULT_ARTIFACT_DIRECTORY } = {}) {
@@ -270,7 +290,11 @@ export function createReviewServer({ artifactDirectory = DEFAULT_ARTIFACT_DIRECT
       }
       if (url.pathname.startsWith("/artifacts/") && url.search === "") {
         let name;
-        try { name = decodeURIComponent(url.pathname.slice("/artifacts/".length)); } catch { name = ""; }
+        try {
+          name = decodeURIComponent(url.pathname.slice("/artifacts/".length));
+        } catch {
+          name = "";
+        }
         if (!isSafeArtifactName(name)) {
           send(response, 404, "text/plain; charset=utf-8", "not found\n", method);
           return;
@@ -315,7 +339,10 @@ function parseOptions(arguments_) {
   const positional = [];
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index];
-    if (!argument.startsWith("--")) { positional.push(argument); continue; }
+    if (!argument.startsWith("--")) {
+      positional.push(argument);
+      continue;
+    }
     const key = argument.slice(2);
     const value = arguments_[index + 1];
     if (value === undefined || value.startsWith("--")) throw new Error(`missing value for --${key}`);
@@ -330,13 +357,22 @@ async function main() {
   const { options, positional } = parseOptions(arguments_);
   if (command === "stage") {
     const source = positional[0];
-    if (!source || positional.length > 1) throw new Error("usage: stage <source.png> [--name <artifact.png>] [--expect-sha256 <hex>] [--expect-width <px>] [--expect-height <px>]");
+    if (!source || positional.length > 1)
+      throw new Error(
+        "usage: stage <source.png> [--name <artifact.png>] [--expect-sha256 <hex>] [--expect-width <px>] [--expect-height <px>]",
+      );
     const artifact = await stageReviewArtifact({
       source,
       name: options.name ?? basename(source),
       expectedSha256: options["expect-sha256"],
-      expectedWidth: options["expect-width"] === undefined ? undefined : parsePositiveInteger(options["expect-width"], "expected width"),
-      expectedHeight: options["expect-height"] === undefined ? undefined : parsePositiveInteger(options["expect-height"], "expected height"),
+      expectedWidth:
+        options["expect-width"] === undefined
+          ? undefined
+          : parsePositiveInteger(options["expect-width"], "expected width"),
+      expectedHeight:
+        options["expect-height"] === undefined
+          ? undefined
+          : parsePositiveInteger(options["expect-height"], "expected height"),
     });
     console.log(JSON.stringify(publicMetadata(artifact), null, 2));
     return;

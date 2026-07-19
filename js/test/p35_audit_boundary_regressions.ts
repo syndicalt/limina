@@ -56,7 +56,9 @@ function parseResponses(lines: readonly string[]): Map<string | number | null | 
   const registry = new SkillRegistry(new LiminaTracer("ses_p35_mcp"));
   registerCoreSkills(registry);
   const writes: string[] = [];
-  const transport = new StdioMcpTransport(new Mcp(registry, makeWorld()), (line) => writes.push(line));
+  const transport = new StdioMcpTransport(new Mcp(registry, makeWorld()), (line) => writes.push(line), {
+    allowedProfiles: new Set(["player.limited"]), specProfile: "player.limited",
+  });
   await transport.handleLine(JSON.stringify({
     jsonrpc: "2.0",
     id: 1,

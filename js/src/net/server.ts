@@ -599,7 +599,8 @@ export class AuthoritativeServer {
         const trimmed = line.trim();
         if (trimmed.length === 0) continue;
         await this.handleLine(conn, trimmed);
-      } catch {
+      } catch (error) {
+        defaultOps.op_log(`AuthoritativeServer connection dispatch failed: ${error instanceof Error ? error.message : String(error)}`);
         await this.reply(conn.connId, this.error(null, JSON_RPC_ERRORS.internalError, "Internal error"));
       }
     }
@@ -902,7 +903,8 @@ export class AuthoritativeServer {
         await this.reply(conn.connId, this.error(id, JSON_RPC_ERRORS.methodNotFound, `Method not found: ${rec.method}`));
         return;
       }
-    } catch {
+    } catch (error) {
+      defaultOps.op_log(`AuthoritativeServer request ${rec.method} failed: ${error instanceof Error ? error.message : String(error)}`);
       await this.reply(conn.connId, this.error(id, JSON_RPC_ERRORS.internalError, "Internal error"));
     }
   }

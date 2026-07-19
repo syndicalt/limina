@@ -31,6 +31,10 @@ export interface FunctionalSettlementHandle {
   buildings: readonly FunctionalSettlementBuildingHandle[];
 }
 
+export interface FunctionalSettlementPlacementManagerSnapshot {
+  readonly settlements: readonly FunctionalSettlementHandle[];
+}
+
 /** Runtime ownership only. Residency policy is deliberately owned by the separate FB-5 manager. */
 export class FunctionalSettlementPlacementManager {
   private readonly settlements = new Map<string, FunctionalSettlementHandle>();
@@ -49,6 +53,21 @@ export class FunctionalSettlementPlacementManager {
     const handle = this.settlements.get(settlementId);
     this.settlements.delete(settlementId);
     return handle;
+  }
+  captureSnapshot(): FunctionalSettlementPlacementManagerSnapshot {
+    const settlements = [...this.settlements.values()]
+      .sort((a, b) => a.settlementId < b.settlementId ? -1 : a.settlementId > b.settlementId ? 1 : 0)
+      .map((handle) => frozenHandle({ ...handle,
+        buildings: [...handle.buildings].sort((a, b) => a.placementId < b.placementId ? -1 : a.placementId > b.placementId ? 1 : 0),
+      }));
+    return Object.freeze({ settlements: Object.freeze(settlements) });
+  }
+  restoreSnapshot(input: unknown): void {
+    const snapshot = parseFunctionalSettlementPlacementManagerSnapshot(input);
+    const restored = new Map<string, FunctionalSettlementHandle>();
+    for (const handle of snapshot.settlements) restored.set(handle.settlementId, handle);
+    this.settlements.clear();
+    for (const [settlementId, handle] of restored) this.settlements.set(settlementId, handle);
   }
 }
 
@@ -79,10 +98,39 @@ const buildingHandleSchema = z.object({
   atlasAnchorId: z.string(), atlasRouteId: z.string(), routeContact: z.tuple([z.number(), z.number(), z.number()]),
 });
 const placeOutput = z.object({ settlementId: z.string(), planId: z.string(), worldMapHash: z.string(), buildings: z.array(buildingHandleSchema) });
+export const functionalSettlementPlacementManagerSnapshotSchema: z.ZodType<FunctionalSettlementPlacementManagerSnapshot> = z.object({
+  settlements: z.array(z.object({
+    settlementId: safeId,
+    planId: safeId,
+    worldMapHash: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+    buildings: z.array(buildingHandleSchema).min(1).max(256),
+  })).max(256),
+});
+
+function parseFunctionalSettlementPlacementManagerSnapshot(input: unknown): FunctionalSettlementPlacementManagerSnapshot {
+  const parsed = functionalSettlementPlacementManagerSnapshotSchema.parse(input);
+  let previousSettlementId: string | undefined;
+  const settlements = parsed.settlements.map((handle) => {
+    if (previousSettlementId !== undefined && previousSettlementId >= handle.settlementId)
+      throw new TypeError("functional settlement snapshot settlements must be strictly sorted and unique");
+    previousSettlementId = handle.settlementId;
+    let previousPlacementId: string | undefined;
+    for (const building of handle.buildings) {
+      if (previousPlacementId !== undefined && previousPlacementId >= building.placementId)
+        throw new TypeError(`functional settlement snapshot buildings for '${handle.settlementId}' must be strictly sorted and unique`);
+      previousPlacementId = building.placementId;
+      if (building.residencyUnitId.length < 1 || building.root.length < 1 || building.assetHash.length < 1 ||
+          !building.position.every(Number.isFinite) || !Number.isFinite(building.yaw) || !building.routeContact.every(Number.isFinite))
+        throw new TypeError(`functional settlement snapshot building '${building.placementId}' is malformed`);
+    }
+    return frozenHandle(handle);
+  });
+  return Object.freeze({ settlements: Object.freeze(settlements) });
+}
 
 function nestedBase(ctx: ExecutionContext) {
   return { agentId: ctx.agentId, sessionId: ctx.sessionId, profile: ctx.profile, permissions: ctx.permissions,
-    tick: ctx.tick, world: ctx.world, chainId: ctx.chainId };
+    tick: ctx.tick, world: ctx.world, chainId: ctx.chainId, chainToken: ctx.chainToken };
 }
 function nestedResult(response: Awaited<ReturnType<SkillRegistry["invoke"]>>, operation: string): Record<string, unknown> {
   if (!response.success) throw new Error(`functional settlement: ${operation} failed: ${response.error?.code ?? "unknown"}: ${response.error?.message ?? "unknown failure"}`);

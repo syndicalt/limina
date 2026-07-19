@@ -11,7 +11,7 @@ function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error("p38_approval_accounting FAIL: " + message);
 }
 
-const policy = new PolicyEngine().setQuota({ cap: "scene.createEntity", limit: 1, windowMs: 100 });
+const policy = new PolicyEngine().setQuota({ cap: "scene.createEntity", limit: 1, windowTicks: 100 });
 const ctx = createHeadlessContext({ session: "ses_p38_approval", policy });
 ctx.registry.setApprovalGate(reviewProfileGate(new Set(["builder.review"])));
 ops.op_physics_create_world(0);
@@ -51,4 +51,23 @@ const createDecisions = ctx.tracer.trace("agt_builder").filter((event) => {
 });
 assert(createDecisions.length === 1, `expected one committed allow decision, got ${createDecisions.length}`);
 
-ops.op_log("P38 approval accounting OK: proposal consumes quota once, grant applies and records without a second policy commit");
+// A proposal reservation cannot remain applicable forever. Expiry is observable,
+// removes it from the queue, and a later reviewer cannot resurrect it.
+{
+  const expiring = createHeadlessContext({ session: "ses_p38_approval_expiry" });
+  expiring.registry.setApprovalGate(reviewProfileGate(new Set(["builder.review"])));
+  expiring.registry.setApprovalHoldTimeoutMs(1);
+  const heldForExpiry = await expiring.registry.invoke("scene.createEntity", { position: [3, 0, 0] }, {
+    ...proposer(10), sessionId: "ses_builder_expiry", world: expiring.world,
+  });
+  assert(!heldForExpiry.success && heldForExpiry.error?.code === "pending_approval", "expiry fixture was not held");
+  await ops.op_sleep_ms(5);
+  assert(expiring.registry.pendingApprovals().length === 0, "expired reservation remained listed");
+  const late = await expiring.registry.resolveApproval(heldForExpiry.error.message, true, { agentId: "human_reviewer", applyTick: 11 });
+  assert(!late.success && late.error?.code === "not_found", "expired reservation was applied late");
+  const expiryEvents = expiring.tracer.trace("agt_builder").filter((event) =>
+    event.type === "skill.approval.denied" && (event.payload as { reason?: string }).reason === "approval hold expired");
+  assert(expiryEvents.length === 1, `expected one observable approval expiry, got ${expiryEvents.length}`);
+}
+
+ops.op_log("P38 approval accounting OK: proposal consumes quota once, grant applies without a second policy commit, and stale reservations expire closed");

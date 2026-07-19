@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { BoundedByteTail } from "./process/bounded-byte-tail.mjs";
 
 // three + its GLTFExporter live in js/node_modules (there is no repo-root node_modules). Resolve
 // them by explicit path so this baker runs from any cwd. GLTFExporter's own bare `three` import
@@ -77,22 +78,20 @@ function run(command, args, options = {}) {
       ...options,
     });
 
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
+    // Subprocess output is diagnostic only. Keeping the full stream let a noisy
+    // or compromised tool grow this long-lived baker without bound.
+    const stdout = new BoundedByteTail(64 * 1024);
+    const stderr = new BoundedByteTail(64 * 1024);
+    child.stdout.on("data", (chunk) => stdout.append(chunk));
+    child.stderr.on("data", (chunk) => stderr.append(chunk));
     child.on("error", reject);
     child.on("close", (code) => {
       if (code === 0) {
-        resolve({ stdout, stderr });
+        resolve({ stdout: stdout.toString(), stderr: stderr.toString() });
       } else {
         reject(
           new Error(
-            `${command} ${args.join(" ")} failed with exit ${code}\n${stdout}${stderr}`,
+            `${command} ${args.join(" ")} failed with exit ${code}\n${stdout.toString()}${stderr.toString()}`,
           ),
         );
       }

@@ -39,7 +39,7 @@
 // | functionalBuildings.topologyManager          | R | functional-building.ts registers a world reconciler: topology/doors/portals rebuild from entry.origin, and origins ride the snapshot |
 // | behavior.behaviorManager                     | P "behavior"         | profiles/memories/attitudes/assignments/goals/routines/reactions + the goal-id seq (post-restore setGoal allocates the same next id) |
 // | behavior.dialogueManager                     | P "dialogue"         | dialogue trees + IN-PROGRESS sessions (current node, choice history) |
-// | functionalSettlements.placementManager       | F | settlement handles are sim ownership state; JSON-shaped, but enrollment deferred (plan scope) |
+// | functionalSettlements.placementManager       | P "functionalSettlements.placements" | exact whole-building ownership handles; entity/topology resources restore separately |
 // | terrain (source/cache/regions/layers)        | F | editable-layer heights/paint are sim state; heightfield COLLIDERS ride the physics blob but the JS tile arrays do not — known pre-existing gap |
 // | nav.navmeshManager (base grid + agents)      | F | grid rebuilds via navmesh.build replay only; not yet snapshot-carried |
 // | assets / materials (registries)              | X | content-addressed stores rebuilt from packages/imports; bytes never live in a snapshot |
@@ -77,6 +77,10 @@ import type { CutsceneManager, CutsceneManagerSnapshot } from "./cutscene.ts";
 import type { DirectorManager, DirectorManagerSnapshot } from "./director.ts";
 import type { EventSpecRegistry } from "./behavior-spec.ts";
 import type { BehaviorManager, BehaviorManagerSnapshot, DialogueManager, DialogueManagerSnapshot } from "./behavior.ts";
+import {
+  functionalSettlementPlacementManagerSnapshotSchema,
+  type FunctionalSettlementPlacementManager,
+} from "./functional-settlement.ts";
 
 // ---- participant schemas (validate a snapshot's managers entries at restore) ----
 // Typed against each manager module's exported snapshot interface, so schema and
@@ -414,6 +418,7 @@ export interface CoreParticipantManagers {
   directorManager: DirectorManager;
   behaviorManager: BehaviorManager;
   dialogueManager: DialogueManager;
+  functionalSettlementPlacementManager: FunctionalSettlementPlacementManager;
   /** The world-level EventSpecRegistry — the reserved "events" participant. */
   eventSpecs: EventSpecRegistry;
 }
@@ -445,6 +450,9 @@ export function buildCoreSnapshotParticipants(m: CoreParticipantManagers): Snaps
   registry.register(participant("director", directorSchema, () => m.directorManager.captureSnapshot(), (s) => m.directorManager.restoreSnapshot(s)));
   registry.register(participant("behavior", behaviorSchema, () => m.behaviorManager.captureSnapshot(), (s) => m.behaviorManager.restoreSnapshot(s)));
   registry.register(participant("dialogue", dialogueSchema, () => m.dialogueManager.captureSnapshot(), (s) => m.dialogueManager.restoreSnapshot(s)));
+  registry.register(participant("functionalSettlements.placements", functionalSettlementPlacementManagerSnapshotSchema,
+    () => m.functionalSettlementPlacementManager.captureSnapshot(),
+    (s) => m.functionalSettlementPlacementManager.restoreSnapshot(s)));
   // Migrated from the bespoke `events?:` plumbing: rides the snapshot's existing
   // top-level `events` field via the reserved key (wire format unchanged).
   registry.register(eventsParticipant(m.eventSpecs));

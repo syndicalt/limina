@@ -129,7 +129,7 @@ async function dispatch(req, editor) {
 async function main() {
   const authToken = process.env.LIMINA_EDITOR_TOKEN;
   if (authToken === undefined || authToken.length === 0) {
-    fatal("LIMINA_EDITOR_TOKEN is required; copy the EDITOR_AUTH_TOKEN printed by editor_host at boot.");
+    fatal("LIMINA_EDITOR_TOKEN is required; read it from the private capability file reported by the editor launcher.");
   }
 
   const config = {

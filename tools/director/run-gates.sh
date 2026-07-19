@@ -34,7 +34,7 @@ HEADLESS_TESTS=" m0_seams p0_4_cube s4_window s3_offscreen p8_browser_runtime p3
 # Tests whose committed evidence records repo-root-relative asset paths ("assets/...")
 # — they must run with the asset root at the REPO ROOT, matching the capture harnesses
 # (tools/preview/*) that produced the evidence. Named allowlist, not error guessing.
-REPO_ROOTED_TESTS=" p_building_production_review_scene p_asset_place_collider_lifecycle p_ktx2_production_prewarm p_building_production_review_authority p_building_production_review_site_fit p_building_production_package p_native_wasm_compile_sync p_native_wasm_compile p_native_basis_init p_building_fire_review_scene_v2 p_building_fire_volumetric_binding "
+REPO_ROOTED_TESTS=" p_building_production_review_scene p_asset_place_collider_lifecycle p_ktx2_production_prewarm p_building_production_review_authority p_building_production_review_site_fit p_building_production_package p_native_wasm_compile_sync p_native_wasm_compile p_native_basis_init p_building_fire_review_scene_v2 p_building_fire_volumetric_binding p_fb5_functional_settlement_release_native p_functional_settlement_live_host_native p_fb5_functional_settlement_snapshot_replay "
 
 # The determinism core added to --quick: worldlog replay/durability/recovery, policy/audit/
 # isolation, packaging, plus the p7x layout/geometry/scatter/grass determinism gates.
@@ -49,7 +49,22 @@ QUICK_DETERMINISM_GLOBS=(js/test/p4_*.ts
   js/test/p104_snapshot_participants.ts
   js/test/p108_realm_grant_parity.ts
   js/test/p109_director_pipeline_events.ts
-  js/test/p110_gds_plan.ts)
+  js/test/p110_gds_plan.ts
+  js/test/p111_recorder_authority_integrity.ts
+  js/test/p112_mcp_stdio_admission.ts
+  js/test/p113_chat_admission.ts
+  js/test/p114_output_buffer_contract.ts
+  js/test/p115_perception_bounds.ts
+  js/test/p_engine_op_composition.ts
+  js/test/p8_browser_trace_segments.ts
+  js/test/p_studio_trace_append_replay.ts
+  js/test/p_fb5_functional_settlement_furnishing.ts
+  js/test/p_fb5_functional_settlement_furnishing_runtime.ts
+  js/test/p_fb5_functional_settlement_release.ts
+  js/test/p_fb5_functional_settlement_release_native.ts
+  js/test/p_functional_settlement_live_terrain.ts
+  js/test/p_functional_settlement_live_host_native.ts
+  js/test/p_fb5_functional_settlement_snapshot_replay.ts)
 
 pass=0; fail=0; skip=0; failed=(); skipped=()
 
@@ -74,9 +89,16 @@ run_test() {
     # Authoring utilities that live in js/test but are not gates: sweeping them as
     # passing tests inflated the pass count with vacuous greens.
     _dump_quest_scene|_dump_siege_scene|w0_native_dump) record_skip "$name" "authoring utility, not a gate"; return;;
+    # Immutable authored-content evidence superseded by exact closure gates. These files intentionally
+    # retain their old byte/geometry expectations and are not rewritten to make a newer asset pass.
+    # Current replacements: production-r1-final-closure (host), the invariant FB-4
+    # authority/camera gates, p_building_review_outcome,
+    # p_functional_building_publication, and p_fb5_*.
+    p_functional_hall_house_v4_asset|p_functional_hall_house_v4_quality|p_functional_hall_house_v4_rendered_door|p_functional_building_closure|p_functional_building_gorgon_asset|p_functional_building_door|p_functional_building_iteration|p_functional_building_native_traversal|p_fb4_multi_room_review_candidate|p_building_fire_review_scene|p_fb4_v3_site_review|p_fb4_v4_capture_closure|p_fb4_v4_site_review|p_fb4_v4_native_host_closure)
+      record_skip "$name" "immutable historical authoring pin; superseded exact closure gate is active"; return;;
     # Parameterized authoring gates: they REQUIRE argv (a candidate GLB/authority) and
     # print usage + exit 1 without one. Run them from their authoring pipelines.
-    p_architecture_shell_artifact|p_architecture_furniture_pack|p_furniture_pack_review_scene)
+    p_architecture_shell_artifact|p_architecture_furniture_pack|p_furniture_pack_review_scene|p_architecture_lod_package)
       record_skip "$name" "parameterized authoring gate (requires argv); run from its pipeline"; return;;
     # bun:test-shaped review scenes whose filenames the bun test runner refuses; they
     # have no working harness today. Announced so the gap stays visible.
@@ -100,16 +122,9 @@ run_test() {
   # URLs are supported" — they exited 1 forever and read as sweep regressions). Run them
   # under bun; announce the environmental skip when bun is absent.
   #
-  # KNOWN-RED, PENDING OWNER ADJUDICATION (do NOT re-pin or skip — the failures are
-  # honest, and all were verified red at checkpoint ca4c77a, i.e. authored-content
-  # drift from the in-flight FB/temperate push, not engine regressions):
-  # p_architecture_lod_package, p_functional_hall_house_v4_{asset,quality,rendered_door},
-  # p_functional_building_{closure,gorgon_asset,door,iteration,native_traversal},
-  # p_fb4_multi_room_review_candidate, p_building_fire_review_scene (v1 byte-pin;
-  # v2 + volumetric are repo-rooted and green), p_biome_field_artifact, p_world_terrain_compile
-  # pin an earlier authoring cycle; the tree carries a later, mid-review state (the
-  # FB-4 candidate's own authority records humanDecision=pending). Re-pinning is the
-  # asset owner's decision (CLAUDE.md §7.1); until then these report as real FAILs.
+  # Historical building pins are explicitly dispositioned above; current FB-4/FB-5
+  # authorities remain ordinary, mandatory gates. Other authored-content drift is
+  # still reported as a real failure until its owning pipeline supplies a successor.
   # Window/GPU family (m0_seams, p0_4_cube, s4_window, p3_*_window, p_*_gpu,
   # p_gpu_surface_probe): red on boxes whose display can't present a wgpu surface —
   # run with LIMINA_HEADLESS=1 there (announced skips), green where presentation works.
@@ -193,6 +208,22 @@ host_gate() { # <label> <skip-note> <cmd...>
   fi
 }
 
+# Behavioral authorities may only self-skip when Chromium itself is absent. Once
+# this host has both Playwright and Chromium, an exit-2 from a mapped browser twin
+# means the authority did not run (bad fixture, missing service, stale env), so it
+# is a gate failure rather than an environmental green.
+required_host_gate() { # <label> <cmd...>
+  local label="$1"; shift
+  local out rc=0
+  out="$("$@" 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ]; then echo "   $label: PASS"
+  else
+    echo "   $label: FAIL (required behavioral authority exited $rc)"
+    printf '%s\n' "$out" | tail -n 25 | sed 's/^/      /'
+    hostfail=1
+  fi
+}
+
 # Determinism guard: the skills layer must stay RNG-/wall-clock-free (recursive scan of
 # js/src/skills/**/*.ts). Pure lexical scan — always runnable, no display needed.
 host_gate "check-determinism" "" node js/scripts/check-determinism.mjs
@@ -212,13 +243,55 @@ host_gate "check-portability" "" npm --prefix js run check:portability --silent
 host_gate "check-live-composition" "" npm --prefix js run check:live --silent
 host_gate "check-coordinator-demo" "" npm --prefix js run check:coordinator-demo --silent
 
+# Every source-text supplement must name at least one executable behavioral
+# authority. The validator discovers supplements independently, rejects stale or
+# missing mappings and static-on-static laundering, and verifies that all mapped
+# Chromium twins explicitly disable GPU acceleration.
+host_gate "static behavioral authority manifest" "" node --test \
+  tools/test-hygiene/static-behavioral-authorities.test.mjs
+
+# Checked-in executable/text source is bounded by UTF-8 byte length. Generated
+# exceptions are exact paths whose named, fixed recipes regenerate in a
+# temporary directory and byte-compare; banners and historical hashes grant
+# no exemption. The test carries planted long-line/symlink/encoding/stale-
+# artifact fixtures so this policy cannot stay green when disabled.
+host_gate "source-line hygiene (falsifiability)" "" node --test \
+  tools/test-hygiene/check-source-lines.test.mjs
+host_gate "source-line hygiene" "" node tools/test-hygiene/check-source-lines.mjs
+
 # Node-native TypeScript module gate. This file is .mjs and therefore is not part
 # of the limina-driven js/test/*.ts sweep above.
 host_gate "p69-tree-source" "" node js/test/p69_tree_source.mjs
 
+# Zaxy owns the active EventLoom authority. These read-only checks force an
+# explicit stopped-session archive/successor decision before silent unbounded growth.
+host_gate "eventloom retention audit" "" node --test tools/eventloom/retention-audit.test.mjs
+host_gate "eventloom active-log size" "" node tools/eventloom/retention-audit.mjs .eventloom
+
+# The paid live-provider probe is intentionally opt-in and never runs in CI.
+# This offline gate proves that key presence alone cannot trigger spend and that
+# model/token admission plus the production provider framing remain bounded.
+host_gate "live provider canary contract" "" bun test tools/provider/live-anthropic-canary.test.ts
+
 # Grass strategy guard: old TileGrass/grassSoup/renamed micro-tuft implementations may not return
 # in source or any shipped runtime. Mechanical density remains evidence, never a visual verdict.
 host_gate "grass-strategy-static" "" node --test tools/material/grass-strategy-static.test.mjs
+
+# Local-host security boundaries: DNS-rebinding admission is exercised against a
+# real design server. Architect execution uses the exact local digest with no pull;
+# the behavioral test attacks its mounts, network, credentials, GPU visibility,
+# write authority, and reviewed-import boundary through real containers.
+host_gate "local host-security containment" "" node --test \
+  tools/design/loopback-request-host.test.mjs \
+  tools/design/serve-design-host.test.mjs \
+  tools/design/architect-security.test.mjs \
+  tools/design/architect-isolation.test.mjs
+
+# Native GPU safety is tested with fake child/follower processes only. This gate must never invoke
+# a renderer: it falsifies every Xid phase/race and inventories every native runner for delegation.
+host_gate "native capture Xid guard" "" node --test \
+  tools/preview/xid-guard.test.mjs \
+  tools/preview/xid-guard-integration.test.mjs
 
 # js/test static suites (node --test): map/axis-convention (cardinal rule #7), design refs,
 # navigation/world-overview artifacts, building material palette, browser wiring statics,
@@ -232,7 +305,16 @@ host_gate "js static suites (node --test)" "" node --test \
   js/test/map_coordinate_frame.test.mjs \
   js/test/navigation_index_artifact.test.mjs \
   js/test/p_building_material_palette.test.mjs \
-  js/test/world_overview_artifact.test.mjs
+  js/test/world_overview_artifact.test.mjs \
+  tools/preview/native-fb4-multi-room-capture-static.test.mjs \
+  tools/reference/hearth-settle-bounded-reference.test.mjs \
+  tools/reference/visual-reference-search.test.mjs \
+  tools/scaffold/player-source-closure.test.mjs
+
+# Exact owner-approved FB-2 package closure. Older per-cycle byte pins remain
+# immutable historical evidence and are explicitly dispositioned in run_test.
+host_gate "functional-building R1 final closure" "" node --test \
+  tools/architecture/production-r1-final-closure.test.mjs
 
 # Static-opaque retopo funnel: real pinned Blender/Cycles CPU build, deterministic duplicate build,
 # fail-closed input boundary, asset-sanity/QC integration, and atomic publication rollback.
@@ -268,16 +350,22 @@ if command -v bun >/dev/null 2>&1; then
 else echo "   check-gds: SKIP (no bun)"; fi
 
 host_gate "engine-browser-gate" "no chromium" node tools/director/engine-browser-gate.mjs
+host_gate "browser trace real IndexedDB" "no Chromium/Playwright" node tools/browser-trace-indexeddb.test.mjs
 
 # Editor gates: the DOM binding is display-independent; live/browser tests run against
 # a real editor host and static editor server. Browser tests self-SKIP with exit 2 when
 # playwright/chromium is unavailable, but the headless history data-path test still runs.
 editor_bundle_ok=0
-if npm --prefix js run bundle:editor --silent >/dev/null 2>&1; then
+# The live browser harness owns a real derived-build/runtime sidecar below. Keep
+# both browser bundles and its Node compiler bundle fresh before launching any
+# part of that lifecycle; a stale compiler can otherwise turn Play into a
+# misleading 30-second UI timeout.
+if npm --prefix js run bundle:editor --silent >/dev/null 2>&1 \
+    && npm --prefix js run bundle:world-compiler --silent >/dev/null 2>&1; then
   editor_bundle_ok=1
-  echo "   editor bundle: PASS"
+  echo "   editor + derived compiler bundles: PASS"
 else
-  echo "   editor bundle: FAIL"
+  echo "   editor + derived compiler bundles: FAIL"
   hostfail=1
 fi
 if [ "$editor_bundle_ok" = 1 ]; then
@@ -338,49 +426,112 @@ editor_host_port="$(free_port)"
 editor_atlas_port="$(free_port)"
 editor_atlas_log="$(mktemp)"
 editor_atlas_pid=""
-editor_atlas_proj=""
+editor_derived_port="$(free_port)"
+editor_derived_token="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+editor_derived_log="$(mktemp)"
+editor_derived_pid=""
+editor_atlas_proj="$(mktemp -d)"
 cleanup_editor_gates() {
   [ -n "$editor_host_pid" ] && kill "$editor_host_pid" >/dev/null 2>&1 || true
   [ -n "$editor_static_pid" ] && kill "$editor_static_pid" >/dev/null 2>&1 || true
   [ -n "$editor_atlas_pid" ] && kill "$editor_atlas_pid" >/dev/null 2>&1 || true
+  [ -n "$editor_derived_pid" ] && kill "$editor_derived_pid" >/dev/null 2>&1 || true
   [ -n "$editor_atlas_proj" ] && rm -rf "$editor_atlas_proj"
-  rm -f "$editor_host_log" "$editor_static_log" "$editor_atlas_log"
+  rm -f "$editor_host_log" "$editor_static_log" "$editor_atlas_log" "$editor_derived_log"
 }
 trap cleanup_editor_gates EXIT
+mkdir -p "$editor_atlas_proj/design" "$editor_atlas_proj/assets" "$editor_atlas_proj/.limina"
+printf '{\n  "schema": "limina-project/1",\n  "projectId": "limina",\n  "assetRoot": "assets",\n  "stateDir": ".limina"\n}\n' > "$editor_atlas_proj/limina.project.json"
+# A derived runtime cannot publish from worldlog commands alone: its authority is
+# the project MapDoc ref. Give the disposable gate project the smallest valid
+# seed so the service bootstraps that ref through the real authoring transaction
+# before compiling it.
+# Use the current painted-landmass authority for the bounded fixture. A legacy
+# outline polygon would cover the whole Atlas with a pointer-active feature and
+# turn the bridge gate's map-coordinate action into feature focus instead. The
+# 7x7 raster has an ocean border around a 5x5 land interior: unlike an all-land
+# raster, it supplies marching-squares boundaries and compiles to a 640m square
+# land extent while keeping the 300m navigation target inside authority.
+printf '{"version":2,"activeMapId":"primary","maps":[{"id":"primary","name":"Grey Field","scope":"world","parent":null,"features":[],"rasters":{"landmass":{"w":7,"h":7,"rect":{"x0":-384,"z0":-384,"w":768,"h":768},"data":"AAAAAAAAAAD//////wAA//////8AAP//////AAD//////wAA//////8AAAAAAAAAAA=="}},"seaLevel":0,"units":{"kind":"m","unitsPerMeter":1,"origin":[0,0]}}]}\n' \
+  > "$editor_atlas_proj/design/maps.json"
 LIMINA_ATLAS_ORIGIN="http://127.0.0.1:$editor_atlas_port" \
   LIMINA_EDITOR_PUBLIC_URL="http://localhost:$editor_static_port/" \
   LIMINA_EDITOR_SERVER_URL="ws://localhost:$editor_host_port/" \
   node tools/scaffold/scripts/serve.mjs editor "$editor_static_port" >"$editor_static_log" 2>&1 &
 editor_static_pid=$!
-LIMINA_EDITOR_PORT="$editor_host_port" LIMINA_EDITOR_STATIC_PORT="$editor_static_port" \
-  LIMINA_PROJECT_ID="limina" \
-  LIMINA_DERIVED_RUNTIME_BASE_URL="http://127.0.0.1:$editor_static_port" \
-  LIMINA_DERIVED_RUNTIME_TOKEN="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" \
-  LIMINA_DERIVED_RUNTIME_BRANCH_ID="main" \
-  LIMINA_EDITOR_WORLDLOG="editor_gate_${editor_host_port}_worldlog.jsonl" \
-  LIMINA_EDITOR_TRACE="editor_gate_${editor_host_port}_trace.jsonl" \
-  LIMINA_EDITOR_KERNEL_LOCK="editor_gate_${editor_host_port}_kernel.lock.json" \
-  "$BIN" editor/server/editor_host.ts >"$editor_host_log" 2>&1 &
+editor_token="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
+(
+  umask 077
+  LIMINA_EDITOR_PORT="$editor_host_port" LIMINA_EDITOR_STATIC_PORT="$editor_static_port" \
+    LIMINA_EDITOR_TOKEN="$editor_token" \
+    LIMINA_PROJECT_ID="limina" \
+    LIMINA_ASSET_ROOT="$editor_atlas_proj/assets" \
+    LIMINA_DERIVED_RUNTIME_BASE_URL="http://127.0.0.1:$editor_derived_port" \
+    LIMINA_DERIVED_RUNTIME_TOKEN="$editor_derived_token" \
+    LIMINA_DERIVED_RUNTIME_BRANCH_ID="main" \
+    LIMINA_EDITOR_WORLDLOG="editor_gate_${editor_host_port}_worldlog.jsonl" \
+    LIMINA_EDITOR_TRACE="editor_gate_${editor_host_port}_trace.jsonl" \
+    LIMINA_EDITOR_KERNEL_LOCK="editor_gate_${editor_host_port}_kernel.lock.json" \
+    "$BIN" editor/server/editor_host.ts >"$editor_host_log" 2>&1
+) &
 editor_host_pid=$!
-editor_token=""
 for _ in $(seq 1 50); do
-  editor_token="$(sed -n 's/.*Paste token \([0-9a-f][0-9a-f]*\) into.*/\1/p' "$editor_host_log" | tail -n 1)"
-  [ -n "$editor_token" ] && break
+  grep -q "editor_host: gate-enabled authoritative MCP-ws server listening" "$editor_host_log" && break
   if ! kill -0 "$editor_host_pid" >/dev/null 2>&1; then break; fi
   sleep 0.1
 done
-if [ -z "$editor_token" ]; then
-  echo "   editor live/browser gates: FAIL (editor host did not publish an auth token)"
+if ! grep -q "editor_host: gate-enabled authoritative MCP-ws server listening" "$editor_host_log"; then
+  echo "   editor live/browser gates: FAIL (editor host did not become ready)"
   sed 's/^/      /' "$editor_host_log" | tail -n 12
   hostfail=1
 else
+  # Play is contractually pinned to a derived revision, so the browser harness
+  # must own the same derived build/runtime sidecar as the real editor launcher.
+  # Pointing discovery at the static server used to leave Play in Starting until
+  # its 30-second activation timeout, which atlas_bridge_browser surfaced as a
+  # locator timeout even though the Atlas dock itself was healthy.
+  env LIMINA_EDITOR_URL="ws://127.0.0.1:$editor_host_port/" LIMINA_EDITOR_TOKEN="$editor_token" \
+    LIMINA_WORLD_COMPILER_BUNDLE="$ROOT/js/build/world-compiler.bundle.mjs" \
+    LIMINA_DERIVED_RUNTIME_PORT="$editor_derived_port" \
+    LIMINA_DERIVED_RUNTIME_TOKEN="$editor_derived_token" \
+    LIMINA_DERIVED_RUNTIME_ORIGIN="http://localhost:$editor_static_port" \
+    node tools/design/derived-build-service.mjs "$editor_atlas_proj" >"$editor_derived_log" 2>&1 &
+  editor_derived_pid=$!
+  derived_up=0
+  for _ in $(seq 1 150); do
+    if grep -q '^\[derived-runtime\] ready ' "$editor_derived_log"; then
+      derived_up=1; break
+    fi
+    if ! kill -0 "$editor_derived_pid" >/dev/null 2>&1; then break; fi
+    sleep 0.1
+  done
+  if [ "$derived_up" != 1 ]; then
+    echo "   WARN: derived build/runtime service did not become ready on :$editor_derived_port — Play browser gates will fail with real output" >&2
+    sed 's/^/      /' "$editor_derived_log" | tail -n 12 >&2
+  else
+    # Runtime socket readiness intentionally precedes the asynchronous first
+    # compilation. Do not open the editor until /current serves that publication;
+    # otherwise an immediate Play click honestly fails with NO_PUBLICATION.
+    derived_published=0
+    for _ in $(seq 1 300); do
+      if node -e "fetch('http://127.0.0.1:$editor_derived_port/v1/derived/current',{headers:{Authorization:'Bearer $editor_derived_token',Origin:'http://localhost:$editor_static_port'}}).then(r=>process.exit(r.status===200?0:1),()=>process.exit(1))" 2>/dev/null; then
+        derived_published=1; break
+      fi
+      if ! kill -0 "$editor_derived_pid" >/dev/null 2>&1; then break; fi
+      sleep 0.1
+    done
+    if [ "$derived_published" != 1 ]; then
+      echo "   WARN: derived runtime did not publish its bootstrap MapDoc on :$editor_derived_port — Play browser gates will fail with real output" >&2
+      sed 's/^/      /' "$editor_derived_log" | tail -n 12 >&2
+    fi
+  fi
+
   # Bring up the Atlas service now that the host token exists (empty throwaway
   # vault; the SPA renders #map-svg regardless of vault content). A failed boot is
   # ANNOUNCED — the atlas gates then fail with real output, never silently.
-  editor_atlas_proj="$(mktemp -d)"
-  mkdir -p "$editor_atlas_proj/design"
-  printf '{\n  "schema": "limina-project/1",\n  "projectId": "limina"\n}\n' > "$editor_atlas_proj/limina.project.json"
   env LIMINA_EDITOR_URL="ws://127.0.0.1:$editor_host_port/" LIMINA_EDITOR_TOKEN="$editor_token" \
+    LIMINA_EDITOR_HANDOFF_URL="http://localhost:$editor_static_port/atlas-handoff.html" \
+    LIMINA_ATLAS_PUBLIC_ORIGIN="http://127.0.0.1:$editor_atlas_port" \
     node tools/design/serve-design.mjs "$editor_atlas_proj/design" "$editor_atlas_port" >"$editor_atlas_log" 2>&1 &
   editor_atlas_pid=$!
   atlas_up=0
@@ -398,56 +549,66 @@ else
   host_gate "editor history live" "self-declared exit 2" \
     env EDITOR_AUTH_TOKEN="$editor_token" EDITOR_HOST_URL="ws://localhost:$editor_host_port/" \
     node editor/test/history_live.test.mjs
-  # Browser suites against the live host + static server. All self-SKIP with exit 2 via
-  # editor/test/browser-env.cjs when chromium is absent. The list now carries every
-  # editor/test/*_browser.test.cjs (33 were orphaned from all runners before this).
-  # atlas_standalone_handoff needs the separate Astro site app (site/: npm run dev,
-  # port 4321) — an external service this runner does not manage; announced skip
-  # unless something is already listening there (LIMINA_ATLAS_URL overrides).
-  if node -e 'const s=require("node:net").connect(4321,"127.0.0.1");s.on("connect",()=>{s.end();process.exit(0)});s.on("error",()=>process.exit(1));setTimeout(()=>process.exit(1),1500)' 2>/dev/null; then
-    ATLAS_SITE_UP=1
-  else
-    ATLAS_SITE_UP=0
-    echo "   SKIP: editor atlas_standalone_handoff_browser — needs the site dev server (site/: npm run dev, :4321)" >&2
-    skip=$((skip+1)); skipped+=("atlas_standalone_handoff_browser")
+  # Browser suites against the live host + static server. The four legacy render
+  # names plus every *_browser test are discovered rather than maintained as a
+  # hand-copied list. Mapped behavioral authorities are mandatory when Chromium
+  # exists; with Chromium absent their exit-2 remains an announced environmental
+  # skip. This prevents source-text supplements from being CI's only green signal.
+  # The same disposable Atlas service is also the standalone source of truth for
+  # the handoff gate. Never borrow an arbitrary process on :4321: its launch
+  # configuration legitimately targets a different editor origin, making the
+  # popup relay leave this aggregate's random static port.
+  behavioral_chromium_available=0
+  behavioral_browser_runtime_env=()
+  if node tools/test-hygiene/static-behavioral-authorities.mjs --chromium-available >/dev/null 2>&1; then
+    behavioral_chromium_available=1
+    behavioral_chrome_bin="$(node tools/test-hygiene/static-behavioral-authorities.mjs --chrome-path)"
+    behavioral_pwc_path="$(node tools/test-hygiene/static-behavioral-authorities.mjs --pwc-path)"
+    behavioral_browser_runtime_env=(CHROME_BIN="$behavioral_chrome_bin" PLAYWRIGHT_CORE_PATH="$behavioral_pwc_path")
   fi
-  for et in \
+  mapfile -t behavioral_browser_tests < <(node tools/test-hygiene/static-behavioral-authorities.mjs --list-chromium)
+  is_behavioral_browser_test() {
+    local candidate="$1" mapped
+    for mapped in "${behavioral_browser_tests[@]}"; do
+      [ "$candidate" = "$mapped" ] && return 0
+    done
+    return 1
+  }
+  mapfile -t editor_browser_tests < <(printf '%s\n' \
     editor/test/fidelity_frame.test.cjs \
     editor/test/viewport_render.test.cjs \
     editor/test/archetype_render.test.cjs \
-    editor/test/visual_refine.test.cjs \
-    editor/test/history_browser.test.cjs \
-    editor/test/atlas_bridge_browser.test.cjs \
-    editor/test/atlas_water_authoring_browser.test.cjs \
-    editor/test/camera_navigation_browser.test.cjs \
-    editor/test/content_browser_browser.test.cjs \
-    editor/test/generated_water_workflow_browser.test.cjs \
-    editor/test/graphics_ui_browser.test.cjs \
-    editor/test/graphics_workflow_browser.test.cjs \
-    editor/test/navigation_ui_browser.test.cjs \
-    editor/test/outliner_browser.test.cjs \
-    editor/test/play_ui_browser.test.cjs \
-    editor/test/play_workflow_browser.test.cjs \
-    editor/test/project_navigation_browser.test.cjs \
-    editor/test/render_lifecycle_browser.test.cjs \
-    editor/test/run_live_teardown_browser.test.cjs \
-    editor/test/underwater_render_browser.test.cjs \
-    editor/test/water_render_browser.test.cjs
+    editor/test/visual_refine.test.cjs; \
+    find editor/test -maxdepth 1 -type f -name '*_browser.test.cjs' -print | sort)
+  for et in "${editor_browser_tests[@]}"
   do
     ename="$(basename "$et" .test.cjs)"
-    host_gate "editor $ename" "no chromium (self-declared exit 2)" \
-      env EDITOR_AUTH_TOKEN="$editor_token" LIMINA_EDITOR_TOKEN="$editor_token" \
+    # generated_water_workflow owns a purpose-built hydrology project, including
+    # the authoritative terrain-source restart its contract requires. Supplying
+    # the aggregate's generic PLAY_UAT_* fixture silently bypasses that setup and
+    # turns its hydrology assertions into a guaranteed fixture failure.
+    play_uat_env=()
+    if [ "$et" != "editor/test/generated_water_workflow_browser.test.cjs" ]; then
+      play_uat_env=(PLAY_UAT_HOST="ws://localhost:$editor_host_port/" \
+        PLAY_UAT_TOKEN="$editor_token" \
+        PLAY_UAT_EDITOR="http://localhost:$editor_static_port/" \
+        PLAY_UAT_DERIVED="http://127.0.0.1:$editor_derived_port/")
+    fi
+    browser_env=(env "${behavioral_browser_runtime_env[@]}" \
+      EDITOR_AUTH_TOKEN="$editor_token" LIMINA_EDITOR_TOKEN="$editor_token" \
       EDITOR_BASE_URL="http://localhost:$editor_static_port" \
       EDITOR_HOST_URL="ws://localhost:$editor_host_port/" \
-      LIMINA_EDITOR_URL="ws://127.0.0.1:$editor_host_port/" node "$et"
+      LIMINA_EDITOR_URL="ws://127.0.0.1:$editor_host_port/" \
+      LIMINA_ATLAS_URL="http://127.0.0.1:$editor_atlas_port/" \
+      "${play_uat_env[@]}")
+    if [ "$behavioral_chromium_available" = 1 ] && is_behavioral_browser_test "$et"; then
+      required_host_gate "editor $ename (behavioral authority)" \
+        "${browser_env[@]}" node "$et"
+    else
+      host_gate "editor $ename" "no chromium (self-declared exit 2)" \
+        "${browser_env[@]}" node "$et"
+    fi
   done
-  if [ "$ATLAS_SITE_UP" = 1 ]; then
-    host_gate "editor atlas_standalone_handoff_browser" "no chromium (self-declared exit 2)" \
-      env EDITOR_AUTH_TOKEN="$editor_token" LIMINA_EDITOR_TOKEN="$editor_token" \
-      EDITOR_BASE_URL="http://localhost:$editor_static_port" \
-      EDITOR_HOST_URL="ws://localhost:$editor_host_port/" \
-      LIMINA_EDITOR_URL="ws://127.0.0.1:$editor_host_port/" node editor/test/atlas_standalone_handoff_browser.test.cjs
-  fi
 fi
 cleanup_editor_gates
 trap - EXIT

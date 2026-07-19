@@ -42,6 +42,7 @@ import { LiminaTracer } from "../observability/event.ts";
 import { createDesignArtifactStore } from "../world/design-artifacts.ts";
 import type { CharacterController } from "../world/character.ts";
 import { WasmRapierPhysics, type RapierModule } from "./wasm-rapier-physics.ts";
+import { composePortableEngineOps } from "./engine-op-composition.ts";
 import {
   finalizeSnapshotBoot as finalizeSnapshotBootRealm,
   parseSnapshotBootPayload,
@@ -322,7 +323,8 @@ export interface SimWorkerBuffers {
   sab: SharedArrayBuffer | ArrayBuffer;
   /** The input SAB (M3) — render-main JOINs it to publish input frames. */
   input: SharedArrayBuffer | ArrayBuffer;
-  /** The v1 16-byte status SAB. Slot 0 remains the legacy Atomics tick counter. */
+  /** The v2 20-byte status SAB. The original four slots retain their v1 indices;
+   * slot 4 is the additive dropped-step counter. */
   status: SharedArrayBuffer | ArrayBuffer;
 }
 
@@ -371,78 +373,12 @@ function stubCamera(): CameraLike {
  *  input device, host services, trace, sandbox, audio). Skills read `ctx.world.ops`,
  *  so this is the single op seam the whole sim composes over — no `Deno.core.ops`. */
 function composeWorkerOps(P: WasmRapierPhysics, assets: ReadonlyMap<string, Uint8Array>): EngineOps {
-  const noop = (): void => {};
-  return {
-    // ── physics: the REAL wasm-Rapier solver (bound so `this` is the adapter) ──
-    op_physics_create_world: P.op_physics_create_world.bind(P),
-    op_physics_add_ground: P.op_physics_add_ground.bind(P),
-    op_physics_add_box: P.op_physics_add_box.bind(P),
-    op_physics_add_box_material: P.op_physics_add_box_material.bind(P),
-    op_physics_add_sphere: P.op_physics_add_sphere.bind(P),
-    op_physics_add_capsule: P.op_physics_add_capsule.bind(P),
-    op_physics_add_static_box: P.op_physics_add_static_box.bind(P),
-    op_physics_add_static_sphere: P.op_physics_add_static_sphere.bind(P),
-    op_physics_add_static_capsule: P.op_physics_add_static_capsule.bind(P),
-    op_physics_add_heightfield: P.op_physics_add_heightfield.bind(P),
-    op_physics_add_character: P.op_physics_add_character.bind(P),
-    op_physics_move_character: P.op_physics_move_character.bind(P),
-    op_physics_remove_body: P.op_physics_remove_body.bind(P),
-    op_physics_apply_impulse: P.op_physics_apply_impulse.bind(P),
-    op_physics_step: P.op_physics_step.bind(P),
-    op_physics_snapshot: P.op_physics_snapshot.bind(P),
-    op_physics_restore: P.op_physics_restore.bind(P),
-    op_physics_body_pos: P.op_physics_body_pos.bind(P),
-    op_physics_body_transform: P.op_physics_body_transform.bind(P),
-    op_physics_set_body_transform: P.op_physics_set_body_transform.bind(P),
-    op_physics_drain_collisions: P.op_physics_drain_collisions.bind(P),
-    op_physics_raycast: P.op_physics_raycast.bind(P),
-    op_physics_overlap_box: P.op_physics_overlap_box.bind(P),
-    // ── render / loop / device input — no surface in a worker (input arrives via
-    //    the InputRingBuffer, consumed directly in tick(), not these ops) ──
-    op_create_window_context: () => ({}),
-    op_surface_present: noop,
-    op_surface_resize: noop,
-    op_set_frame_callback: noop,
-    op_set_fixed_step_callback: noop,
-    op_set_resize_callback: noop,
-    op_input_axes: noop,
-    op_input_look: noop,
-    op_input_buttons: noop,
-    // ── host services ──
-    op_log: noop,
-    op_http_post: () => Promise.resolve(""),
-    op_http_post_headers: () => Promise.resolve(""),
-    op_sleep_ms: () => Promise.resolve(),
-    // Asset bytes are cloned into the init message after an async main-thread
-    // prefetch. This keeps worker authoring deterministic without synchronous XHR.
-    op_read_asset: (id: string): Uint8Array => assets.get(id) ?? new Uint8Array(0),
-    op_sha256: () => "",
-    op_read_env: () => "",
-    // ── durable trace ──
-    op_write_trace: noop,
-    op_append_trace: noop,
-    op_read_trace: () => "",
-    // ── sandbox ──
-    op_sandbox_create: () => 0,
-    op_sandbox_eval: () => "",
-    op_sandbox_destroy: () => false,
-    op_sandbox_count: () => 0,
-    // ── native ECS spatial ──
-    op_ecs_spatial_query_batch: noop,
-    // ── audio ──
-    op_audio_init: () => 0,
-    op_audio_play: () => 0,
-    op_audio_ambient: () => 0,
-    op_audio_stop: noop,
-    op_audio_stop_all: noop,
-    op_audio_set_bus_volume: noop,
-    op_audio_play_spatial: () => 0,
-    op_audio_set_emitter: noop,
-    op_audio_set_listener: noop,
-    op_audio_set_volume: noop,
-    op_audio_speak: () => 0,
-    op_audio_play_buffer: () => 0,
-  };
+  // Asset bytes are cloned into the init message after an async main-thread
+  // prefetch. All other host mappings come from the same declaration as render
+  // authoring and keyframe playback, eliminating the realm-fork op tables.
+  return composePortableEngineOps(P, {
+    readAsset: (id: string): Uint8Array => assets.get(id) ?? new Uint8Array(0),
+  });
 }
 
 export class SimWorkerController {
@@ -468,7 +404,7 @@ export class SimWorkerController {
   private disposed = false;
   private activePlayerDirty = true;
   private activePlayerCache: { eid: number; controller: CharacterController } | undefined;
-  private readonly statusWrite: SimStatusWrite = { tick: 0, flags: 0, playerEid: -1 };
+  private readonly statusWrite: SimStatusWrite = { tick: 0, flags: 0, playerEid: -1, droppedSteps: 0 };
   private readonly scratch7 = new Float32Array(7);
   private readonly inFrame: InputFrame = { move: [0, 0, 0], look: [0, 0], buttons: [0, 0], tick: 0 };
   private lastInputFrame: InputFrame | null = null;
@@ -889,6 +825,13 @@ export class SimWorkerController {
     return this.tickCount;
   }
 
+  /** Account for elapsed fixed steps intentionally discarded by the bounded
+   * shell catch-up loop. The value is published with the next completed tick. */
+  recordDroppedSteps(count: number): void {
+    if (!Number.isSafeInteger(count) || count < 0) throw new RangeError("dropped step count must be a non-negative safe integer");
+    this.statusWrite.droppedSteps = Math.min(0x7fffffff, this.statusWrite.droppedSteps + count);
+  }
+
   private activePlayer(): { eid: number; controller: CharacterController } | undefined {
     if (!this.activePlayerDirty) return this.activePlayerCache;
     let selected: { eid: number; controller: CharacterController } | undefined;
@@ -937,13 +880,21 @@ export class SimWorkerController {
     // breaks direct-manipulation editing. (The offline-authored → reconnect origin-render
     // bug this once addressed needs a movement-safe re-fix: sync a bodyless pose on load /
     // on authored change, not every frame.)
-    for (const [bodyId, id] of this.entityTable.bodyBound()) {
-      if (this.suppressedAuthoredTerrainBodies.has(bodyId)) continue;
-      const entry = this.entityTable.resolve(id);
-      if (entry === undefined) continue;
-      this.world.ops.op_physics_body_transform(bodyId, scratch);
-      this.transformStorage.writePosition(entry.eid, scratch[0], scratch[1], scratch[2]);
-      this.transformStorage.writeRotation(entry.eid, scratch[3], scratch[4], scratch[5], scratch[6]);
+    this.transformStorage.beginPublication();
+    try {
+      for (const [bodyId, id] of this.entityTable.bodyBound()) {
+        if (this.suppressedAuthoredTerrainBodies.has(bodyId)) continue;
+        const entry = this.entityTable.resolve(id);
+        if (entry === undefined) continue;
+        this.world.ops.op_physics_body_transform(bodyId, scratch);
+        this.transformStorage.writePosition(entry.eid, scratch[0], scratch[1], scratch[2]);
+        this.transformStorage.writeRotation(entry.eid, scratch[3], scratch[4], scratch[5], scratch[6]);
+      }
+    } finally {
+      // A native/wasm read failure must not strand readers on an odd generation.
+      // The worker tick still fails closed, while the render side retains its
+      // previous coherent snapshot instead of observing the partial write.
+      this.transformStorage.endPublication();
     }
   }
 
@@ -1078,6 +1029,60 @@ type ShellMessage = InitMessage | StepMessage | StopMessage | PauseMessage | Res
 export interface SimWorkerShellDependencies {
   /** Test/embedding seam. Production omits this and imports rapier in the dedicated worker. */
   createController?: (message: InitMessage) => Promise<SimWorkerController>;
+  /** Monotonic clock seam for deterministic scheduler tests. */
+  nowMs?: () => number;
+}
+
+export interface FixedStepAdvance {
+  readonly steps: number;
+  readonly droppedSteps: number;
+}
+
+/** Monotonic fixed-step debt accumulator used by the worker shell. A delayed
+ * callback may catch up a bounded number of steps; excess elapsed debt is
+ * explicitly counted as dropped instead of silently slowing simulation time. */
+export class FixedStepAccumulator {
+  private readonly stepMs: number;
+  private readonly maxCatchUpSteps: number;
+  private readonly maxElapsedMs: number;
+  private previousMs: number | null = null;
+  private remainderMs = 0;
+
+  constructor(hz: number, maxCatchUpSteps = 5, maxElapsedMs = 250) {
+    if (!Number.isFinite(hz) || hz <= 0) throw new RangeError("fixed-step hz must be positive");
+    if (!Number.isSafeInteger(maxCatchUpSteps) || maxCatchUpSteps < 1) throw new RangeError("maxCatchUpSteps must be positive");
+    if (!Number.isFinite(maxElapsedMs) || maxElapsedMs <= 0) throw new RangeError("maxElapsedMs must be positive");
+    this.stepMs = 1000 / hz;
+    this.maxCatchUpSteps = maxCatchUpSteps;
+    this.maxElapsedMs = maxElapsedMs;
+  }
+
+  reset(nowMs: number): void {
+    if (!Number.isFinite(nowMs)) throw new RangeError("fixed-step clock must be finite");
+    this.previousMs = nowMs;
+    this.remainderMs = 0;
+  }
+
+  advance(nowMs: number): FixedStepAdvance {
+    if (!Number.isFinite(nowMs)) throw new RangeError("fixed-step clock must be finite");
+    if (this.previousMs === null) {
+      this.reset(nowMs);
+      return { steps: 0, droppedSteps: 0 };
+    }
+    // A nominally-monotonic host clock that regresses must not make the next
+    // forward sample count the same interval twice.
+    const currentMs = Math.max(this.previousMs, nowMs);
+    const elapsedMs = currentMs - this.previousMs;
+    this.previousMs = currentMs;
+    const totalDebtMs = this.remainderMs + elapsedMs;
+    const totalDue = Math.floor(totalDebtMs / this.stepMs);
+    this.remainderMs = totalDebtMs - totalDue * this.stepMs;
+    // At most 250ms of a callback delay is eligible for catch-up; debt beyond
+    // that clamp is dropped even if maxCatchUpSteps is configured unusually high.
+    const runnableDue = Math.floor(Math.min(totalDebtMs, this.maxElapsedMs) / this.stepMs);
+    const steps = Math.min(totalDue, runnableDue, this.maxCatchUpSteps);
+    return { steps, droppedSteps: totalDue - steps };
+  }
 }
 
 function parseDerivedRevisionShellMessage(value: unknown): Readonly<DerivedRevisionShellMessage> {
@@ -1112,6 +1117,8 @@ export function installSimWorker(scope: WorkerScopeLike, dependencies: SimWorker
   let timer: ReturnType<typeof setInterval> | undefined;
   let driveHz = 60;
   let paused = false;
+  let driveAccumulator: FixedStepAccumulator | undefined;
+  const nowMs = dependencies.nowMs ?? (() => typeof performance !== "undefined" ? performance.now() : Date.now());
 
   /** Post a structured error to the main thread so a throw is observable rather
    *  than a silent unhandledrejection (which would stop stepping unseen). */
@@ -1140,6 +1147,7 @@ export function installSimWorker(scope: WorkerScopeLike, dependencies: SimWorker
     if (timer !== undefined) { clearInterval(timer); timer = undefined; }
     if (controller !== null) { controller.dispose(); controller = null; }
     paused = false;
+    driveAccumulator = undefined;
   };
 
   const rejectControl = (operation: "pause" | "resume", requestId: number | undefined, reason: string): void => {
@@ -1163,10 +1171,14 @@ export function installSimWorker(scope: WorkerScopeLike, dependencies: SimWorker
 
   const startDrive = (): void => {
     if (timer !== undefined || controller === null || paused) return;
+    driveAccumulator = new FixedStepAccumulator(driveHz);
+    driveAccumulator.reset(nowMs());
     timer = setInterval((): void => {
       if (controller === null) return;
       try {
-        controller.tick();
+        const advance = driveAccumulator!.advance(nowMs());
+        if (advance.droppedSteps > 0) controller.recordDroppedSteps(advance.droppedSteps);
+        for (let i = 0; i < advance.steps; i++) controller.tick();
       } catch (err) {
         // A solver throw inside the timer would otherwise silently kill stepping.
         teardown();
@@ -1219,9 +1231,14 @@ export function installSimWorker(scope: WorkerScopeLike, dependencies: SimWorker
         // aborting the handshake — the worker still replies `ready` and self-drives.
         postAuthoringFailures("loadWorld", (await controller.loadWorldIsolated(msg.commands)).failures);
       }
+      const requestedHz = msg.hz ?? 60;
+      if (!Number.isFinite(requestedHz) || requestedHz <= 0) {
+        teardown();
+        throw new RangeError("sim worker hz must be positive");
+      }
+      driveHz = requestedHz;
       const b = controller.buffers;
       scope.postMessage({ type: "ready", buffer: b.sab, inputBuffer: b.input, status: b.status });
-      driveHz = msg.hz ?? 60;
       paused = false;
       startDrive();
     } else if (msg.type === "step") {

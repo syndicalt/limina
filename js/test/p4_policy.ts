@@ -83,7 +83,7 @@ ops.op_log("  (a) context-dependent: ecs.updateComponent allowed under builder, 
 // (b) QUOTA: limit 3 per window -> the 4th call is DENIED + audited.
 // ===========================================================================
 const quotaSession = "ses_quota";
-engine.setQuota({ cap: "physics.applyImpulse", perSession: true, limit: 3, windowMs: 60_000 });
+engine.setQuota({ cap: "physics.applyImpulse", perSession: true, limit: 3, windowTicks: 60_000 });
 const ball = field(ok(await registry.invoke("scene.createEntity", { position: [0, 5, 0], dynamic: true }, base("agt_setup", "ses_setup", "builder.readWrite", 2))), "entity");
 const ballId: string = typeof ball === "string" ? ball : "";
 for (let i = 1; i <= 3; i++) {
@@ -142,7 +142,7 @@ ops.op_log("  (c2) resource budget: 2 calls allowed, the next DENIED (budget.cal
   assert(e.admitSession(admitCtx).allow, "second session admit for the same id should be allowed");
   assert(e.isAdmitted(sid), "session should be admitted after two admits");
 
-  e.setQuota({ cap: "physics.applyImpulse", perSession: true, limit: 1, windowMs: 60_000 });
+  e.setQuota({ cap: "physics.applyImpulse", perSession: true, limit: 1, windowTicks: 60_000 });
   e.setBudget(sid, { calls: 1 });
   e.revoke(sid, "ecs.updateComponent");
   const cross = (cap: string, requiredPermissions: string[]) =>
@@ -276,7 +276,7 @@ class AlwaysAllowEngine extends PolicyEngine {
 }
 const stubTracer = new LiminaTracer("ses_stub");
 const stubEngine = new AlwaysAllowEngine();
-stubEngine.setQuota({ cap: "physics.applyImpulse", perSession: true, limit: 3, windowMs: 60_000 });
+stubEngine.setQuota({ cap: "physics.applyImpulse", perSession: true, limit: 3, windowTicks: 60_000 });
 const stubReg = new SkillRegistry(stubTracer, stubEngine);
 registerCoreSkills(stubReg);
 const stubBall = field(ok(await stubReg.invoke("scene.createEntity", { position: [0, 9, 0], dynamic: true }, base("agt_s", "ses_s", "builder.readWrite", 5))), "entity");

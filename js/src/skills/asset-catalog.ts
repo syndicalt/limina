@@ -15,6 +15,7 @@
 // like any other authored content.
 
 import { z } from "../../build/zod.bundle.mjs";
+import { assertGenericAssetAuthoringCategory } from "../assets/generic-asset-authoring-policy.mjs";
 import type { ExecutionContext, SkillDefinition, SkillRegistry } from "./registry.ts";
 
 const CATALOG_CATEGORIES = ["prop", "dwelling", "civic", "military", "religious"] as const;
@@ -142,6 +143,7 @@ export function registerAssetCatalogSkills(
     input: catalogEntrySchema,
     output: z.object({ published: z.boolean(), id: z.string(), count: z.number().int() }),
     handler: (input, ctx) => {
+      assertGenericAssetAuthoringCategory(input.category, "catalog.publish");
       state.published.set(input.id, input);
       ctx.emit("catalog.published", { id: input.id, title: input.title, category: input.category });
       const count = mergedEntries(state, ctx).length;
@@ -158,6 +160,7 @@ export function registerAssetCatalogSkills(
     input: requestInput,
     output: z.object({ requestId: z.string(), queued: z.number().int() }),
     handler: (input, ctx) => {
+      assertGenericAssetAuthoringCategory(input.category, "asset.request");
       // Deterministic id (tick + per-session ordinal) — NEVER wall-clock/random, so a worldlog
       // replay reconstructs the identical request list.
       const requestId = `req_${ctx.tick}_${state.requests.length}`;

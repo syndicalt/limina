@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { assertArrayLiteral, parseTypeScript } from "./source-semantics.test-helper.mjs";
 
 const runner = readFileSync(new URL("./run-native-staged-interior-proxy-capture.mjs", import.meta.url), "utf8");
-const demo = readFileSync(new URL("../../js/src/demos/staged_interior_proxy_capture_window.ts", import.meta.url), "utf8");
+const demo = readFileSync(
+  new URL("../../js/src/demos/staged_interior_proxy_capture_window.ts", import.meta.url),
+  "utf8",
+);
+const runnerFile = parseTypeScript(runner, "run-native-staged-interior-proxy-capture.mjs");
 
 test("I1 capture closes exact authority before renderer and mounts approved M1 shell through engine review", () => {
   assert.match(demo, /verifyStagedInteriorProxyReviewClosure\(authority[\s\S]*createEngine/);
@@ -11,7 +16,7 @@ test("I1 capture closes exact authority before renderer and mounts approved M1 s
   assert.match(runner, /verifyStagedInteriorProxyReviewClosure\(authority/);
   assert.match(runner, /stage\.kind !== "interior-plan"/);
   assert.match(runner, /stage\.status !== "draft"/);
-  assert.match(runner, /approvedShell", "approvedMaterials", "derived", "plan", "stageArtifact"/);
+  assertArrayLiteral(runnerFile, ["approvedShell", "approvedMaterials", "derived", "plan", "stageArtifact"]);
   assert.doesNotMatch(demo, /mountTemperateFidelityScene|loadTemperateFidelityCandidate|furniture-pack/);
 });
 
@@ -39,7 +44,10 @@ test("I1 capture rejects software and disables timestamp queries without acknowl
   assert.match(runner, /delete captureEnv\.LIMINA_GPU_TIMESTAMP_RISK_ACK/);
   assert.match(runner, /delete captureEnv\.LIMINA_GPU_TIMESTAMP_MODE/);
   assert.match(runner, /delete captureEnv\.LIMINA_GPU_TIMESTAMP_QUERIES/);
-  assert.match(runner, /for \(const key of Object\.keys\(captureEnv\)\) if \(\/TIMESTAMP\/i\.test\(key\)\) delete captureEnv\[key\]/);
+  assert.match(
+    runner,
+    /for \(const key of Object\.keys\(captureEnv\)\) if \(\/TIMESTAMP\/i\.test\(key\)\) delete captureEnv\[key\]/,
+  );
   assert.match(runner, /gpuTimestampMode !== "disabled"/);
   assert.match(runner, /timestampQueriesEnabled !== false/);
 });
@@ -54,11 +62,8 @@ test("I1 launcher is append-only, private, bounded, and absolute-stop guarded ag
   assert.match(runner, /flag: "wx"/);
   assert.match(runner, /chmod\(reviewRoot, 0o700\)/);
   assert.match(runner, /chmod\(path, 0o600\)/);
-  assert.match(runner, /current boot already contains an NVIDIA Xid/);
-  assert.match(runner, /journalctl", \["-k", "-f", "-n", "0"/);
-  assert.match(runner, /setInterval\(\(\) => \{[\s\S]*kernelLog\(\)[\s\S]*\}, 250\)/);
-  assert.match(runner, /capture stopped and must not be retried before reboot/);
-  assert.match(runner, /NVIDIA Xid detected after capture; stop and reboot before any retry/);
+  assert.match(runner, /runGuardedCaptureWithSourceClosure/);
+  assert.doesNotMatch(runner, /node:child_process|journalctl/);
   assert.match(runner, /await fs\.unlink\(tracePath\)/);
   assert.doesNotMatch(runner, /0\.0\.0\.0|http\.createServer|--serve|dgx-spark-review-bridge/);
 });

@@ -91,7 +91,7 @@ function registerParentSkill(registry: SkillRegistry): void {
     async handler(input, ctx) {
       const res = await registry.invoke("game.flag", { name: input.flagName, value: true }, {
         agentId: ctx.agentId, sessionId: ctx.sessionId, permissions: ctx.permissions,
-        tick: ctx.tick, world: ctx.world, chainId: ctx.chainId,
+        tick: ctx.tick, world: ctx.world, chainId: ctx.chainId, chainToken: ctx.chainToken,
       });
       return { ok: res.success };
     },

@@ -9,12 +9,25 @@ import { fileURLToPath } from "node:url";
 import { build } from "../../js/node_modules/esbuild/lib/main.js";
 import { resolveChrome, resolvePwc } from "../_pw-resolve.mjs";
 
-const require = createRequire(import.meta.url), repo = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-function skip(message) { console.log(`SKIP: ${message}`); process.exit(2); }
-function fail(message) { console.error(`tree-population-browser-gate FAIL: ${message}`); process.exit(1); }
-const pwc = resolvePwc(), chrome = resolveChrome();
+const require = createRequire(import.meta.url),
+  repo = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+function skip(message) {
+  console.log(`SKIP: ${message}`);
+  process.exit(2);
+}
+function fail(message) {
+  console.error(`tree-population-browser-gate FAIL: ${message}`);
+  process.exit(1);
+}
+const pwc = resolvePwc(),
+  chrome = resolveChrome();
 if (!pwc || !chrome) skip("Playwright or Chromium is unavailable");
-let chromium; try { ({ chromium } = require(pwc)); } catch (error) { skip(`Playwright is not loadable: ${error.message}`); }
+let chromium;
+try {
+  ({ chromium } = require(pwc));
+} catch (error) {
+  skip(`Playwright is not loadable: ${error.message}`);
+}
 const directory = await mkdtemp(join(tmpdir(), "limina-tree-population-"));
 const entry = `
 import * as THREE from ${JSON.stringify(join(repo, "js/build/three.bundle.mjs"))};
@@ -42,19 +55,72 @@ const pa=await pixels([9,6,12]),pb=await pixels([-10,5,8]),a=stats(pa.data),b=st
 window.__treeResult={backend:'forceWebGL',a,b,calls:Math.max(pa.calls,pb.calls),objects:adapter.root.children.length,pass:a.stdev>3&&b.stdev>3&&a.mean>2&&b.mean>2&&adapter.root.children.length===5&&Math.max(pa.calls,pb.calls)<=5};
 `;
 try {
-  await build({ stdin: { contents: entry, resolveDir: repo, sourcefile: "tree-population-entry.ts", loader: "ts" }, bundle: true, format: "esm", outfile: join(directory, "entry.js"), logLevel: "silent" });
-  await writeFile(join(directory, "index.html"), "<!doctype html><body style='margin:0'><script type='module' src='/entry.js'></script></body>\n");
-  const server = createServer(async (request, response) => { try { const pathname = decodeURIComponent(new URL(request.url ?? "/", "http://localhost").pathname); if (pathname === "/favicon.ico") { response.writeHead(204); response.end(); return; } const path = join(directory, pathname === "/" ? "index.html" : pathname); if (!(path === join(directory, "index.html") || path.startsWith(directory + "/"))) throw new Error("forbidden"); const bytes = await readFile(path); response.writeHead(200, { "content-type": extname(path) === ".html" ? "text/html" : "text/javascript" }); response.end(bytes); } catch { response.writeHead(404); response.end("not found"); } });
+  await build({
+    stdin: { contents: entry, resolveDir: repo, sourcefile: "tree-population-entry.ts", loader: "ts" },
+    bundle: true,
+    format: "esm",
+    outfile: join(directory, "entry.js"),
+    logLevel: "silent",
+  });
+  await writeFile(
+    join(directory, "index.html"),
+    "<!doctype html><body style='margin:0'><script type='module' src='/entry.js'></script></body>\n",
+  );
+  const server = createServer(async (request, response) => {
+    try {
+      const pathname = decodeURIComponent(new URL(request.url ?? "/", "http://localhost").pathname);
+      if (pathname === "/favicon.ico") {
+        response.writeHead(204);
+        response.end();
+        return;
+      }
+      const path = join(directory, pathname === "/" ? "index.html" : pathname);
+      if (!(path === join(directory, "index.html") || path.startsWith(directory + "/"))) throw new Error("forbidden");
+      const bytes = await readFile(path);
+      response.writeHead(200, { "content-type": extname(path) === ".html" ? "text/html" : "text/javascript" });
+      response.end(bytes);
+    } catch {
+      response.writeHead(404);
+      response.end("not found");
+    }
+  });
   await new Promise((accept) => server.listen(0, "127.0.0.1", accept));
   let browser;
   try {
-    browser = await chromium.launch({ executablePath: chrome, args: ["--no-sandbox", "--disable-dev-shm-usage", "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
-    const page = await browser.newPage({ viewport: { width: 384, height: 256 } }), errors = [];
-    page.on("pageerror", (error) => errors.push(error.message)); page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
+    browser = await chromium.launch({
+      executablePath: chrome,
+      args: [
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--use-gl=angle",
+        "--use-angle=swiftshader",
+        "--enable-unsafe-swiftshader",
+      ],
+    });
+    const page = await browser.newPage({ viewport: { width: 384, height: 256 } }),
+      errors = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("console", (message) => {
+      if (message.type() === "error") errors.push(message.text());
+    });
     await page.goto(`http://127.0.0.1:${server.address().port}/`, { waitUntil: "domcontentloaded", timeout: 15_000 });
-    let result; try { result = await page.waitForFunction(() => window.__treeResult ?? false, { timeout: 30_000 }).then((handle) => handle.jsonValue()); }
-    catch (error) { fail(errors.length ? errors.slice(0, 6).join(" | ") : `browser timeout: ${error.message}`); }
-    if (errors.length) fail(errors.slice(0, 6).join(" | ")); if (!result.pass) fail(`render proof failed: ${JSON.stringify(result)}`);
-    console.log(`tree-population-browser-gate OK: forceWebGL compiled five true 3-rung instanced draws with TSL foliage+impostor in ${result.calls} calls; two-angle stdev ${result.a.stdev.toFixed(2)}/${result.b.stdev.toFixed(2)}`);
-  } finally { await browser?.close(); await new Promise((accept) => server.close(accept)); }
-} finally { await rm(directory, { recursive: true, force: true }); }
+    let result;
+    try {
+      result = await page
+        .waitForFunction(() => window.__treeResult ?? false, { timeout: 30_000 })
+        .then((handle) => handle.jsonValue());
+    } catch (error) {
+      fail(errors.length ? errors.slice(0, 6).join(" | ") : `browser timeout: ${error.message}`);
+    }
+    if (errors.length) fail(errors.slice(0, 6).join(" | "));
+    if (!result.pass) fail(`render proof failed: ${JSON.stringify(result)}`);
+    console.log(
+      `tree-population-browser-gate OK: forceWebGL compiled five true 3-rung instanced draws with TSL foliage+impostor in ${result.calls} calls; two-angle stdev ${result.a.stdev.toFixed(2)}/${result.b.stdev.toFixed(2)}`,
+    );
+  } finally {
+    await browser?.close();
+    await new Promise((accept) => server.close(accept));
+  }
+} finally {
+  await rm(directory, { recursive: true, force: true });
+}

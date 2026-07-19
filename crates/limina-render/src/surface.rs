@@ -219,9 +219,12 @@ pub fn op_set_fixed_step_callback(state: &mut OpState, #[scoped] cb: v8::Global<
 /// Write the current movement axes into `out[0..3]` (x = strafe, y = up,
 /// z = forward), as set by the host from keyboard state. Zero when unset.
 #[op2(fast)]
-pub fn op_input_axes(state: &mut OpState, #[buffer] out: &mut [f32]) {
+pub fn op_input_axes(state: &mut OpState, #[buffer] out: &mut [f32]) -> Result<(), JsErrorBox> {
     if out.len() < 3 {
-        return;
+        return Err(JsErrorBox::generic(format!(
+            "input axes output buffer requires at least 3 elements, got {}",
+            out.len()
+        )));
     }
     let input = state
         .try_borrow::<InputState>()
@@ -230,15 +233,19 @@ pub fn op_input_axes(state: &mut OpState, #[buffer] out: &mut [f32]) {
     out[0] = input.move_x;
     out[1] = input.move_y;
     out[2] = input.move_z;
+    Ok(())
 }
 
 /// Write the mouse-look delta into `out[0..2]` (dx, dy in raw device units),
 /// accumulated by the host since the last frame; zero when the cursor isn't
 /// grabbed. Drives a free-fly / FPS camera (yaw += dx, pitch += dy).
 #[op2(fast)]
-pub fn op_input_look(state: &mut OpState, #[buffer] out: &mut [f32]) {
+pub fn op_input_look(state: &mut OpState, #[buffer] out: &mut [f32]) -> Result<(), JsErrorBox> {
     if out.len() < 2 {
-        return;
+        return Err(JsErrorBox::generic(format!(
+            "input look output buffer requires at least 2 elements, got {}",
+            out.len()
+        )));
     }
     let input = state
         .try_borrow::<InputState>()
@@ -246,6 +253,7 @@ pub fn op_input_look(state: &mut OpState, #[buffer] out: &mut [f32]) {
         .unwrap_or_default();
     out[0] = input.look_dx;
     out[1] = input.look_dy;
+    Ok(())
 }
 
 /// Write the discrete action-button states into `out[0..2]` as 0/1 floats
@@ -253,9 +261,12 @@ pub fn op_input_look(state: &mut OpState, #[buffer] out: &mut [f32]) {
 /// bitmask. Drives a character controller (jump on the rising edge, run while
 /// held). Zero when unset.
 #[op2(fast)]
-pub fn op_input_buttons(state: &mut OpState, #[buffer] out: &mut [f32]) {
+pub fn op_input_buttons(state: &mut OpState, #[buffer] out: &mut [f32]) -> Result<(), JsErrorBox> {
     if out.len() < 2 {
-        return;
+        return Err(JsErrorBox::generic(format!(
+            "input buttons output buffer requires at least 2 elements, got {}",
+            out.len()
+        )));
     }
     let input = state
         .try_borrow::<InputState>()
@@ -271,4 +282,5 @@ pub fn op_input_buttons(state: &mut OpState, #[buffer] out: &mut [f32]) {
     } else {
         0.0
     };
+    Ok(())
 }

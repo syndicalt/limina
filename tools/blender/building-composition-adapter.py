@@ -583,7 +583,21 @@ for instance in resolved["instances"]:
     source_root.matrix_parent_inverse = Matrix.Identity(4)
     source_root.matrix_local = source_root_local
     composed_fingerprint = source_fingerprint(appended, "limina.sourceId")
-    instance_records.append({"id": instance["id"], "rootId": instance_root_id, "artifactId": instance["catalogArtifactId"], "role": catalog["role"], "sourceBlendHash": catalog["sourceBlend"]["sha256"], "sourceRootId": source_root.get("limina.sourceId"), "sourceFingerprint": fingerprint, "composedFingerprint": composed_fingerprint, "sourceInventorySha256": inventory["sha256"], "objects": len(appended), "meshes": len([obj for obj in appended if obj.type == "MESH"]), "sockets": len([obj for obj in appended if obj.get("limina.role") == "socket"]), "colliders": len([obj for obj in appended if obj.get("limina.role") == "collider"])})
+    instance_records.append({
+        "id": instance["id"],
+        "rootId": instance_root_id,
+        "artifactId": instance["catalogArtifactId"],
+        "role": catalog["role"],
+        "sourceBlendHash": catalog["sourceBlend"]["sha256"],
+        "sourceRootId": source_root.get("limina.sourceId"),
+        "sourceFingerprint": fingerprint,
+        "composedFingerprint": composed_fingerprint,
+        "sourceInventorySha256": inventory["sha256"],
+        "objects": len(appended),
+        "meshes": len([obj for obj in appended if obj.type == "MESH"]),
+        "sockets": len([obj for obj in appended if obj.get("limina.role") == "socket"]),
+        "colliders": len([obj for obj in appended if obj.get("limina.role") == "collider"]),
+    })
 
 for exclusion in manifest["legacyExclusions"]:
     if any(semantic_matches_exclusion(str(obj.get("limina.id", "")), exclusion) or semantic_matches_exclusion(str(obj.get("limina.sourceId", "")), exclusion) for obj in bpy.context.scene.objects):
@@ -634,7 +648,22 @@ def patch_glb(path):
     document = json.loads(next(data for kind, data in chunks if kind == 0x4E4F534A).decode().rstrip(" \0"))
     extras = document["asset"].setdefault("extras", {})
     extras["liminaBuildingComposition"] = manifest
-    extras["liminaBuildingCompositionProvenance"] = {"schema": "limina.building-composition-provenance/v2", "manifestHash": manifest_hash, "manifestRawSha256": manifest_raw_hash, "materializedShellRuntimeGlb": manifest["dependencies"]["materialPalette"]["runtimeGlb"], "materializedShellImportBridge": material_bridge_identity, "shellSourceBlend": manifest["dependencies"]["shell"]["sourceBlend"], "materializedShellFingerprint": shell_fingerprint, "materializedShellNodeTableHash": resolved["materialNodeTable"]["sha256"], "materializedShellNodeFingerprint": shell_node_fingerprint, "materializedShellStructuralNodes": resolved["materialNodeTable"]["structural"], "materialRuntimeInventory": resolved["materialInventory"], "instances": instance_records, "adapterSha256": digest(os.path.abspath(__file__)), "removedSemanticIds": sorted(removed_semantics)}
+    extras["liminaBuildingCompositionProvenance"] = {
+        "schema": "limina.building-composition-provenance/v2",
+        "manifestHash": manifest_hash,
+        "manifestRawSha256": manifest_raw_hash,
+        "materializedShellRuntimeGlb": manifest["dependencies"]["materialPalette"]["runtimeGlb"],
+        "materializedShellImportBridge": material_bridge_identity,
+        "shellSourceBlend": manifest["dependencies"]["shell"]["sourceBlend"],
+        "materializedShellFingerprint": shell_fingerprint,
+        "materializedShellNodeTableHash": resolved["materialNodeTable"]["sha256"],
+        "materializedShellNodeFingerprint": shell_node_fingerprint,
+        "materializedShellStructuralNodes": resolved["materialNodeTable"]["structural"],
+        "materialRuntimeInventory": resolved["materialInventory"],
+        "instances": instance_records,
+        "adapterSha256": digest(os.path.abspath(__file__)),
+        "removedSemanticIds": sorted(removed_semantics),
+    }
     encoded = json.dumps(document, separators=(",", ":"), ensure_ascii=False).encode("utf8")
     encoded += b" " * ((4 - len(encoded) % 4) % 4)
     rebuilt = [(0x4E4F534A, encoded)] + [(kind, data) for kind, data in chunks if kind != 0x4E4F534A]
@@ -646,4 +675,18 @@ def patch_glb(path):
 patch_glb(OUT)
 if {path: digest(path) for path in all_input_paths} != source_hashes_before:
     raise RuntimeError("export changed an approved input")
-print("LIMINA_BUILDING_COMPOSITION_OUTPUT=" + json.dumps({"schema": "limina.blender-building-composition-output/v2", "manifestHash": manifest_hash, "manifestRawSha256": manifest_raw_hash, "materializedShellRuntimeGlbHash": manifest["dependencies"]["materialPalette"]["runtimeGlb"]["sha256"], "materializedShellImportBridge": material_bridge_identity, "materializedShellFingerprint": shell_fingerprint, "materializedShellNodeTableHash": resolved["materialNodeTable"]["sha256"], "materializedShellNodeFingerprint": shell_node_fingerprint, "materializedShellStructuralNodes": resolved["materialNodeTable"]["structural"], "instances": instance_records, "removedSemanticIds": sorted(removed_semantics), "blendOutput": BLEND_OUT, "output": OUT}, separators=(",", ":")))
+print("LIMINA_BUILDING_COMPOSITION_OUTPUT=" + json.dumps({
+    "schema": "limina.blender-building-composition-output/v2",
+    "manifestHash": manifest_hash,
+    "manifestRawSha256": manifest_raw_hash,
+    "materializedShellRuntimeGlbHash": manifest["dependencies"]["materialPalette"]["runtimeGlb"]["sha256"],
+    "materializedShellImportBridge": material_bridge_identity,
+    "materializedShellFingerprint": shell_fingerprint,
+    "materializedShellNodeTableHash": resolved["materialNodeTable"]["sha256"],
+    "materializedShellNodeFingerprint": shell_node_fingerprint,
+    "materializedShellStructuralNodes": resolved["materialNodeTable"]["structural"],
+    "instances": instance_records,
+    "removedSemanticIds": sorted(removed_semantics),
+    "blendOutput": BLEND_OUT,
+    "output": OUT,
+}, separators=(",", ":")))

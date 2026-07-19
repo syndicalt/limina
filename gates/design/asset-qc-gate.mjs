@@ -130,7 +130,8 @@ export function measureGlb(bytes) {
   if (json === null) {
     return {
       readable: false, vertexCount: 0, triangleCount: 0, materialCount: 0, meshCount: 0,
-      hasAlbedoMap: false, hasNormalMap: false, bboxDims: [0, 0, 0], materials: [],
+      hasAlbedoMap: false, hasNormalMap: false,
+      bboxMin: null, bboxMax: null, bboxDims: [0, 0, 0], materials: [],
     };
   }
   const accessors = json.accessors ?? [];
@@ -190,7 +191,7 @@ export function measureGlb(bytes) {
         const posIdx = prim.attributes?.POSITION;
         if (posIdx === undefined) continue;
         const acc = accessors[posIdx];
-        if (!acc?.min || !acc?.max || acc.min.length < 3 || acc.max.length < 3) continue;
+        if (acc?.type !== "VEC3" || !acc?.min || !acc?.max || acc.min.length < 3 || acc.max.length < 3) continue;
         for (let cx = 0; cx < 2; cx++) for (let cy = 0; cy < 2; cy++) for (let cz = 0; cz < 2; cz++) {
           const p = transformPoint(nodeWorld, [cx ? acc.max[0] : acc.min[0], cy ? acc.max[1] : acc.min[1], cz ? acc.max[2] : acc.min[2]]);
           for (let a = 0; a < 3; a++) { if (p[a] < mn[a]) mn[a] = p[a]; if (p[a] > mx[a]) mx[a] = p[a]; }
@@ -200,11 +201,13 @@ export function measureGlb(bytes) {
     }
     for (const c of node.children ?? []) stack.push({ id: c, world: nodeWorld });
   }
+  const bboxMin = found ? mn.slice() : null;
+  const bboxMax = found ? mx.slice() : null;
   const bboxDims = found ? [mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]] : [0, 0, 0];
 
   return {
     readable: true, vertexCount, triangleCount, materialCount: materials.length, meshCount: meshes.length,
-    hasAlbedoMap, hasNormalMap, bboxDims, materials: matOut,
+    hasAlbedoMap, hasNormalMap, bboxMin, bboxMax, bboxDims, materials: matOut,
   };
 }
 

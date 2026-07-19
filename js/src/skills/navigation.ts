@@ -218,6 +218,7 @@ export function registerNavigationSkills(
           tick: ctx.tick,
           world: ctx.world,
           chainId: ctx.chainId,
+          chainToken: ctx.chainToken,
         },
       );
       if (res === undefined || !res.success) {

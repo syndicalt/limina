@@ -6,7 +6,11 @@ import { resolveFunctionalBuildingSitePlacement } from "../assets/functional-bui
 import { isSoftwareAdapter } from "../render/fidelity-benchmark.ts";
 import { withFrozenRendererTime } from "../render/frozen-render-time.ts";
 import { readNativeSurfaceRgba, withPresentedNativeSurfaceFrame } from "../render/native-surface-readback.ts";
-import { validateBuildingProductionReviewAuthority, verifyBuildingProductionReviewClosure, verifyBuildingProductionReviewSiteResolution } from "../render/building-production-review-authority.ts";
+import {
+  validateBuildingProductionReviewAuthority,
+  verifyBuildingProductionReviewClosure,
+  verifyBuildingProductionReviewSiteResolution,
+} from "../render/building-production-review-authority.ts";
 import { mountBuildingProductionReview } from "../render/building-production-review-scene.ts";
 import { loadTemperateFidelityCandidate, mountTemperateFidelityScene } from "../render/temperate-fidelity-scene.ts";
 import {
@@ -34,26 +38,50 @@ const SOURCE_PATHS = Object.freeze([
 const authorityPath = ops.op_read_env(BUILDING_PRODUCTION_REVIEW_AUTHORITY_ENV);
 if (!authorityPath) throw new Error(`${BUILDING_PRODUCTION_REVIEW_AUTHORITY_ENV} is required`);
 const traceName = ops.op_read_env(BUILDING_PRODUCTION_REVIEW_TRACE_ENV);
-if (!traceName || !/^[A-Za-z0-9][A-Za-z0-9._-]*\.json$/.test(traceName)
-  || traceName.includes("..") || traceName.includes("/") || traceName.includes("\\")) {
+if (
+  !traceName ||
+  !/^[A-Za-z0-9][A-Za-z0-9._-]*\.json$/.test(traceName) ||
+  traceName.includes("..") ||
+  traceName.includes("/") ||
+  traceName.includes("\\")
+) {
   throw new Error(`${BUILDING_PRODUCTION_REVIEW_TRACE_ENV} must be a bare .json filename`);
 }
 
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const authorityBytes = ops.op_read_asset(authorityPath);
 const authority = validateBuildingProductionReviewAuthority(JSON.parse(decoder.decode(authorityBytes)));
-const closure=verifyBuildingProductionReviewClosure(authority, (path) => ops.op_read_asset(path));
-const source = Object.freeze(SOURCE_PATHS.map((path) => {
-  const bytes = ops.op_read_asset(path);
-  return Object.freeze({ path, sha256: `sha256:${sha256(bytes)}`, contentHash: portableAssetContentHash(bytes) });
-}));
+const closure = verifyBuildingProductionReviewClosure(authority, (path) => ops.op_read_asset(path));
+const source = Object.freeze(
+  SOURCE_PATHS.map((path) => {
+    const bytes = ops.op_read_asset(path);
+    return Object.freeze({ path, sha256: `sha256:${sha256(bytes)}`, contentHash: portableAssetContentHash(bytes) });
+  }),
+);
 const [width, height] = authority.presentation.minimumResolution;
-const reader={readJson:async(path:string)=>JSON.parse(decoder.decode(ops.op_read_asset(path))),readBytes:async(path:string)=>ops.op_read_asset(path)};
+const reader = {
+  readJson: async (path: string) => JSON.parse(decoder.decode(ops.op_read_asset(path))),
+  readBytes: async (path: string) => ops.op_read_asset(path),
+};
 // Site authority is resolved and compared to append-only CPU evidence before renderer/GPU creation.
-const loaded=await loadTemperateFidelityCandidate({reader,shot:authority.environment.shot});
-let siteEvidence:ReturnType<typeof resolveFunctionalBuildingSitePlacement>;
-try{const productionContract=parseFunctionalBuildingContract(ops.op_read_asset(authority.package.productionGlb.path));siteEvidence=resolveFunctionalBuildingSitePlacement({contract:productionContract,position:authority.placement.position,yaw:authority.placement.yaw,sampleHeight:(x,z)=>loaded.candidate.snapshot.terrain.sampleHeight(x,z),maximumSampleSpacing:.5});verifyBuildingProductionReviewSiteResolution(authority,closure.siteFit,siteEvidence,(x,z)=>loaded.candidate.snapshot.terrain.sampleHeight(x,z));}
-catch(error){loaded.candidate.dispose();throw error;}
+const loaded = await loadTemperateFidelityCandidate({ reader, shot: authority.environment.shot });
+let siteEvidence: ReturnType<typeof resolveFunctionalBuildingSitePlacement>;
+try {
+  const productionContract = parseFunctionalBuildingContract(ops.op_read_asset(authority.package.productionGlb.path));
+  siteEvidence = resolveFunctionalBuildingSitePlacement({
+    contract: productionContract,
+    position: authority.placement.position,
+    yaw: authority.placement.yaw,
+    sampleHeight: (x, z) => loaded.candidate.snapshot.terrain.sampleHeight(x, z),
+    maximumSampleSpacing: 0.5,
+  });
+  verifyBuildingProductionReviewSiteResolution(authority, closure.siteFit, siteEvidence, (x, z) =>
+    loaded.candidate.snapshot.terrain.sampleHeight(x, z),
+  );
+} catch (error) {
+  loaded.candidate.dispose();
+  throw error;
+}
 
 function toBase64(bytes: Uint8Array): string {
   let value = "";
@@ -69,7 +97,10 @@ const engine = await createEngine({
   gpuTimestampMode: "disabled",
   gpuTextureCompression: "bc-required",
   renderBaseline: false,
-}).catch((error)=>{loaded.candidate.dispose();throw error;});
+}).catch((error) => {
+  loaded.candidate.dispose();
+  throw error;
+});
 const renderer = engine.renderer as unknown as THREE.WebGPURenderer;
 renderer.info.autoReset = false;
 const gltfCache = new GltfSceneCache({
@@ -89,9 +120,11 @@ try {
   if (isSoftwareAdapter(engine.gpuAdapter)) {
     throw new Error(`R1 production review resolved a software adapter: ${JSON.stringify(engine.gpuAdapter)}`);
   }
-  const productionAssetId="buildings/functional-hall-house-v4-production.glb",fuelPath=closure.manifest.runtimeFacets.fire.fuel.runtimeGlb.path,fuelAssetId=fuelPath.replace(/^assets\//,"");
-  await prewarmGltfScene(productionAssetId,closure.productionBytes,gltfCache);
-  await prewarmGltfScene(fuelAssetId,ops.op_read_asset(fuelPath),gltfCache);
+  const productionAssetId = "buildings/functional-hall-house-v4-production.glb",
+    fuelPath = closure.manifest.runtimeFacets.fire.fuel.runtimeGlb.path,
+    fuelAssetId = fuelPath.replace(/^assets\//, "");
+  await prewarmGltfScene(productionAssetId, closure.productionBytes, gltfCache);
+  await prewarmGltfScene(fuelAssetId, ops.op_read_asset(fuelPath), gltfCache);
   environment = await mountTemperateFidelityScene({
     loaded,
     renderer,
@@ -134,109 +167,153 @@ try {
       () => environment!.post.render(),
     );
   };
-  const captures = await withFrozenRendererTime(renderer, authority.presentation.fixedTimeSeconds, async (beginFrame) => {
-    const output = [];
-    for (let index = 0; index < authority.evidenceViews.length; index++) {
-      const view = authority.evidenceViews[index];
-      mounted!.setEvidenceView(view.id);
-      for (let frame = 0; frame < (index === 0 ? authority.presentation.warmupFrames : 2); frame++) {
-        await renderWarmup(beginFrame);
+  const captures = await withFrozenRendererTime(
+    renderer,
+    authority.presentation.fixedTimeSeconds,
+    async (beginFrame) => {
+      const output = [];
+      for (let index = 0; index < authority.evidenceViews.length; index++) {
+        const view = authority.evidenceViews[index];
+        mounted!.setEvidenceView(view.id);
+        for (let frame = 0; frame < (index === 0 ? authority.presentation.warmupFrames : 2); frame++) {
+          await renderWarmup(beginFrame);
+        }
+        const captured = await withPresentedNativeSurfaceFrame(
+          () => ops.op_surface_present(engine.context),
+          async () => {
+            renderer.info.reset();
+            beginFrame();
+            const started = performance.now();
+            environment!.post.render();
+            const cpuEncodeMs = Number((performance.now() - started).toFixed(3));
+            const submission = requireWholeFrameRenderSubmissionTelemetry(
+              captureRenderSubmissionTelemetry(renderer.info as unknown as RendererInfoLike),
+            );
+            if (submission.renderCalls <= 1 || submission.drawCalls <= 1 || submission.triangles <= 1) {
+              throw new Error(`R1 ${view.id} did not submit a whole production frame`);
+            }
+            const resources = captureRenderResourceTelemetry(renderer.info as unknown as RendererInfoLike);
+            const pixels = await readNativeSurfaceRgba({
+              device: engine.device as never,
+              context: engine.context as never,
+              expectedWidth: width,
+              expectedHeight: height,
+              minimumWidth: width,
+              minimumHeight: height,
+            });
+            return { cpuEncodeMs, submission, resources, pixels };
+          },
+        );
+        output.push(
+          Object.freeze({
+            id: view.id,
+            role: view.role,
+            camera: view.camera,
+            authorityCamera: view.camera,
+            resolvedCamera: Object.freeze({
+              position: Object.freeze([
+                view.camera.position[0],
+                view.camera.position[1] + siteEvidence.rootWorldY,
+                view.camera.position[2],
+              ]),
+              target: Object.freeze([
+                view.camera.target[0],
+                view.camera.target[1] + siteEvidence.rootWorldY,
+                view.camera.target[2],
+              ]),
+              fovDeg: view.camera.fovDeg,
+              near: view.camera.near,
+              far: view.camera.far,
+              verticalBasis: "world",
+            }),
+            width: captured.pixels.width,
+            height: captured.pixels.height,
+            surfaceFormat: captured.pixels.format,
+            rgbaByteLength: captured.pixels.rgba.byteLength,
+            rgbaContentHash: portableAssetContentHash(captured.pixels.rgba),
+            rgbaBase64: toBase64(captured.pixels.rgba),
+            renderSubmission: Object.freeze({ ...captured.submission, cpuEncodeMs: captured.cpuEncodeMs }),
+            rendererResources: captured.resources,
+          }),
+        );
       }
-      const captured = await withPresentedNativeSurfaceFrame(
-        () => ops.op_surface_present(engine.context),
-        async () => {
-          renderer.info.reset();
-          beginFrame();
-          const started = performance.now();
-          environment!.post.render();
-          const cpuEncodeMs = Number((performance.now() - started).toFixed(3));
-          const submission = requireWholeFrameRenderSubmissionTelemetry(
-            captureRenderSubmissionTelemetry(renderer.info as unknown as RendererInfoLike),
-          );
-          if (submission.renderCalls <= 1 || submission.drawCalls <= 1 || submission.triangles <= 1) {
-            throw new Error(`R1 ${view.id} did not submit a whole production frame`);
-          }
-          const resources = captureRenderResourceTelemetry(renderer.info as unknown as RendererInfoLike);
-          const pixels = await readNativeSurfaceRgba({
-            device: engine.device as never,
-            context: engine.context as never,
-            expectedWidth: width,
-            expectedHeight: height,
-            minimumWidth: width,
-            minimumHeight: height,
-          });
-          return { cpuEncodeMs, submission, resources, pixels };
-        },
-      );
-      output.push(Object.freeze({
-        id: view.id,
-        role: view.role,
-        camera: view.camera,
-        authorityCamera: view.camera,
-        resolvedCamera: Object.freeze({
-          position: Object.freeze([view.camera.position[0], view.camera.position[1] + siteEvidence.rootWorldY, view.camera.position[2]]),
-          target: Object.freeze([view.camera.target[0], view.camera.target[1] + siteEvidence.rootWorldY, view.camera.target[2]]),
-          fovDeg: view.camera.fovDeg,
-          near: view.camera.near,
-          far: view.camera.far,
-          verticalBasis: "world",
-        }),
-        width: captured.pixels.width,
-        height: captured.pixels.height,
-        surfaceFormat: captured.pixels.format,
-        rgbaByteLength: captured.pixels.rgba.byteLength,
-        rgbaContentHash: portableAssetContentHash(captured.pixels.rgba),
-        rgbaBase64: toBase64(captured.pixels.rgba),
-        renderSubmission: Object.freeze({ ...captured.submission, cpuEncodeMs: captured.cpuEncodeMs }),
-        rendererResources: captured.resources,
-      }));
-    }
-    return Object.freeze(output);
-  });
+      return Object.freeze(output);
+    },
+  );
   await mounted.dispose();
   mounted = undefined;
   const afterDisposeEntities = world.entities.ids().length;
   if (afterDisposeEntities !== baselineEntities) {
     throw new Error(`R1 review lifecycle leaked entities: ${baselineEntities} -> ${afterDisposeEntities}`);
   }
-  ops.op_write_trace(traceName, `${JSON.stringify({
-    schema: BUILDING_PRODUCTION_REVIEW_TRACE_SCHEMA,
-    backend: "native-webgpu",
-    captureClass: "production-engine",
-    surfaceFormat: captures[0].surfaceFormat,
-    pixelFormat: "rgba8unorm",
-    rowOrigin: "top-left",
-    timingPolicy: {
-      gpuTimestampMode: "disabled",
-      timestampQueriesEnabled: false,
-      gpuTextureCompression: "bc-required",
-      renderBaseline: false,
-    },
-    adapter: engine.gpuAdapter,
-    authority: {
-      path: authorityPath,
-      sha256: `sha256:${sha256(authorityBytes)}`,
-      contentHash: portableAssetContentHash(authorityBytes),
-    },
-    source,
-    environment: authority.environment,
-    presentation: Object.freeze({ fixedTimeSeconds: authority.presentation.fixedTimeSeconds, warmupFrames: authority.presentation.warmupFrames,
-      cameraVerticalBasis: authority.presentation.cameraVerticalBasis }),
-    mounted: mountedEvidence,
-    lifecycle: { baselineEntities, afterDisposeEntities, disposed: true },
-    captures,
-  })}\n`);
+  ops.op_write_trace(
+    traceName,
+    `${JSON.stringify({
+      schema: BUILDING_PRODUCTION_REVIEW_TRACE_SCHEMA,
+      backend: "native-webgpu",
+      captureClass: "production-engine",
+      surfaceFormat: captures[0].surfaceFormat,
+      pixelFormat: "rgba8unorm",
+      rowOrigin: "top-left",
+      timingPolicy: {
+        gpuTimestampMode: "disabled",
+        timestampQueriesEnabled: false,
+        gpuTextureCompression: "bc-required",
+        renderBaseline: false,
+      },
+      adapter: engine.gpuAdapter,
+      authority: {
+        path: authorityPath,
+        sha256: `sha256:${sha256(authorityBytes)}`,
+        contentHash: portableAssetContentHash(authorityBytes),
+      },
+      source,
+      environment: authority.environment,
+      presentation: Object.freeze({
+        fixedTimeSeconds: authority.presentation.fixedTimeSeconds,
+        warmupFrames: authority.presentation.warmupFrames,
+        cameraVerticalBasis: authority.presentation.cameraVerticalBasis,
+      }),
+      mounted: mountedEvidence,
+      lifecycle: { baselineEntities, afterDisposeEntities, disposed: true },
+      captures,
+    })}\n`,
+  );
 } catch (error) {
   failure = error;
 } finally {
   const failures: unknown[] = [];
-  try { await mounted?.dispose(); } catch (error) { failures.push(error); }
-  try { if(environment!==undefined)await environment.dispose();else loaded.candidate.dispose(); } catch (error) { failures.push(error); }
-  try { await gltfCache.dispose(); } catch (error) { failures.push(error); }
-  try { engine.disposeRenderBaseline(); } catch (error) { failures.push(error); }
-  try { await renderer.dispose(); } catch (error) { failures.push(error); }
+  try {
+    await mounted?.dispose();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    if (environment !== undefined) await environment.dispose();
+    else loaded.candidate.dispose();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await gltfCache.dispose();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    engine.disposeRenderBaseline();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await renderer.dispose();
+  } catch (error) {
+    failures.push(error);
+  }
   if (failures.length) {
-    failure = new AggregateError(failure === undefined ? failures : [failure, ...failures], "R1 capture teardown failed");
+    failure = new AggregateError(
+      failure === undefined ? failures : [failure, ...failures],
+      "R1 capture teardown failed",
+    );
   }
 }
 if (failure !== undefined) throw failure;

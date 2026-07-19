@@ -83,7 +83,7 @@ const placements = [placement(0, 0), placement(1, 0), placement(2, 0), placement
 
 const visual = packageFixture(), packages = new GrassFieldVisualPackageRegistry(); packages.register(visual.pkg);
 const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(); camera.position.set(0, 4, 0);
-const worldLods: { update(camera: any): void }[] = [];
+const worldLods: { update(camera: any): void; settle?(): Promise<void> }[] = [];
 const mount = await BiomePopulationMount.create({ plan: { placements }, assets: assets(), scene, camera, worldLods,
   grassVisualPackages: packages, grassQuality: "cinematic" });
 assert(mount.grass.length === 1 && mount.grass[0]!.visualPackageId === visual.pkg.id
@@ -108,15 +108,15 @@ for (const mesh of meshes()) for (let index = 0; index < mesh.count; index++) {
 assert([0, 1, 2, 30, 31, 32].every((x) => reconstructed.has(x * 1_000)),
   "feature-local page transforms did not reconstruct the authored world positions");
 
-camera.position.x = 30; worldLods[0]!.update(camera);
+camera.position.x = 30; worldLods[0]!.update(camera); await worldLods[0]!.settle?.();
 assert(mount.grassBlades <= 12 && mount.grassDraws <= 2 && meshes().some((mesh) => mesh.name.endsWith("lod0"))
   && meshes().some((mesh) => mesh.name.endsWith("lod1")), "camera movement did not atomically exchange the two package LODs");
-assert(visual.disposed.length >= 2, "LOD replacement retained package geometry resources");
-camera.position.x = 500; worldLods[0]!.update(camera);
+camera.position.x = 500; worldLods[0]!.update(camera); await worldLods[0]!.settle?.();
 assert(mount.grassBlades === 0 && mount.grassDraws === 0 && meshes().length === 0,
   "out-of-range grass pages remained resident");
 mount.dispose(); mount.dispose();
 assert(worldLods.length === 0 && scene.children.length === 0, "grass runtime retained world/scene ownership after disposal");
+assert(visual.disposed.length === 2, "package visual cache was not disposed exactly once per constructed LOD");
 
 const missingScene = new THREE.Scene(), missingLods: { update(camera: any): void }[] = [];
 await rejects(() => BiomePopulationMount.create({ plan: { placements }, assets: assets(), scene: missingScene, camera,
@@ -132,13 +132,13 @@ assert(missingScene.children.length === 0 && missingLods.length === 0, "version 
 
 const failing = packageFixture("1.0.0", 1), failingRegistry = new GrassFieldVisualPackageRegistry(); failingRegistry.register(failing.pkg);
 const rollbackScene = new THREE.Scene(), rollbackCamera = new THREE.PerspectiveCamera(); rollbackCamera.position.set(0, 2, 0);
-const rollbackLods: { update(camera: any): void }[] = [], observed: unknown[] = [];
+const rollbackLods: { update(camera: any): void; settle?(): Promise<void> }[] = [], observed: unknown[] = [];
 const rollbackMount = await BiomePopulationMount.create({ plan: { placements: placements.slice(0, 3) }, assets: assets(),
   scene: rollbackScene, camera: rollbackCamera, worldLods: rollbackLods, grassVisualPackages: failingRegistry,
   grassQuality: "balanced", onError: (error) => observed.push(error) });
 assert(rollbackMount.grassDraws === 1 && rollbackMount.grassBlades === 9,
   "rollback fixture did not publish its initial package-owned LOD0 page");
-rollbackCamera.position.x = 30; rollbackLods[0]!.update(rollbackCamera);
+rollbackCamera.position.x = 30; rollbackLods[0]!.update(rollbackCamera); await rollbackLods[0]!.settle?.();
 const rollbackMeshes: THREE.InstancedMesh[] = [];
 rollbackScene.traverse((object) => { if ((object as THREE.InstancedMesh).isInstancedMesh) rollbackMeshes.push(object as THREE.InstancedMesh); });
 assert(observed.length === 1 && rollbackMeshes.length === 1 && rollbackMeshes[0]!.name.endsWith("lod0"),

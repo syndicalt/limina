@@ -233,6 +233,7 @@ export function registerCottageBuildSkill(registry: SkillRegistry, agents?: Agen
         tick: ctx.tick,
         world: ctx.world,
         chainId: ctx.chainId,
+        chainToken: ctx.chainToken,
       };
       return await delegateCottageWorkers(registry, base, agents);
     },

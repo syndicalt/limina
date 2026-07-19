@@ -351,10 +351,15 @@ await expectCode(
   "replay_diverged",
 );
 const driftAdapter = new ReplayAdapter(true);
-await expectCode(
+const divergence = await expectCode(
   new AuthoringTransactionKernel(options(driftAdapter)).commitRecorded(checkpoint[0].transaction, checkpoint[0].commit),
   "replay_diverged",
 );
+const divergenceWindow = divergence.message.match(/^recorded authoring commit diverged from its embedded commitFields \(first divergence @(\d+): recorded …([\s\S]{1,760})… vs replayed …([\s\S]{1,760})…\)$/);
+assert(divergenceWindow !== null, `replay divergence lost its bounded record window: ${divergence.message}`);
+const divergenceAt = Number(divergenceWindow[1]), windowPrefix = Math.min(60, divergenceAt), recordedWindow = divergenceWindow[2]!, replayedWindow = divergenceWindow[3]!;
+assert(recordedWindow.slice(0, windowPrefix) === replayedWindow.slice(0, windowPrefix), "replay divergence window is not centered on shared pre-divergence context");
+assert(recordedWindow[windowPrefix] !== replayedWindow[windowPrefix], "replay divergence window does not expose the first differing record byte");
 assert(driftAdapter.values.size === 0, "embedded-record divergence must roll back before publishing authority state");
 
 // Resource bounds reject work before record traversal or adapter mutation.

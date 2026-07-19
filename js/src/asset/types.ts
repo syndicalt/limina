@@ -13,7 +13,9 @@
 /** What an agent/skill asks for. These fields are exactly what the durable log records — the
  *  deterministic input that keys the cache. `seed` anchors any stochastic backend. */
 export interface AssetRequest {
-  /** What the asset is, so a resolver can route + a backend can specialize. */
+  /** What the asset is, so a resolver can route + a backend can specialize. `building` here is a
+   *  scenic/non-enterable model request only; functional buildings must use BuildingProgram and
+   *  may not be published or placed through the generic asset-authoring lane. */
   kind: "prop" | "building" | "character" | "vegetation" | "model";
   /** Determinism anchor for stochastic backends; folded into the cache key. */
   seed: number;

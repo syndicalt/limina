@@ -24,7 +24,17 @@ if contract and contract.get("schema")=="limina.functional-building/v2":
     for link in contract.get("verticalLinks",[]):
         prefix="stairs/"+link["id"]+"/"
         realized=[primitive_id for primitive_id in primitive_ids if primitive_id.startswith(prefix)]
-        if len(realized)!=link["riserCount"]+2 or prefix+"landing-bottom" not in primitive_set or prefix+"landing-top" not in primitive_set: raise RuntimeError("v2 vertical link lacks compiler-owned tread and landing geometry: "+link["id"])
+        flights=link.get("flights")
+        intermediate=link.get("intermediateLandings",[])
+        expected=link["riserCount"]+2+len(intermediate)
+        if len(realized)!=expected or prefix+"landing-bottom" not in primitive_set or prefix+"landing-top" not in primitive_set: raise RuntimeError("v2 vertical link lacks compiler-owned tread and landing geometry: "+link["id"])
+        if flights:
+            if len(flights)<2 or len(intermediate)!=len(flights)-1 or not link.get("approaches"): raise RuntimeError("v2 multi-flight link lacks landing/approach authority: "+link["id"])
+            for flight_index,flight in enumerate(flights):
+                for tread_index in range(flight["riserCount"]):
+                    if prefix+f"flight-{flight_index}/tread-{tread_index}" not in primitive_set: raise RuntimeError("v2 multi-flight link lacks exact tread geometry: "+link["id"])
+            for landing_index in range(len(intermediate)):
+                if prefix+f"landing-intermediate-{landing_index}" not in primitive_set: raise RuntimeError("v2 multi-flight link lacks exact turn landing: "+link["id"])
     for floor in multi_room.get("partitionedFloors",[]):
         if floor["prohibitedFullFloorId"] in primitive_set: raise RuntimeError("partitioned upper floor retained prohibited full slab: "+floor["prohibitedFullFloorId"])
         if not floor.get("fragmentIds") or any(fragment not in primitive_set for fragment in floor["fragmentIds"]): raise RuntimeError("partitioned upper floor lacks compiler-owned fragments: "+floor["volumeId"])
@@ -151,6 +161,7 @@ if contract:
         node=bpy.data.objects.new(semantic_id,None);bpy.context.collection.objects.link(node);node.parent=root;node["limina.id"]=semantic_id;node["limina.role"]="room" if semantic_id in contract["roomIds"] else "portal";node["limina.editPolicy"]="protected-generated"
     for collider in contract["colliders"]:
         node=bpy.data.objects.new(collider["id"],None);bpy.context.collection.objects.link(node);node.parent=root;node["limina.id"]=collider["id"];node["limina.role"]="collider";node["limina.editPolicy"]="protected-generated";node["limina.colliderCenter"]=collider["center"];node["limina.colliderHalfExtents"]=collider["halfExtents"]
+        if "rotation" in collider: node["limina.colliderRotation"]=collider["rotation"]
     if contract["schema"]=="limina.functional-building/v2":
         for role,records in (("vertical-link",contract["verticalLinks"]),("spawn-anchor",contract["spawnAnchors"]),("visibility-cell",contract["visibilityCells"])):
             for record in records:
@@ -224,7 +235,22 @@ if contract:
     raw=open(OUT,"rb").read();magic,version,total=struct.unpack_from("<III",raw,0);offset=12;chunks=[]
     while offset<len(raw):
         length,kind=struct.unpack_from("<II",raw,offset);chunks.append((kind,raw[offset+8:offset+8+length]));offset+=8+length
-    document=json.loads(next(data for kind,data in chunks if kind==0x4E4F534A).decode().rstrip(" \0"));asset_extras=document["asset"].setdefault("extras",{});embedded_contract={key:value for key,value in contract.items() if contract["schema"]!="limina.functional-building/v2" or key not in {"colliders","doors"}};asset_extras["liminaFunctionalBuilding"]=embedded_contract;asset_extras["liminaMaterialSources"]={"schema":"limina.material-sources/v1","packs":[{"id":pack,"manifestSha256":digest} for pack,digest in sorted(set(MATERIAL_MANIFESTS))]};visual=payload.get("visualContract")
+    document=json.loads(next(data for kind,data in chunks if kind==0x4E4F534A).decode().rstrip(" \0"))
+    asset_extras=document["asset"].setdefault("extras",{})
+    embedded_contract={
+        key:value
+        for key,value in contract.items()
+        if contract["schema"]!="limina.functional-building/v2" or key not in {"colliders","doors"}
+    }
+    asset_extras["liminaFunctionalBuilding"]=embedded_contract
+    asset_extras["liminaMaterialSources"]={
+        "schema":"limina.material-sources/v1",
+        "packs":[
+            {"id":pack,"manifestSha256":digest}
+            for pack,digest in sorted(set(MATERIAL_MANIFESTS))
+        ],
+    }
+    visual=payload.get("visualContract")
     if visual: asset_extras["liminaFunctionalBuildingVisual"]=visual
     by_name={};by_semantic={};primitive_by_id={record["id"]:record for record in payload["primitives"]}
     for node in document.get("nodes",[]):
@@ -254,7 +280,7 @@ if contract:
     if contract["schema"]=="limina.functional-building/v2":
         for role,records in (("vertical-link",contract["verticalLinks"]),("spawn-anchor",contract["spawnAnchors"]),("visibility-cell",contract["visibilityCells"])):
             for record in records: semantic(record["id"],role)
-    for collider in contract["colliders"]: semantic(collider["id"],"collider",{"shape":"box","center":collider["center"],"halfExtents":collider["halfExtents"]})
+    for collider in contract["colliders"]: semantic(collider["id"],"collider",{"shape":"box","center":collider["center"],"halfExtents":collider["halfExtents"],**({"rotation":collider["rotation"]} if "rotation" in collider else {})})
     for door in contract["doors"]: semantic(door["id"],"door",{"roomId":door["roomId"],"portalId":door["portalId"],"hinge":door["hinge"],"center":door["center"],"halfExtents":door["halfExtents"],"closedYaw":door["closedYaw"],"openYaw":door["openYaw"]})
     if visual:
         referenced=[]

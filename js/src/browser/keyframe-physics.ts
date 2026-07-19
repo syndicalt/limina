@@ -12,6 +12,7 @@
 
 import type { CollisionEventRecord, EngineOps } from "../engine.ts";
 import type { Keyframe } from "../worldlog/keyframes.ts";
+import { composePortableEngineOps } from "./engine-op-composition.ts";
 
 type Transform7 = [number, number, number, number, number, number, number];
 
@@ -110,76 +111,8 @@ export class KeyframePhysics {
 /** Compose a full EngineOps for playback: the keyframe-driven physics + safe
  *  no-op stubs for everything else, overridable (the browser host overrides the
  *  render + trace surfaces). Used by the headless parity test and the browser
- *  runtime alike. Explicit (no Proxy) so the physics hot path stays direct. */
+ *  runtime alike. The shared explicit composition uses no Proxy, so the physics
+ *  hot path stays direct and every browser realm receives the same op inventory. */
 export function playbackOps(physics: KeyframePhysics, overrides: Partial<EngineOps> = {}): EngineOps {
-  const noop = (): void => {};
-  const base: EngineOps = {
-    // physics — the keyframe-driven implementation
-    op_physics_create_world: (g) => physics.op_physics_create_world(g),
-    op_physics_add_ground: (y) => physics.op_physics_add_ground(y),
-    op_physics_add_box: () => physics.op_physics_add_box(),
-    op_physics_add_box_material: () => physics.op_physics_add_box_material(),
-    op_physics_add_sphere: () => physics.op_physics_add_sphere(),
-    op_physics_add_capsule: () => physics.op_physics_add_capsule(),
-    op_physics_add_static_box: () => physics.op_physics_add_static_box(),
-    op_physics_add_static_sphere: () => physics.op_physics_add_static_sphere(),
-    op_physics_add_static_capsule: () => physics.op_physics_add_static_capsule(),
-    op_physics_add_heightfield: () => physics.op_physics_add_heightfield(),
-    op_physics_add_character: () => physics.op_physics_add_character(),
-    op_physics_move_character: (id, dx, dy, dz, out) => physics.op_physics_move_character(id, dx, dy, dz, out),
-    op_physics_remove_body: (id) => physics.op_physics_remove_body(id),
-    op_physics_apply_impulse: () => physics.op_physics_apply_impulse(),
-    op_physics_step: () => physics.op_physics_step(),
-    op_physics_snapshot: () => physics.op_physics_snapshot(),
-    op_physics_restore: (b) => physics.op_physics_restore(b),
-    op_physics_body_pos: (id, out) => physics.op_physics_body_pos(id, out),
-    op_physics_body_transform: (id, out) => physics.op_physics_body_transform(id, out),
-    op_physics_set_body_transform: () => physics.op_physics_set_body_transform(),
-    op_physics_drain_collisions: () => physics.op_physics_drain_collisions(),
-    op_physics_raycast: (ox, oy, oz, dx, dy, dz, maxToi, out) => physics.op_physics_raycast(ox, oy, oz, dx, dy, dz, maxToi, out),
-    op_physics_overlap_box: (x, y, z, hx, hy, hz, qx, qy, qz, qw, ignore, out) => physics.op_physics_overlap_box(x, y, z, hx, hy, hz, qx, qy, qz, qw, ignore, out),
-    // render / loop / input — stubs (browser host overrides)
-    op_create_window_context: () => ({}),
-    op_surface_present: noop,
-    op_surface_resize: noop,
-    op_set_frame_callback: noop,
-    op_set_fixed_step_callback: noop,
-    op_set_resize_callback: noop,
-    op_input_axes: noop,
-    op_input_look: noop,
-    op_input_buttons: noop,
-    // host services
-    op_log: noop,
-    op_http_post: () => Promise.resolve(""),
-    op_http_post_headers: () => Promise.resolve(""),
-    op_sleep_ms: () => Promise.resolve(),
-    op_read_asset: () => new Uint8Array(0),
-    op_sha256: () => "",
-    op_read_env: () => "",
-    // durable trace — stubs (browser host overrides with IndexedDB)
-    op_write_trace: noop,
-    op_append_trace: noop,
-    op_read_trace: () => "",
-    // sandbox
-    op_sandbox_create: () => 0,
-    op_sandbox_eval: () => "",
-    op_sandbox_destroy: () => false,
-    op_sandbox_count: () => 0,
-    // native ECS spatial
-    op_ecs_spatial_query_batch: noop,
-    // audio
-    op_audio_init: () => 0,
-    op_audio_play: () => 0,
-    op_audio_ambient: () => 0,
-    op_audio_stop: noop,
-    op_audio_stop_all: noop,
-    op_audio_set_bus_volume: noop,
-    op_audio_play_spatial: () => 0,
-    op_audio_set_emitter: noop,
-    op_audio_set_listener: noop,
-    op_audio_set_volume: noop,
-    op_audio_speak: () => 0,
-    op_audio_play_buffer: () => 0,
-  };
-  return { ...base, ...overrides };
+  return composePortableEngineOps(physics, {}, overrides);
 }

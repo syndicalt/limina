@@ -243,6 +243,22 @@ const h = Math.SQRT1_2; // sin/cos(45deg) — 90deg-about-Y quat is (0,h,0,h)
     `SnapshotRing.addEids did not freeze new eid position (${render.Position.x[2]},${render.Position.y[2]},${render.Position.z[2]})`);
   assert(Object.is(render.Scale.x[2], 3) && Object.is(render.Scale.y[2], 4) && Object.is(render.Scale.z[2], 5),
     `SnapshotRing.addEids did not copy authored scale (${render.Scale.x[2]},${render.Scale.y[2]},${render.Scale.z[2]})`);
+
+  // A writer stalled midway through a multi-entity publication must never leak
+  // that partial set. Bounded retry returns the previous coherent snapshot.
+  live.beginPublication();
+  live.writePosition(2, 99, 98, 97);
+  const retained = ring.freeze(live, 3);
+  assert(!ring.lastFreezeWasConsistent, "SnapshotRing accepted an odd transform publication");
+  fi.push(retained);
+  fi.interpolate(1, ring.presentSet);
+  assert(Object.is(render.Position.x[2], 10) && Object.is(render.Position.y[2], 20) && Object.is(render.Position.z[2], 30),
+    "SnapshotRing did not preserve its last-good transform after bounded retry");
+  live.endPublication();
+  fi.push(ring.freeze(live));
+  fi.interpolate(1, ring.presentSet);
+  assert(ring.lastFreezeWasConsistent && Object.is(render.Position.x[2], 99),
+    "SnapshotRing did not accept the completed publication");
 }
 
 log("p8_frame_interp OK: position lerp + shortest-path nlerp (unit, no-NaN) — exact endpoints, clamp, spawn/despawn, deterministic, double-buffered; SnapshotRing accepts structural eids");

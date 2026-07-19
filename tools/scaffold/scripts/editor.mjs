@@ -9,7 +9,17 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { connect } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -251,7 +261,58 @@ function bridgeConfig(home, editorUrl, token) {
   };
 }
 
-function printBanner({ home, uiPort, editorPort, atlasPort, token, runtimeDiscovery }) {
+export function preparePrivateEditorStateDirectory(stateDir) {
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  const state = lstatSync(stateDir);
+  if (state.isSymbolicLink() || !state.isDirectory()) {
+    throw new Error(`editor state directory must be a real directory: ${stateDir}`);
+  }
+  chmodSync(stateDir, 0o700);
+  const tracesDir = join(stateDir, "traces");
+  mkdirSync(tracesDir, { recursive: true, mode: 0o700 });
+  const traces = lstatSync(tracesDir);
+  if (traces.isSymbolicLink() || !traces.isDirectory()) {
+    throw new Error(`editor trace directory must be a real directory: ${tracesDir}`);
+  }
+  chmodSync(tracesDir, 0o700);
+  return { stateDir, tracesDir };
+}
+
+export function writePrivateEditorCapability({ stateDir, home, editorPort, token, randomBytesFn = randomBytes }) {
+  if (!/^[A-Za-z0-9_-]{32,128}$/.test(token)) throw new Error("editor capability token is invalid");
+  if (!Number.isInteger(editorPort) || editorPort < 1 || editorPort > 65_535) throw new Error("editor capability port is invalid");
+  const runtimeDir = join(stateDir, "editor-runtime");
+  mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
+  const runtime = lstatSync(runtimeDir);
+  if (runtime.isSymbolicLink() || !runtime.isDirectory()) {
+    throw new Error(`editor runtime capability directory must be a real directory: ${runtimeDir}`);
+  }
+  chmodSync(runtimeDir, 0o700);
+  const editorUrl = `ws://localhost:${editorPort}/`;
+  const path = join(runtimeDir, "editor-capability.json");
+  const random = randomBytesFn(12);
+  if (!(random instanceof Uint8Array) || random.byteLength !== 12) {
+    throw new Error("editor capability temporary-name generator must return exactly 12 bytes");
+  }
+  const suffix = Buffer.from(random).toString("hex");
+  const temporary = join(runtimeDir, `.editor-capability.${process.pid}.${suffix}.tmp`);
+  const content = JSON.stringify({
+    schema: "limina.editor-capability/v1",
+    editorUrl,
+    token,
+    bridge: bridgeConfig(home, editorUrl, token),
+  }, null, 2) + "\n";
+  try {
+    writeFileSync(temporary, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    renameSync(temporary, path);
+    chmodSync(path, 0o600);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+  return path;
+}
+
+function printBanner({ uiPort, editorPort, atlasPort, capabilityPath, runtimeDiscovery }) {
   const editorUrl = `ws://localhost:${editorPort}/`;
   console.log("");
   console.log("limina editor is running");
@@ -262,12 +323,9 @@ function printBanner({ home, uiPort, editorPort, atlasPort, token, runtimeDiscov
   console.log(`  Atlas solo:  http://127.0.0.1:${atlasPort}/`);
   console.log(`  Derived API: ${runtimeDiscovery.baseUrl}`);
   console.log("  Builds:      authoritative MapDoc -> derived terrain sidecar");
-  console.log(`  Editor key:  ${token}`);
+  console.log(`  Capability:  ${capabilityPath} (private, mode 0600)`);
   console.log("");
-  console.log("Register this MCP server with your coding agent:");
-  console.log(JSON.stringify(bridgeConfig(home, editorUrl, token), null, 2));
-  console.log("");
-  console.log("Then follow COORDINATOR.md.");
+  console.log("Read the private capability file to configure the browser or MCP bridge, then follow COORDINATOR.md.");
   console.log("");
   console.log("Press Ctrl-C to stop.");
 }
@@ -433,7 +491,8 @@ async function main() {
   const id = projectConfig.projectId;
   const assetRoot = join(projectConfig.projectRoot, projectConfig.assetRoot ?? "assets");
   const stateDir = join(projectConfig.projectRoot, projectConfig.stateDir ?? ".limina");
-  mkdirSync(stateDir, { recursive: true });
+  try { preparePrivateEditorStateDirectory(stateDir); }
+  catch (error) { fail(error instanceof Error ? error.message : String(error)); }
   try { ensureFreshEditorBundles(home); } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
@@ -478,11 +537,20 @@ async function main() {
       branchId: DEFAULT_DERIVED_RUNTIME_BRANCH,
     },
   });
-  const editorHost = spawn(bin, [join(home, "editor", "server", "editor_host.ts")], {
-    cwd: stateDir,
-    env: hostEnvironment,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  // The native host creates its trace-backed kernel record. Give only that
+  // child a private inherited umask, eliminating a startup window that a later
+  // chmod could not close without changing permissions on unrelated outputs.
+  const previousUmask = process.umask(0o077);
+  let editorHost;
+  try {
+    editorHost = spawn(bin, [join(home, "editor", "server", "editor_host.ts")], {
+      cwd: stateDir,
+      env: hostEnvironment,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } finally {
+    process.umask(previousUmask);
+  }
   const editorHostReady = waitForEditorHostReady(editorHost, editorHost.stdout, editorPort);
   prefixStream(editorHost.stderr, "[editor_host]");
 
@@ -615,12 +683,17 @@ async function main() {
   });
 
   await waitForPort(uiPort, "editor UI server", staticServer);
+  let capabilityPath;
+  try { capabilityPath = writePrivateEditorCapability({ stateDir, home, editorPort, token }); }
+  catch (error) {
+    shutdown();
+    fail(error instanceof Error ? error.message : String(error));
+  }
   printBanner({
-    home,
     uiPort,
     editorPort,
     atlasPort: atlasLaunch.port,
-    token,
+    capabilityPath,
     runtimeDiscovery,
   });
 }

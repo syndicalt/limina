@@ -367,9 +367,18 @@ mod tests {
         let ordered_eids = [0u32, 5u32]; // 5 is out of bounds for len-1 arrays
         let queries = [0.0f64, 0.0, 0.0, 10.0, -1.0];
         let mut out = vec![0u32; 1 + 4];
-        assert!(
-            spatial_query_batch(&mut scratch, &px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out).is_err()
-        );
+        assert!(spatial_query_batch(
+            &mut scratch,
+            &px,
+            &py,
+            &pz,
+            &ordered_eids,
+            8.0,
+            &queries,
+            4,
+            &mut out
+        )
+        .is_err());
 
         // A short/stale (mismatched-length) SoA must error too.
         let px = [0.0f32, 1.0];
@@ -377,9 +386,18 @@ mod tests {
         let pz = [0.0f32, 1.0];
         let ordered_eids = [0u32];
         let mut out = vec![0u32; 5];
-        assert!(
-            spatial_query_batch(&mut scratch, &px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out).is_err()
-        );
+        assert!(spatial_query_batch(
+            &mut scratch,
+            &px,
+            &py,
+            &pz,
+            &ordered_eids,
+            8.0,
+            &queries,
+            4,
+            &mut out
+        )
+        .is_err());
 
         // An undersized `out` buffer must error rather than truncate/overrun.
         let px = [0.0f32];
@@ -387,9 +405,18 @@ mod tests {
         let pz = [0.0f32];
         let ordered_eids = [0u32];
         let mut out = vec![0u32; 3]; // need 1 * (1 + 4) = 5
-        assert!(
-            spatial_query_batch(&mut scratch, &px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out).is_err()
-        );
+        assert!(spatial_query_batch(
+            &mut scratch,
+            &px,
+            &py,
+            &pz,
+            &ordered_eids,
+            8.0,
+            &queries,
+            4,
+            &mut out
+        )
+        .is_err());
     }
 
     #[test]
@@ -403,7 +430,18 @@ mod tests {
         let ordered_eids = [0u32, 1, 2];
         let queries = [0.0f64, 0.0, 0.0, 5.0, -1.0];
         let mut out = vec![0u32; 1 + 4];
-        spatial_query_batch(&mut scratch, &px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out).unwrap();
+        spatial_query_batch(
+            &mut scratch,
+            &px,
+            &py,
+            &pz,
+            &ordered_eids,
+            8.0,
+            &queries,
+            4,
+            &mut out,
+        )
+        .unwrap();
         assert_eq!(out[0], 2); // true hit count
         assert_eq!(&out[1..3], &[0u32, 1u32]); // nearest-first eids
 
@@ -414,12 +452,24 @@ mod tests {
         let pz2 = [0.0f32, 0.0, 0.0, 0.0];
         let ordered2 = [0u32, 1, 2, 3];
         let mut out2 = vec![0u32; 1 + 4];
-        spatial_query_batch(&mut scratch, &px2, &py2, &pz2, &ordered2, 8.0, &queries, 4, &mut out2)
-            .unwrap();
+        spatial_query_batch(
+            &mut scratch,
+            &px2,
+            &py2,
+            &pz2,
+            &ordered2,
+            8.0,
+            &queries,
+            4,
+            &mut out2,
+        )
+        .unwrap();
         let mut fresh = SpatialScratch::default();
         let mut out3 = vec![0u32; 1 + 4];
-        spatial_query_batch(&mut fresh, &px2, &py2, &pz2, &ordered2, 8.0, &queries, 4, &mut out3)
-            .unwrap();
+        spatial_query_batch(
+            &mut fresh, &px2, &py2, &pz2, &ordered2, 8.0, &queries, 4, &mut out3,
+        )
+        .unwrap();
         assert_eq!(out2, out3, "reused scratch must match a fresh build");
         assert_eq!(out2[0], 3);
         assert_eq!(&out2[1..4], &[1u32, 2, 0]); // nearest-first eids
@@ -434,15 +484,32 @@ mod tests {
         let ordered_eids = [0u32, 1, 2];
         let queries = [0.0f64, 0.0, 0.0, 100.0, -1.0];
         let mut out = vec![0u32; 5];
-        assert!(
-            spatial_query_batch(&mut scratch, &px, &py, &pz, &ordered_eids, 8.0, &queries, 4, &mut out).is_err()
-        );
+        assert!(spatial_query_batch(
+            &mut scratch,
+            &px,
+            &py,
+            &pz,
+            &ordered_eids,
+            8.0,
+            &queries,
+            4,
+            &mut out
+        )
+        .is_err());
 
         let finite = [0.0f32, 1.0, 2.0];
-        assert!(
-            spatial_query_batch(&mut scratch, &finite, &py, &pz, &ordered_eids, 0.0, &queries, 4, &mut out)
-                .is_err()
-        );
+        assert!(spatial_query_batch(
+            &mut scratch,
+            &finite,
+            &py,
+            &pz,
+            &ordered_eids,
+            0.0,
+            &queries,
+            4,
+            &mut out
+        )
+        .is_err());
         assert!(spatial_query_batch(
             &mut scratch,
             &finite,

@@ -5,11 +5,15 @@ import {
   ARCHITECTURE_SPEC,
   type ArchitecturePrimitive,
   type ArchitectureSpec,
+  type AttachedBaySpec,
+  type BuildingVolumeSpec,
+  type CompiledAttachedBay,
   type CompiledArchitecture,
   type CompiledDomesticProp,
   type CompiledDoor,
   type CompiledDormer,
   type CompiledEntrance,
+  type CompiledEntranceCanopy,
   type CompiledFireplace,
   type CompiledFurnishing,
   type CompiledInteriorStructure,
@@ -22,6 +26,7 @@ import {
   type CompiledWindow,
   type Diagnostic,
   type FunctionalArchitectureSpecV2,
+  type GableRoofSystemSpec,
   type InteriorPartitionSpec,
   type LinearMember,
   type LathedProfile,
@@ -427,18 +432,20 @@ export function compileArchitecture(
       throw new Error(`architecture: duplicate or empty id ${id}`);
     ids.add(id);
   };
-  const volumeSpecs = input.volumes ?? [],
+  const declaredVolumeSpecs = input.volumes ?? [],
+    attachedBaySpecs = input.attachedBays ?? [],
     explicitWalls = input.walls ?? [],
     interiorPartitionSpecs = input.interiorPartitions ?? [],
+    entranceCanopySpecs = input.entranceCanopies ?? [],
     doorSpecs = input.doors ?? [],
-    roofSystems = input.roofSystems ?? [],
+    roofSystems = [...(input.roofSystems ?? [])],
     roofJunctions = input.roofJunctions ?? [],
-    roofWallAbutmentSpecs = input.roofWallAbutments ?? [],
+    roofWallAbutmentSpecs = [...(input.roofWallAbutments ?? [])],
     dormerSpecs = input.dormers ?? [],
     penetrationSpecs = input.roofPenetrations ?? [],
     explicitRoofPlanes = input.roofPlanes ?? [],
     explicitRoofSeams = input.roofSeams ?? [];
-  if (volumeSpecs.length && explicitWalls.length)
+  if ((declaredVolumeSpecs.length || attachedBaySpecs.length) && explicitWalls.length)
     throw new Error(
       "architecture: choose volume authority or explicit wall authority, not both",
     );
@@ -446,12 +453,18 @@ export function compileArchitecture(
     throw new Error(
       "architecture: choose roof-system authority or explicit roof-plane authority, not both",
     );
+  if (attachedBaySpecs.length && (!input.functional || !("schema" in input.functional) || input.functional.schema !== "limina.functional-architecture/v2"))
+    throw new Error("architecture: attached bays require v2 functional room/portal authority");
+  if (new Set(attachedBaySpecs.map((bay) => bay.hostVolumeId)).size !== attachedBaySpecs.length)
+    throw new Error("architecture: multiple attached bays on one host require an explicit floor-union authority");
   for (const collection of [
     input.foundations,
-    volumeSpecs,
+    declaredVolumeSpecs,
+    attachedBaySpecs,
     explicitWalls,
     interiorPartitionSpecs,
     input.entrances,
+    entranceCanopySpecs,
     doorSpecs,
     roofSystems,
     roofJunctions,
@@ -468,7 +481,131 @@ export function compileArchitecture(
     input.domesticProps ?? [],
   ])
     for (const item of collection) own(item.id);
-  const foundations = input.foundations.map((f) => {
+  const foundationSpecs = [...input.foundations],
+    volumeSpecs: BuildingVolumeSpec[] = declaredVolumeSpecs.map((volume) => ({
+      ...volume,
+      ...(volume.openings ? { openings: [...volume.openings] } : {}),
+    })),
+    suppressedVolumeWallEdges = new Map<string, Set<number>>(),
+    attachedBayRecords: Array<{
+      spec: (typeof attachedBaySpecs)[number];
+      sharedBoundary: readonly [V2, V2];
+      passageThreshold: SolidBox;
+      rearClosureId: string;
+      planeIds: readonly [string, string];
+      abutmentIds: readonly [string, string];
+    }> = [];
+  const weatherBearingLift = (
+    policy: GableRoofSystemSpec["roofWallConnection"] | AttachedBaySpec["roofWallConnection"],
+    wallThickness: number,
+    pitchDegrees: number,
+    roofThickness: number,
+    eaveWallIds: readonly string[],
+  ) => {
+    if (policy !== "weather-bearing-v1") return 0;
+    const frames = (input.perceptualTimberFrames ?? []).filter((frame) =>
+        frame.wallIds.some((id) => eaveWallIds.includes(id))),
+      exteriorReach = Math.max(
+        wallThickness / 2,
+        ...frames.map((frame) => wallThickness / 2 + frame.memberDepth + frame.memberWidth / 2),
+      ),
+      pitch = pitchDegrees * Math.PI / 180,
+      verticalRoofHalf = roofThickness * Math.cos(pitch) / 2;
+    // At the proudest authored facade edge, the roof top must cover the full
+    // wall/frame top by 30 mm while its thickness still intersects the bearing
+    // zone. This is a weather-envelope solve, not a visual offset.
+    return Math.max(
+      verticalRoofHalf + .03,
+      exteriorReach * Math.tan(pitch) - verticalRoofHalf + .03,
+    );
+  };
+  for (const bay of attachedBaySpecs) {
+    const hostIndex = volumeSpecs.findIndex((volume) => volume.id === bay.hostVolumeId),
+      headwall = declaredVolumeSpecs.find((volume) => volume.id === bay.headwallVolumeId),
+      host = volumeSpecs[hostIndex];
+    if (!host || !headwall || host === headwall ||
+      !Number.isSafeInteger(bay.hostEdgeIndex) || bay.hostEdgeIndex < 0 || bay.hostEdgeIndex >= host.footprint.length ||
+      !Number.isSafeInteger(bay.headwallEdgeIndex) || bay.headwallEdgeIndex < 0 || bay.headwallEdgeIndex >= headwall.footprint.length)
+      throw new Error(`architecture: attached bay ${bay.id} has unresolved host/headwall authority`);
+    if (!axisAlignedBounds(host.footprint) || !axisAlignedBounds(headwall.footprint) ||
+      Math.abs(headwall.floorY - host.eaveY) > .001)
+      throw new Error(`architecture: attached bay ${bay.id} requires aligned rectangular lower/upper structure`);
+    const a = host.footprint[bay.hostEdgeIndex], b = host.footprint[(bay.hostEdgeIndex + 1) % host.footprint.length],
+      length = len2(a, b), tx = (b[0] - a[0]) / length, tz = (b[1] - a[1]) / length,
+      nx = tz, nz = -tx, mid: V2 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2],
+      sharedStart: V2 = [mid[0] + tx * (bay.alongOffset - bay.width / 2), mid[1] + tz * (bay.alongOffset - bay.width / 2)],
+      sharedEnd: V2 = [mid[0] + tx * (bay.alongOffset + bay.width / 2), mid[1] + tz * (bay.alongOffset + bay.width / 2)],
+      outerStart: V2 = [sharedStart[0] + nx * bay.projection, sharedStart[1] + nz * bay.projection],
+      outerEnd: V2 = [sharedEnd[0] + nx * bay.projection, sharedEnd[1] + nz * bay.projection],
+      headA = headwall.footprint[bay.headwallEdgeIndex], headB = headwall.footprint[(bay.headwallEdgeIndex + 1) % headwall.footprint.length],
+      headDistance = (point: V2) => Math.abs(orient(headA, headB, point)) / len2(headA, headB),
+      onHeadSegment = (point: V2) =>
+        (point[0] - headA[0]) * (point[0] - headB[0]) + (point[1] - headA[1]) * (point[1] - headB[1]) <= EPS;
+    for (const value of [bay.alongOffset,bay.width,bay.projection,bay.eaveY,bay.foundationDepth,bay.passageWidth,bay.passageHeight,bay.windowWidth,bay.windowHeight,bay.windowSillY,bay.pitchDegrees,bay.eaveOverhang,bay.roofThickness,bay.flashingWidth,bay.flashingUpstand])
+      finite(value, `attached bay ${bay.id}`);
+    const roofEdgeY = bay.eaveY-bay.eaveOverhang*Math.tan(bay.pitchDegrees*Math.PI/180);
+    if (bay.width < 2.4 || bay.projection < 1.8 || bay.eaveY <= host.floorY + 2 || roofEdgeY < headwall.floorY ||
+      Math.abs(bay.alongOffset) + bay.width / 2 > length / 2 - .2 || bay.foundationDepth <= .1 ||
+      bay.passageWidth < .8 || bay.passageWidth > bay.width - .6 || bay.passageHeight < 2 || bay.passageHeight > host.eaveY - host.floorY ||
+      bay.windowWidth < .5 || bay.windowWidth > bay.width - .6 || bay.windowHeight < .5 || bay.windowSillY < host.floorY + .3 || bay.windowSillY + bay.windowHeight > bay.eaveY - .15 ||
+      bay.pitchDegrees < 25 || bay.pitchDegrees > 65 || bay.eaveOverhang < .12 || bay.eaveOverhang > .8 || bay.roofThickness <= .08 || bay.roofThickness > .35 ||
+      bay.flashingWidth < .12 || bay.flashingUpstand < .04 || bay.flashingUpstand > .3 ||
+      headDistance(sharedStart) > .001 || headDistance(sharedEnd) > .001 || !onHeadSegment(sharedStart) || !onHeadSegment(sharedEnd))
+      throw new Error(`architecture: attached bay ${bay.id} violates bounded construction constraints`);
+    const bayBounds = axisAlignedBounds([sharedStart, outerStart, outerEnd, sharedEnd])!,
+      overlapsGround = volumeSpecs.some((volume) => {
+        if (volume.floorY >= bay.eaveY - EPS || volume.eaveY <= host.floorY + EPS) return false;
+        const bounds = axisAlignedBounds(volume.footprint);
+        if (!bounds) return true;
+        return Math.min(bayBounds.x1,bounds.x1)-Math.max(bayBounds.x0,bounds.x0) > EPS &&
+          Math.min(bayBounds.z1,bounds.z1)-Math.max(bayBounds.z0,bounds.z0) > EPS;
+      });
+    if (overlapsGround)
+      throw new Error(`architecture: attached bay ${bay.id} overlaps positive-area structural volume`);
+    for (const id of [bay.volumeId,bay.foundationId,bay.roofSystemId]) own(id);
+    const hostCopy = {...host,openings:[...(host.openings ?? []),{
+      id:bay.passageOpeningId,kind:"passage" as const,edgeIndex:bay.hostEdgeIndex,offset:bay.alongOffset,width:bay.passageWidth,sillY:host.floorY,height:bay.passageHeight,
+    }]};
+    volumeSpecs[hostIndex] = hostCopy;
+    foundationSpecs.push({id:bay.foundationId,center:[(bayBounds.x0+bayBounds.x1)/2,(bayBounds.z0+bayBounds.z1)/2],halfExtents:[(bayBounds.x1-bayBounds.x0)/2,(bayBounds.z1-bayBounds.z0)/2],topY:host.floorY,depth:bay.foundationDepth});
+    volumeSpecs.push({id:bay.volumeId,footprint:[sharedStart,outerStart,outerEnd,sharedEnd],floorY:host.floorY,eaveY:bay.eaveY,wallThickness:host.wallThickness,floorThickness:host.floorThickness,ceilingThickness:host.ceilingThickness,foundationId:bay.foundationId,openings:[{id:bay.frontWindowId,kind:"window",edgeIndex:1,offset:0,width:bay.windowWidth,sillY:bay.windowSillY,height:bay.windowHeight}]});
+    suppressedVolumeWallEdges.set(bay.volumeId,new Set([3]));
+    const ridgeAxis = Math.abs(tx) > Math.abs(tz) ? "z" as const : "x" as const,
+      outwardPositive = ridgeAxis === "z" ? nz > 0 : nx > 0,
+      ridgeEndOverhang: readonly [number,number] = outwardPositive ? [0,bay.eaveOverhang] : [bay.eaveOverhang,0],
+      headwallInset = bay.headwallTermination === "exterior-weather-face-v1" ? headwall.wallThickness / 2 : 0,
+      ridgeEndInset: readonly [number,number] = outwardPositive ? [headwallInset,0] : [0,headwallInset],
+      planeIds: readonly [string,string] = ridgeAxis === "z" ? [`${bay.roofSystemId}/west`,`${bay.roofSystemId}/east`] : [`${bay.roofSystemId}/south`,`${bay.roofSystemId}/north`],
+      rearClosureId = ridgeAxis === "z" ? `gable/${bay.roofSystemId}/${outwardPositive ? "front" : "rear"}` : `gable/${bay.roofSystemId}/${outwardPositive ? "west" : "east"}`,
+      roofLift = weatherBearingLift(bay.roofWallConnection, host.wallThickness, bay.pitchDegrees, bay.roofThickness,
+        [`${bay.volumeId}/edge-0`, `${bay.volumeId}/edge-2`]),
+      roofEaveY = bay.eaveY + roofLift,
+      ridgeY = roofEaveY + bay.width / 2 * Math.tan(bay.pitchDegrees*Math.PI/180);
+    if (ridgeY + bay.flashingUpstand > headwall.eaveY)
+      throw new Error(`architecture: attached bay ${bay.id} cross-gable escapes its upper headwall`);
+    roofSystems.push({id:bay.roofSystemId,kind:"gable",volumeId:bay.volumeId,ridgeAxis,pitchDegrees:bay.pitchDegrees,eaveOverhang:bay.eaveOverhang,ridgeEndOverhang,
+      ...(headwallInset ? {ridgeEndInset} : {}),thickness:bay.roofThickness,...(bay.roofWallConnection ? {roofWallConnection:bay.roofWallConnection} : {})});
+    const ridge: V2 = [(sharedStart[0]+sharedEnd[0])/2 + nx * headwallInset,(sharedStart[1]+sharedEnd[1])/2 + nz * headwallInset],
+      ends: readonly [V2,V2] = ridgeAxis === "z"
+        ? [[bayBounds.x0-bay.eaveOverhang,ridge[1]],[bayBounds.x1+bay.eaveOverhang,ridge[1]]]
+        : [[ridge[0],bayBounds.z0-bay.eaveOverhang],[ridge[0],bayBounds.z1+bay.eaveOverhang]],
+      abutmentIds: readonly [string,string] = [`${bay.id}/roof-abutment-0`,`${bay.id}/roof-abutment-1`];
+    for (const id of abutmentIds) own(id);
+    for (let index=0;index<2;index++) roofWallAbutmentSpecs.push({id:abutmentIds[index],roofPlaneId:planeIds[index],wallId:`${headwall.id}/edge-${bay.headwallEdgeIndex}`,from:[ends[index][0],roofEaveY-bay.eaveOverhang*Math.tan(bay.pitchDegrees*Math.PI/180),ends[index][1]],to:[ridge[0],ridgeY,ridge[1]],flashingWidth:bay.flashingWidth,upstandDepth:bay.flashingUpstand});
+    // The host and bay floor slabs are independently owned construction solids. Their
+    // coincident edge is structurally valid, but a capsule controller can treat that exact
+    // collider seam as a step. Emit one compiler-owned, flush walking surface that bears
+    // beneath both slabs across the passage. It must never create a raised trip edge.
+    const passageThreshold = box(
+      `attached-bay/${bay.id}/passage-threshold`,
+      [mid[0] + tx * bay.alongOffset, host.floorY - .04, mid[1] + tz * bay.alongOffset],
+      [bay.passageWidth / 2, .04, host.wallThickness / 2 + .12],
+      [bay.id, bay.passageOpeningId, host.id, bay.volumeId],
+      Math.atan2(tz, tx),
+    );
+    attachedBayRecords.push({spec:bay,sharedBoundary:[sharedStart,sharedEnd],passageThreshold,rearClosureId,planeIds,abutmentIds});
+  }
+  const foundations = foundationSpecs.map((f) => {
     v2(f.center, f.id);
     v2(f.halfExtents, f.id);
     if (f.halfExtents.some((n) => n <= 0) || f.depth <= 0)
@@ -482,7 +619,7 @@ export function compileArchitecture(
       [f.id],
     );
   });
-  const foundationSpecById = new Map(input.foundations.map((f) => [f.id, f])),
+  const foundationSpecById = new Map(foundationSpecs.map((f) => [f.id, f])),
     declaredVolumeById = new Map(volumeSpecs.map((volume) => [volume.id, volume])),
     derivedWalls: WallRunSpec[] = [],
     volumes: CompiledVolume[] = [];
@@ -540,6 +677,7 @@ export function compileArchitecture(
     }
     const wallIds: string[] = [];
     for (let edge = 0; edge < volume.footprint.length; edge++) {
+      if (suppressedVolumeWallEdges.get(volume.id)?.has(edge)) continue;
       const id = `${volume.id}/edge-${edge}`;
       own(id);
       wallIds.push(id);
@@ -597,6 +735,7 @@ export function compileArchitecture(
       system.pitchDegrees > 70 ||
       system.eaveOverhang < 0 ||
       system.ridgeEndOverhang.some((n) => !Number.isFinite(n) || n < 0) ||
+      (system.ridgeEndInset?.some((n) => !Number.isFinite(n) || n < 0) ?? false) ||
       system.thickness <= 0
     )
       throw new Error(`architecture: invalid roof system ${system.id}`);
@@ -620,14 +759,19 @@ export function compileArchitecture(
       s = Math.sin(pitch),
       c = Math.cos(pitch),
       o = system.eaveOverhang,
-      eave = volume.eaveY;
+      eaveWallEdges = system.ridgeAxis === "x" ? [0, 2] : [1, 3],
+      eaveWallIds = eaveWallEdges.map((edge) => `${volume.id}/edge-${edge}`),
+      wallEave = volume.eaveY,
+      eave = volume.eaveY + weatherBearingLift(system.roofWallConnection, volume.wallThickness,
+        system.pitchDegrees, system.thickness, eaveWallIds),
+      ridgeInset = system.ridgeEndInset ?? [0, 0];
     if (system.ridgeAxis === "x") {
       const ridgeZ = (minZ + maxZ) / 2,
         ridgeY = eave + ((maxZ - minZ) / 2) * Math.tan(pitch),
         gableApex = ridgeY - system.thickness / (2 * c) - 0.03,
         edgeY = eave - o * Math.tan(pitch),
-        x0 = minX - system.ridgeEndOverhang[0],
-        x1 = maxX + system.ridgeEndOverhang[1],
+        x0 = minX - system.ridgeEndOverhang[0] + ridgeInset[0],
+        x1 = maxX + system.ridgeEndOverhang[1] - ridgeInset[1],
         z0 = minZ - o,
         z1 = maxZ + o,
         south = `${system.id}/south`,
@@ -667,11 +811,11 @@ export function compileArchitecture(
             kind: "plane-slab",
             id: `gable/${system.id}/${side}`,
             surfaceRole: "wall",
-            origin: [x, eave, minZ],
+            origin: [x, wallEave, minZ],
             normal,
             boundary: Object.freeze([
-              [x, eave, minZ],
-              [x, eave, maxZ],
+              [x, wallEave, minZ],
+              [x, wallEave, maxZ],
               [x, gableApex, ridgeZ],
             ] as V3[]),
             thickness: volume.wallThickness,
@@ -691,8 +835,8 @@ export function compileArchitecture(
         ridgeY = eave + ((maxX - minX) / 2) * Math.tan(pitch),
         gableApex = ridgeY - system.thickness / (2 * c) - 0.03,
         edgeY = eave - o * Math.tan(pitch),
-        z0 = minZ - system.ridgeEndOverhang[0],
-        z1 = maxZ + system.ridgeEndOverhang[1],
+        z0 = minZ - system.ridgeEndOverhang[0] + ridgeInset[0],
+        z1 = maxZ + system.ridgeEndOverhang[1] - ridgeInset[1],
         x0 = minX - o,
         x1 = maxX + o,
         west = `${system.id}/west`,
@@ -732,11 +876,11 @@ export function compileArchitecture(
             kind: "plane-slab",
             id: `gable/${system.id}/${side}`,
             surfaceRole: "wall",
-            origin: [minX, eave, z],
+            origin: [minX, wallEave, z],
             normal,
             boundary: Object.freeze([
-              [minX, eave, z],
-              [maxX, eave, z],
+              [minX, wallEave, z],
+              [maxX, wallEave, z],
               [ridgeX, gableApex, z],
             ] as V3[]),
             thickness: volume.wallThickness,
@@ -752,6 +896,27 @@ export function compileArchitecture(
       });
       systemPlaneIds.set(system.id, [west, east]);
     }
+  }
+  for (const bay of attachedBayRecords) {
+    const index = gableClosures.findIndex((closure) => closure.id === bay.rearClosureId);
+    if (index < 0)
+      throw new Error(`architecture: attached bay ${bay.spec.id} could not suppress its false rear gable closure`);
+    gableClosures.splice(index, 1);
+    // Generic ridge-z roofs historically call their ends front/rear. An attached
+    // bay is a facade-owned assembly, so give its retained outward gable the
+    // exact cardinal identity consumed by timber framing and semantic evidence.
+    const retainedIndex = gableClosures.findIndex((closure) =>
+      closure.derivedFrom.includes(bay.spec.roofSystemId));
+    if (retainedIndex < 0)
+      throw new Error(`architecture: attached bay ${bay.spec.id} lost its outward gable closure`);
+    const retained = gableClosures[retainedIndex], normal = retained.normal,
+      cardinal = Math.abs(normal[0]) > Math.abs(normal[2])
+        ? normal[0] < 0 ? "west" : "east"
+        : normal[2] < 0 ? "south" : "north";
+    gableClosures[retainedIndex] = Object.freeze({
+      ...retained,
+      id: `gable/${bay.spec.roofSystemId}/${cardinal}`,
+    });
   }
   for (const junction of roofJunctions) {
     if (
@@ -1410,6 +1575,9 @@ export function compileArchitecture(
     ),
     roofPenetrations: CompiledRoofPenetration[] = [],
     penetrationPrimitives: ArchitecturePrimitive[] = [];
+  const centerlineFireplaces = penetrationSpecs.filter((item) => item.alignmentPolicy === "fireplace-centerline").map((item) => item.fireplaceId);
+  if (new Set(centerlineFireplaces).size !== centerlineFireplaces.length)
+    throw new Error("architecture: a fireplace may own at most one centerline roof penetration");
   for (const penetration of penetrationSpecs) {
     const fireplace = fireplaceSpecById.get(penetration.fireplaceId),
       host = roofPlaneSpecs.find(
@@ -1421,6 +1589,10 @@ export function compileArchitecture(
       );
     if (
       fireplace.roofPlaneId !== host.id ||
+      (penetration.flueConnectionPolicy === "enclosed-masonry-breast-v1" &&
+        penetration.alignmentPolicy !== "fireplace-centerline") ||
+      (penetration.alignmentPolicy === "fireplace-centerline" &&
+        (Math.abs(penetration.center[0] - fireplace.center[0]) > .001 || Math.abs(penetration.center[1] - fireplace.center[2]) > .001)) ||
       roofSurfaceOverrides.has(host.id) ||
       penetration.shaftSize.some((n) => !Number.isFinite(n) || n <= 0) ||
       penetration.clearance <= 0 ||
@@ -2438,6 +2610,63 @@ export function compileArchitecture(
       exteriorGradeY: entry.exteriorGradeY,
     });
   });
+  const canopyEntranceIds = entranceCanopySpecs.map((canopy) => canopy.entranceId);
+  if (new Set(canopyEntranceIds).size !== canopyEntranceIds.length)
+    throw new Error("architecture: each entrance may own at most one weather canopy");
+  const entranceById = new Map(input.entrances.map((entry) => [entry.id, entry]));
+  const entranceCanopies: CompiledEntranceCanopy[] = entranceCanopySpecs.map((canopy) => {
+    const entrance = entranceById.get(canopy.entranceId), wall = entrance ? wallById.get(entrance.wallId) : undefined;
+    const opening = wall?.openings?.find((candidate) => candidate.id === entrance?.openingId);
+    if (!entrance || !wall || !opening || opening.kind !== "door")
+      throw new Error(`architecture: entrance canopy ${canopy.id} has unresolved entrance authority`);
+    if (canopy.width < entrance.width || canopy.projection < entrance.landingDepth || canopy.pitchDegrees < 12 || canopy.pitchDegrees > 40 ||
+      canopy.roofThickness < .08 || canopy.roofThickness > .3 || canopy.postSize < .1 || canopy.postSize > .35 ||
+      canopy.footingDepth < .08 || canopy.footingDepth > .6 || canopy.lateralClearance < .08 || canopy.lateralClearance > .8 ||
+      canopy.flashingWidth < .12 || canopy.flashingWidth > .4 || canopy.flashingThickness < .01 || canopy.flashingThickness > .06 ||
+      canopy.counterflashingUpstand < .06 || canopy.counterflashingUpstand > .3)
+      throw new Error(`architecture: invalid entrance canopy ${canopy.id}`);
+    const basis = wallBasis(wall), nx = -basis.tz * entrance.exteriorSide, nz = basis.tx * entrance.exteriorSide,
+      mx = basis.mx + basis.tx * opening.offset, mz = basis.mz + basis.tz * opening.offset, wallLength = Math.hypot(wall.to[0]-wall.from[0],wall.to[1]-wall.from[1]),
+      halfWidth = canopy.width / 2, postOffset = halfWidth - canopy.postSize / 2,
+      openingTop = opening.sillY + opening.height,
+      outerY = canopy.wallPlateY - Math.tan(canopy.pitchDegrees * Math.PI / 180) * canopy.projection;
+    if (Math.abs(opening.offset)+halfWidth>wallLength/2-.08 || canopy.wallPlateY <= openingTop + .25 || outerY <= openingTop + .12 ||
+      postOffset - canopy.postSize / 2 < opening.width / 2 + canopy.lateralClearance ||
+      canopy.projection - canopy.postSize < opening.width + canopy.lateralClearance)
+      throw new Error(`architecture: entrance canopy ${canopy.id} does not clear the aperture or door sweep`);
+    const point = (along: number, outward: number, y: number): V3 =>
+      [mx + basis.tx * along + nx * outward, y, mz + basis.tz * along + nz * outward];
+    const wallLeft = point(-halfWidth, 0, canopy.wallPlateY), wallRight = point(halfWidth, 0, canopy.wallPlateY),
+      outerRight = point(halfWidth, canopy.projection, outerY), outerLeft = point(-halfWidth, canopy.projection, outerY),
+      roofBoundary = [wallLeft, wallRight, outerRight, outerLeft] as const,
+      roof: PlaneSlab = Object.freeze({kind:"plane-slab",id:`roof/entrance-canopy/${canopy.id}`,surfaceRole:"roof",origin:Object.freeze(wallLeft),
+        normal:Object.freeze(planeNormal(roofBoundary)),boundary:Object.freeze(roofBoundary.map((value)=>Object.freeze(value))),thickness:canopy.roofThickness,
+        lodLevels:Object.freeze([0,1,2] as const),derivedFrom:Object.freeze([canopy.id,entrance.id,wall.id,opening.id])}),
+      postTop = outerY - canopy.roofThickness / 2, postHeight = postTop - entrance.exteriorGradeY;
+    if (postHeight <= 1.8) throw new Error(`architecture: entrance canopy ${canopy.id} has insufficient supported headroom`);
+    const posts = [-postOffset, postOffset].map((along,index)=>Object.freeze({...box(`entrance-canopy/${canopy.id}/post-${index}`,
+      point(along,canopy.projection-canopy.postSize/2,entrance.exteriorGradeY+postHeight/2),[canopy.postSize/2,postHeight/2,canopy.postSize/2],
+      [canopy.id,entrance.id],basis.yaw),lodLevels:Object.freeze([0,1,2] as const)}));
+    const footings = [-postOffset, postOffset].map((along,index)=>Object.freeze({...box(`foundation/entrance-canopy/${canopy.id}/footing-${index}`,
+      point(along,canopy.projection-canopy.postSize/2,entrance.exteriorGradeY-canopy.footingDepth/2),
+      [canopy.postSize*.85,canopy.footingDepth/2,canopy.postSize*.85],[canopy.id,entrance.id],basis.yaw),lodLevels:Object.freeze([0,1] as const)}));
+    const member = (id:string,from:V3,to:V3,width=canopy.postSize,depth=canopy.postSize,levels:readonly(0|1|2)[]=[0,1]):LinearMember=>Object.freeze({kind:"linear-member",id,from:Object.freeze(from),to:Object.freeze(to),
+      width,depth,lodLevels:Object.freeze([...levels]),derivedFrom:Object.freeze([canopy.id,entrance.id])}),
+      kneeBraces = canopy.joineryPolicy === "wall-plate-header-post-brace"
+        ? Object.freeze([-1,1].map((side,index)=>member(
+            `entrance-canopy/${canopy.id}/knee-brace-${index}`,
+            point(side*postOffset,canopy.projection-canopy.postSize/2,postTop-Math.min(.58,postHeight*.24)),
+            point(side*(postOffset-Math.min(.52,postOffset*.3)),canopy.projection-canopy.postSize/2,postTop),
+            canopy.postSize*.72,canopy.postSize*.72,[0,1,2],
+          )) as unknown as readonly [LinearMember,LinearMember])
+        : undefined;
+    return Object.freeze({id:canopy.id,entranceId:entrance.id,roof,
+      wallPlate:member(`entrance-canopy/${canopy.id}/wall-plate`,point(-halfWidth,0,canopy.wallPlateY),point(halfWidth,0,canopy.wallPlateY)),
+      header:member(`entrance-canopy/${canopy.id}/header`,point(-postOffset,canopy.projection-canopy.postSize/2,postTop),point(postOffset,canopy.projection-canopy.postSize/2,postTop)),
+      flashing:member(`roof-flashing/entrance-canopy/${canopy.id}/apron`,point(-halfWidth,0,canopy.wallPlateY+canopy.flashingThickness),point(halfWidth,0,canopy.wallPlateY+canopy.flashingThickness),canopy.flashingWidth,canopy.flashingThickness,[0]),
+      counterflashing:member(`roof-flashing/entrance-canopy/${canopy.id}/counter`,point(-halfWidth,0,canopy.wallPlateY+canopy.counterflashingUpstand),point(halfWidth,0,canopy.wallPlateY+canopy.counterflashingUpstand),canopy.counterflashingUpstand,canopy.flashingThickness,[0]),
+      posts:Object.freeze(posts),footings:Object.freeze(footings),...(kneeBraces?{kneeBraces}:{}),coveredThresholdId:`entrance/${entrance.id}/threshold`});
+  });
   const emittedRoofPlaneSpecs = roofPlaneSpecs.flatMap(
     (plane) => roofSurfaceOverrides.get(plane.id) ?? [plane],
   );
@@ -2650,7 +2879,7 @@ export function compileArchitecture(
       cavityDepth = 0.025,
       cavity = box(
         `fireplace/${f.id}/cavity`,
-        [x, y + 0.12, z + hz - 0.22],
+        [x, y + 0.12, f.fireboxPolicy === "rear-soot-lining" ? z + hz - cavityDepth / 2 : z + hz - 0.22],
         [hx * 0.78, hy * 0.72, cavityDepth / 2],
         [f.id],
       );
@@ -2825,7 +3054,45 @@ export function compileArchitecture(
         ),
       ],
       penetration = roofPenetrations.find((item) => item.fireplaceId === f.id);
-    if (penetration)
+    if (penetration) {
+      const penetrationSpec = penetrationSpecs.find((item) => item.id === penetration.id);
+      let flueTransition: readonly PlaneSlab[] | undefined;
+      if (penetrationSpec?.flueConnectionPolicy === "enclosed-masonry-breast-v1") {
+        const bottomY = y + hy + .55,
+          topY = penetrationSpec.shaftBottomY + .01,
+          bottomX = hx + .16,
+          bottomZ = hz * .72,
+          topX = penetrationSpec.shaftSize[0] / 2,
+          topZ = penetrationSpec.shaftSize[1] / 2;
+        if (topY - bottomY < .2 || Math.min(bottomX, bottomZ, topX, topZ) <= .18)
+          throw new Error(`architecture: fireplace ${f.id} lacks space for an enclosed masonry breast`);
+        const panel = (suffix: string, boundary: readonly V3[]) => closureSlab(
+          `fireplace/${f.id}/flue-transition-${suffix}`,
+          "wall",
+          boundary,
+          .14,
+          [f.id, penetration.id],
+        ) as PlaneSlab;
+        flueTransition = Object.freeze([
+          panel("west", [
+            [x - bottomX, bottomY, z - bottomZ], [x - bottomX, bottomY, z + bottomZ],
+            [x - topX, topY, z + topZ], [x - topX, topY, z - topZ],
+          ]),
+          panel("east", [
+            [x + bottomX, bottomY, z + bottomZ], [x + bottomX, bottomY, z - bottomZ],
+            [x + topX, topY, z - topZ], [x + topX, topY, z + topZ],
+          ]),
+          panel("north", [
+            [x - bottomX, bottomY, z + bottomZ], [x + bottomX, bottomY, z + bottomZ],
+            [x + topX, topY, z + topZ], [x - topX, topY, z + topZ],
+          ]),
+          panel("south", [
+            [x + bottomX, bottomY, z - bottomZ], [x - bottomX, bottomY, z - bottomZ],
+            [x - topX, topY, z - topZ], [x + topX, topY, z - topZ],
+          ]),
+        ]);
+        surround.push(...flueTransition);
+      }
       return Object.freeze({
         id: f.id,
         base,
@@ -2835,8 +3102,10 @@ export function compileArchitecture(
         emberBed,
         flames: Object.freeze(flames),
         lightPosition: Object.freeze([x, y - hy + 0.38, z]) as V3,
+        ...(flueTransition ? { flueTransition } : {}),
         penetrationId: penetration.id,
       });
+    }
     const chimney = box(
       `fireplace/${f.id}/chimney`,
       [x, (y + hy + f.chimneyTopY) / 2, z],
@@ -3243,10 +3512,14 @@ export function compileArchitecture(
         || Math.abs(a.mx - b.mx) > .001 || Math.abs(a.mz - b.mz) > .001)
         throw new Error(`architecture: timber frame ${frame.id} walls do not form one continuous facade stack`);
     }
-    const gable = frame.roofSystemId
-      ? gableClosures.find((item) => item.id === `gable/${frame.roofSystemId}/${frame.facade}`)
-      : undefined;
-    const facadeHasGable = gableClosures.some((item) => item.id.endsWith(`/${frame.facade}`));
+    const ownedVolumeIds = new Set(volumes.filter((volume) =>
+      volume.wallIds.some((wallId) => frame.wallIds.includes(wallId))).map((volume) => volume.id)),
+      gable = frame.roofSystemId
+        ? gableClosures.find((item) => item.id === `gable/${frame.roofSystemId}/${frame.facade}`
+          && item.derivedFrom.some((owner: string) => ownedVolumeIds.has(owner)))
+        : undefined,
+      facadeHasGable = gableClosures.some((item) => item.id.endsWith(`/${frame.facade}`)
+        && item.derivedFrom.some((owner: string) => ownedVolumeIds.has(owner)));
     if (Boolean(frame.roofSystemId) !== facadeHasGable || (frame.roofSystemId && !gable))
       throw new Error(`architecture: timber frame ${frame.id} must reference exactly the compiler-owned gable on ${frame.facade}`);
 
@@ -3568,39 +3841,50 @@ export function compileArchitecture(
   });
   const functionalStairPrimitives: SolidBox[] = input.functional && "schema" in input.functional
     ? input.functional.stairs.flatMap((stair) => {
-        const fromIsLow = stair.from[1] <= stair.to[1],
-          low = fromIsLow ? stair.from : stair.to,
-          high = fromIsLow ? stair.to : stair.from,
-          dx = high[0] - low[0], dz = high[2] - low[2], run = Math.hypot(dx, dz);
-        if (!Number.isFinite(run) || run <= EPS || !Number.isSafeInteger(stair.riserCount) || stair.riserCount < 2)
-          throw new Error(`architecture: invalid stair geometry ${stair.id}`);
-        const ux = dx / run, uz = dz / run, yaw = Math.atan2(uz, ux),
-          riser = (high[1] - low[1]) / stair.riserCount,
-          treads = Array.from({ length: stair.riserCount }, (_, index) => {
-            const topY = low[1] + riser * (index + 1), depth = stair.treadDepth;
-            return box(`stairs/${stair.id}/tread-${index}`,
-              [low[0] + ux * depth * (index + .5), topY - .04, low[2] + uz * depth * (index + .5)],
-              [depth / 2, .04, stair.clearWidth / 2], [stair.id], yaw);
+        const flights = stair.flights ?? [{ from: stair.from, to: stair.to, riserCount: stair.riserCount }],
+          realized = flights.map((flight, flightIndex) => {
+            const low = flight.from, high = flight.to,
+              dx = high[0] - low[0], dz = high[2] - low[2], run = Math.hypot(dx, dz);
+            if (!Number.isFinite(run) || run <= EPS || !Number.isSafeInteger(flight.riserCount) || flight.riserCount < 1 || high[1] <= low[1])
+              throw new Error(`architecture: invalid stair flight geometry ${stair.id}/${flightIndex}`);
+            const ux = dx / run, uz = dz / run, yaw = Math.atan2(uz, ux), riser = (high[1] - low[1]) / flight.riserCount,
+              treads = Array.from({ length: flight.riserCount }, (_, index) => {
+                const topY = low[1] + riser * (index + 1), depth = stair.treadDepth,
+                  id = stair.flights ? `stairs/${stair.id}/flight-${flightIndex}/tread-${index}` : `stairs/${stair.id}/tread-${index}`;
+                return box(id,
+                  [low[0] + ux * depth * (index + .5), topY - .04, low[2] + uz * depth * (index + .5)],
+                  [depth / 2, .04, stair.clearWidth / 2], [stair.id], yaw);
+              });
+            return { low, high, ux, uz, yaw, treads };
           }),
+          first = realized[0], last = realized.at(-1)!,
           bottom = box(`stairs/${stair.id}/landing-bottom`,
-            [low[0] - ux * stair.bottomLandingDepth / 2, low[1] - .05, low[2] - uz * stair.bottomLandingDepth / 2],
-            [stair.bottomLandingDepth / 2, .05, stair.clearWidth / 2], [stair.id], yaw),
+            [first.low[0] - first.ux * stair.bottomLandingDepth / 2, first.low[1] - .05, first.low[2] - first.uz * stair.bottomLandingDepth / 2],
+            [stair.bottomLandingDepth / 2, .05, stair.clearWidth / 2], [stair.id], first.yaw),
+          intermediate = (stair.intermediateLandings ?? []).map((landing, index) => box(
+            `stairs/${stair.id}/landing-intermediate-${index}`,
+            [landing.center[0], landing.center[1] - .05, landing.center[2]],
+            [landing.halfExtents[0], .05, landing.halfExtents[1]], [stair.id], landing.yawRadians)),
           top = box(`stairs/${stair.id}/landing-top`,
-            [high[0] + ux * stair.topLandingDepth / 2, high[1] - .05, high[2] + uz * stair.topLandingDepth / 2],
-            [stair.topLandingDepth / 2, .05, stair.clearWidth / 2], [stair.id], yaw);
-        return [bottom, ...treads, top];
+            [last.high[0] + last.ux * stair.topLandingDepth / 2, last.high[1] - .05, last.high[2] + last.uz * stair.topLandingDepth / 2],
+            [stair.topLandingDepth / 2, .05, stair.clearWidth / 2], [stair.id], last.yaw);
+        return [bottom, ...realized.flatMap((flight) => flight.treads), ...intermediate, top];
       })
     : [];
   const functionalStairDetailPrimitives: ArchitecturePrimitive[] = input.functional && "schema" in input.functional
     ? input.functional.stairs.flatMap((stair) => {
-        const low=stair.from[1]<=stair.to[1]?stair.from:stair.to,high=stair.from[1]<=stair.to[1]?stair.to:stair.from,dx=high[0]-low[0],dz=high[2]-low[2],run=Math.hypot(dx,dz),ux=dx/run,uz=dz/run,yaw=Math.atan2(uz,ux),riser=stair.rise/stair.riserCount;
-        const risers=Array.from({length:stair.riserCount},(_,index)=>box(`stair-detail/${stair.id}/riser-${index}`,[low[0]+ux*stair.treadDepth*(index+1),low[1]+riser*(index+.5),low[2]+uz*stair.treadDepth*(index+1)],[.025,riser/2,stair.clearWidth/2],[stair.id],yaw));
-        const side=(sign:number)=>{const px=-uz*sign*stair.clearWidth*.58,pz=ux*sign*stair.clearWidth*.58,suffix=sign<0?"left":"right";return [
-          Object.freeze({kind:"linear-member" as const,id:`stair-detail/${stair.id}/stringer-${suffix}`,from:Object.freeze([low[0]+px,low[1]+.04,low[2]+pz]) as V3,to:Object.freeze([high[0]+px,high[1]+.04,high[2]+pz]) as V3,width:.14,depth:.18,derivedFrom:Object.freeze([stair.id])}),
-          Object.freeze({kind:"linear-member" as const,id:`stair-detail/${stair.id}/handrail-${suffix}`,from:Object.freeze([low[0]+px,low[1]+.92,low[2]+pz]) as V3,to:Object.freeze([high[0]+px,high[1]+.92,high[2]+pz]) as V3,width:.1,depth:.1,derivedFrom:Object.freeze([stair.id])}),
-          ...Array.from({length:7},(_,index)=>{const t=index/6,x=low[0]+(high[0]-low[0])*t+px,y=low[1]+(high[1]-low[1])*t,z=low[2]+(high[2]-low[2])*t+pz;return Object.freeze({kind:"linear-member" as const,id:`stair-detail/${stair.id}/baluster-${suffix}-${index}`,from:Object.freeze([x,y+.06,z]) as V3,to:Object.freeze([x,y+.9,z]) as V3,width:.075,depth:.075,derivedFrom:Object.freeze([stair.id])});}),
-        ];};
-        return [...risers,...side(-1),...side(1)];
+        const flights=stair.flights??[{from:stair.from,to:stair.to,riserCount:stair.riserCount}];
+        return flights.flatMap((flight,flightIndex)=>{
+          const low=flight.from,high=flight.to,dx=high[0]-low[0],dz=high[2]-low[2],run=Math.hypot(dx,dz),ux=dx/run,uz=dz/run,yaw=Math.atan2(uz,ux),riser=(high[1]-low[1])/flight.riserCount,
+            prefix=stair.flights?`stair-detail/${stair.id}/flight-${flightIndex}`:`stair-detail/${stair.id}`;
+          const risers=Array.from({length:flight.riserCount},(_,index)=>box(`${prefix}/riser-${index}`,[low[0]+ux*stair.treadDepth*(index+1),low[1]+riser*(index+.5),low[2]+uz*stair.treadDepth*(index+1)],[.025,riser/2,stair.clearWidth/2],[stair.id],yaw));
+          const side=(sign:number)=>{const px=-uz*sign*stair.clearWidth*.58,pz=ux*sign*stair.clearWidth*.58,suffix=sign<0?"left":"right";return [
+            Object.freeze({kind:"linear-member" as const,id:`${prefix}/stringer-${suffix}`,from:Object.freeze([low[0]+px,low[1]+.04,low[2]+pz]) as V3,to:Object.freeze([high[0]+px,high[1]+.04,high[2]+pz]) as V3,width:.14,depth:.18,derivedFrom:Object.freeze([stair.id])}),
+            Object.freeze({kind:"linear-member" as const,id:`${prefix}/handrail-${suffix}`,from:Object.freeze([low[0]+px,low[1]+.92,low[2]+pz]) as V3,to:Object.freeze([high[0]+px,high[1]+.92,high[2]+pz]) as V3,width:.1,depth:.1,derivedFrom:Object.freeze([stair.id])}),
+            ...Array.from({length:7},(_,index)=>{const t=index/6,x=low[0]+(high[0]-low[0])*t+px,y=low[1]+(high[1]-low[1])*t,z=low[2]+(high[2]-low[2])*t+pz;return Object.freeze({kind:"linear-member" as const,id:`${prefix}/baluster-${suffix}-${index}`,from:Object.freeze([x,y+.06,z]) as V3,to:Object.freeze([x,y+.9,z]) as V3,width:.075,depth:.075,derivedFrom:Object.freeze([stair.id])});}),
+          ];};
+          return [...risers,...side(-1),...side(1)];
+        });
       }) : [];
   const functionalFloorFragments = new Map<string, PolygonSlab[]>(),functionalCeilingFragments=new Map<string,PolygonSlab[]>();
   if (input.functional && "schema" in input.functional) {
@@ -3670,6 +3954,8 @@ export function compileArchitecture(
       ...e.steps,
       ...e.finishCourses,
     ]),
+    ...attachedBayRecords.map((bay) => bay.passageThreshold),
+    ...entranceCanopies.flatMap((canopy) => [canopy.roof, canopy.wallPlate, canopy.header, canopy.flashing, canopy.counterflashing, ...canopy.posts, ...canopy.footings, ...(canopy.kneeBraces ?? [])]),
     ...functionalStairPrimitives,
     ...functionalStairDetailPrimitives,
     ...fireplaces.flatMap((f) => [
@@ -3696,7 +3982,9 @@ export function compileArchitecture(
           : id.startsWith("foundation/") ||
               id.startsWith("entrance/") ||
               id.startsWith("entry/")
-            ? "foundation"
+              ? "foundation"
+            : id.startsWith("attached-bay/") && id.endsWith("/passage-threshold")
+              ? "structure-trim"
             : id.startsWith("interior-structure/")
               ? "structure-trim"
               : id.startsWith("perceptual-timber-frame/")
@@ -3852,6 +4140,21 @@ export function compileArchitecture(
       };
     })()),
   );
+  const compiledAttachedBays: CompiledAttachedBay[] = attachedBayRecords.map(({spec,sharedBoundary,passageThreshold,planeIds,abutmentIds}) => Object.freeze({
+    id:spec.id,hostVolumeId:spec.hostVolumeId,headwallVolumeId:spec.headwallVolumeId,
+    volumeId:spec.volumeId,foundationId:spec.foundationId,roofSystemId:spec.roofSystemId,
+    sharedBoundary:Object.freeze(sharedBoundary.map((point)=>Object.freeze([...point]) as V2)) as readonly [V2,V2],
+    passageOpeningId:spec.passageOpeningId,frontWindowId:spec.frontWindowId,
+    functionalRoomId:spec.functionalRoomId,portalId:spec.portalId,
+    passageThreshold:(primitiveMap.get(passageThreshold) ?? passageThreshold) as SolidBox,
+    functionalFloorColliderIds:Object.freeze([
+      `collider/functional-floor/${spec.id}/continuous-strip`,
+      `collider/functional-floor/${spec.id}/host-side-0`,
+      `collider/functional-floor/${spec.id}/host-side-1`,
+    ]) as readonly [string,string,string],
+    roofPlaneIds:Object.freeze([...planeIds]) as readonly [string,string],
+    roofAbutmentIds:Object.freeze([...abutmentIds]) as readonly [string,string],
+  }));
   const compiledPerceptualTimberFrames: CompiledPerceptualTimberFrame[] = perceptualTimberFrames.map((frame) =>
     Object.freeze({...frame,parts:Object.freeze(frame.parts.map((part)=>(primitiveMap.get(part) ?? part) as LinearMember))}));
   const functionalContract = input.functional
@@ -4096,8 +4399,25 @@ export function compileArchitecture(
             } else if (portal.kind !== "passage" || portal.doorId !== undefined)
               fail(`${label} kind/door mapping is inconsistent`);
           }
+          const attachedBayPortalIds = new Set<string>();
+          for (const {spec: bay} of attachedBayRecords) {
+            const room = roomById.get(bay.functionalRoomId), portal = portalById.get(bay.portalId),
+              hostRoom = authority.rooms.find((candidate) => candidate.volumeId === bay.hostVolumeId),
+              host = volumeSpecs.find((volume) => volume.id === bay.hostVolumeId)!,
+              wall = wallById.get(`${bay.hostVolumeId}/edge-${bay.hostEdgeIndex}`)!, basis = wallBasis(wall),
+              center: V3 = [basis.mx+basis.tx*bay.alongOffset,host.floorY+bay.passageHeight/2,basis.mz+basis.tz*bay.alongOffset],
+              half: V3 = Math.abs(basis.tx)>Math.abs(basis.tz)
+                ? [bay.passageWidth/2,bay.passageHeight/2,host.wallThickness/2]
+                : [host.wallThickness/2,bay.passageHeight/2,bay.passageWidth/2];
+            if (!room || room.volumeId !== bay.volumeId || !hostRoom || !portal || portal.kind !== "passage" || portal.exterior || portal.doorId !== undefined ||
+              !portal.roomIds.includes(room.id) || !portal.roomIds.includes(hostRoom.id) ||
+              portal.center.some((axis,dimension)=>Math.abs(axis-center[dimension])>1e-4) ||
+              portal.halfExtents.some((axis,dimension)=>Math.abs(axis-half[dimension])>1e-4))
+              fail(`attached bay ${bay.id} must bind its room and reciprocal host-wall passage exactly`);
+            attachedBayPortalIds.add(portal!.id);
+          }
           if (partitionedShell) {
-            const interiorPortals = authority.portals.filter((portal) => !portal.exterior),
+            const interiorPortals = authority.portals.filter((portal) => !portal.exterior && !attachedBayPortalIds.has(portal.id)),
               portalByPair = new Map<string, (typeof interiorPortals)[number]>();
             for (const portal of interiorPortals) {
               const ids = portal.roomIds;
@@ -4148,17 +4468,50 @@ export function compileArchitecture(
               !contains(fromRoom, stair.from) || !contains(toRoom, stair.to))
               fail(`${label} endpoints must resolve inside distinct rooms`);
             if (!fromRoom || !toRoom) throw new Error("architecture: unreachable stair endpoint validation");
-            const actualRise = Math.abs(stair.to[1] - stair.from[1]),
-              actualRun = Math.hypot(stair.to[0] - stair.from[0], stair.to[2] - stair.from[2]),
-              deltaX = stair.to[0] - stair.from[0], deltaZ = stair.to[2] - stair.from[2],
-              ux = (stair.to[0] - stair.from[0]) / actualRun,
-              uz = (stair.to[2] - stair.from[2]) / actualRun,
-              fromLandingFar: V3 = [stair.from[0] - ux * stair.bottomLandingDepth, stair.from[1], stair.from[2] - uz * stair.bottomLandingDepth],
-              toLandingFar: V3 = [stair.to[0] + ux * stair.topLandingDepth, stair.to[1], stair.to[2] + uz * stair.topLandingDepth];
+            const flights = stair.flights ?? [{ from: stair.from, to: stair.to, riserCount: stair.riserCount }];
+            for (const [flightIndex, flight] of flights.entries()) {
+              v3(flight.from, `${label}.flights[${flightIndex}].from`);
+              v3(flight.to, `${label}.flights[${flightIndex}].to`);
+            }
+            const firstFlight = flights[0], lastFlight = flights.at(-1)!,
+              flightRuns = flights.map((flight) => Math.hypot(flight.to[0] - flight.from[0], flight.to[2] - flight.from[2])),
+              flightRises = flights.map((flight) => flight.to[1] - flight.from[1]),
+              actualRise = Math.abs(stair.to[1] - stair.from[1]),
+              actualRun = flightRuns.reduce((sum, value) => sum + value, 0),
+              firstRun = flightRuns[0], lastRun = flightRuns.at(-1)!,
+              firstUx = (firstFlight.to[0] - firstFlight.from[0]) / firstRun,
+              firstUz = (firstFlight.to[2] - firstFlight.from[2]) / firstRun,
+              ux = (lastFlight.to[0] - lastFlight.from[0]) / lastRun,
+              uz = (lastFlight.to[2] - lastFlight.from[2]) / lastRun,
+              fromLandingFar: V3 = [stair.from[0] - firstUx * stair.bottomLandingDepth, stair.from[1], stair.from[2] - firstUz * stair.bottomLandingDepth],
+              toLandingFar: V3 = [stair.to[0] + ux * stair.topLandingDepth, stair.to[1], stair.to[2] + uz * stair.topLandingDepth],
+              fromLandingCenter: V3 = [(stair.from[0]+fromLandingFar[0])/2,stair.from[1],(stair.from[2]+fromLandingFar[2])/2],
+              toLandingCenter: V3 = [(stair.to[0]+toLandingFar[0])/2,stair.to[1],(stair.to[2]+toLandingFar[2])/2],
+              same3 = (a: V3, b: V3) => a.every((value, dimension) => Math.abs(value - b[dimension]) <= 1e-4),
+              landings = stair.intermediateLandings ?? [],
+              multiFlightValid = !stair.flights || (
+                flights.length >= 2 && flights.length <= 4 && landings.length === flights.length - 1 &&
+                same3(firstFlight.from, stair.from) && same3(lastFlight.to, stair.to) &&
+                flights.every((flight, flightIndex) => flightRises[flightIndex] > 0 && flightRuns[flightIndex] > 0 &&
+                  (Math.abs(flight.to[0] - flight.from[0]) > 1e-4) !== (Math.abs(flight.to[2] - flight.from[2]) > 1e-4) &&
+                  Number.isSafeInteger(flight.riserCount) && flight.riserCount >= 1 &&
+                  Math.abs(flightRuns[flightIndex] - flight.riserCount * stair.treadDepth) <= 1e-4) &&
+                landings.every((landing, landingIndex) => {
+                  v3(landing.center, `${label}.intermediateLandings[${landingIndex}].center`);
+                  v2(landing.halfExtents, `${label}.intermediateLandings[${landingIndex}].halfExtents`);
+                  const before = flights[landingIndex].to, after = flights[landingIndex + 1].from,
+                    containsPoint = (point: V3) => Math.abs(point[0] - landing.center[0]) <= landing.halfExtents[0] + 1e-4 &&
+                      Math.abs(point[2] - landing.center[2]) <= landing.halfExtents[1] + 1e-4 &&
+                      Math.abs(point[1] - landing.center[1]) <= 1e-4;
+                  return landing.halfExtents.every((value) => value > 0) && Number.isFinite(landing.yawRadians) &&
+                    containsPoint(before) && containsPoint(after);
+                })
+              );
             v2(stair.upperFloorOpening.center, `${label}.upperFloorOpening.center`);
             v2(stair.upperFloorOpening.halfExtents, `${label}.upperFloorOpening.halfExtents`);
             const opening = stair.upperFloorOpening,
-              approachDistance = stair.clearHeight * stair.run / stair.rise,
+              lastRise = flightRises.at(-1)!,
+              approachDistance = stair.clearHeight * lastRun / lastRise,
               // Clear the swept rounded character/controller envelope at the floor edge, not only
               // a zero-width vertical headroom ray. One stair clear-width is the conservative
               // horizontal body allowance used by the native bidirectional traversal gate.
@@ -4168,9 +4521,35 @@ export function compileArchitecture(
               openingContains = (point: V2) =>
                 Math.abs(point[0] - opening.center[0]) <= opening.halfExtents[0] + 1e-6 &&
                 Math.abs(point[1] - opening.center[1]) <= opening.halfExtents[1] + 1e-6,
+              headroomOpeningValid = flights.every((flight,flightIndex) => {
+                const run=flightRuns[flightIndex],rise=flightRises[flightIndex],fx=(flight.to[0]-flight.from[0])/run,fz=(flight.to[2]-flight.from[2])/run,
+                  threshold=toRoom.finishedFloorY-stair.clearHeight,t=Math.max(0,Math.min(1,(threshold-flight.from[1])/rise)),
+                  start:[number,number]=[flight.from[0]+(flight.to[0]-flight.from[0])*t,flight.from[2]+(flight.to[2]-flight.from[2])*t],
+                  side:[number,number]=[-fz*stair.clearWidth/2,fx*stair.clearWidth/2];
+                return [start,[flight.to[0],flight.to[2]] as [number,number]].every((point)=>
+                  openingContains([point[0]+side[0],point[1]+side[1]])&&openingContains([point[0]-side[0],point[1]-side[1]]));
+              }),
               openingInsideRoom =
                 Math.abs(opening.center[0] - toRoom.bounds.center[0]) + opening.halfExtents[0] <= toRoom.bounds.halfExtents[0] + 1e-6 &&
-                Math.abs(opening.center[1] - toRoom.bounds.center[2]) + opening.halfExtents[1] <= toRoom.bounds.halfExtents[2] + 1e-6;
+                Math.abs(opening.center[1] - toRoom.bounds.center[2]) + opening.halfExtents[1] <= toRoom.bounds.halfExtents[2] + 1e-6,
+              clearContains = (room: typeof fromRoom, center: V3, half: V2) => {
+                const volume = volumeSpecById.get(room.volumeId);
+                return Boolean(volume && Math.abs(center[0]-room.bounds.center[0])+half[0] <= room.bounds.halfExtents[0]-volume.wallThickness/2+1e-6 &&
+                  Math.abs(center[2]-room.bounds.center[2])+half[1] <= room.bounds.halfExtents[2]-volume.wallThickness/2+1e-6);
+              },
+              landingHalf = (alongX:boolean,depth:number):V2 => alongX ? [depth/2,stair.clearWidth/2] : [stair.clearWidth/2,depth/2],
+              clearLandingsValid = stair.clearancePolicy !== "structural-footprints-and-controller-sockets-v1" || (clearContains(fromRoom,fromLandingCenter,landingHalf(Math.abs(firstUx)>.5,stair.bottomLandingDepth)) &&
+                clearContains(toRoom,toLandingCenter,landingHalf(Math.abs(ux)>.5,stair.topLandingDepth)) &&
+                (stair.intermediateLandings??[]).every((landing)=>clearContains(toRoom,landing.center,landing.halfExtents))),
+              approachesValid = !stair.flights || Boolean(stair.approaches && ([stair.approaches.bottom, stair.approaches.top] as const).every((socket, socketIndex) => {
+                v3(socket.center, `${label}.approaches.${socketIndex ? "top" : "bottom"}.center`);
+                v3(socket.direction, `${label}.approaches.${socketIndex ? "top" : "bottom"}.direction`);
+                v2(socket.halfExtents, `${label}.approaches.${socketIndex ? "top" : "bottom"}.halfExtents`);
+                const room = socketIndex ? toRoom : fromRoom;
+                return socket.halfExtents.every((value) => value > 0) && contains(room, socket.center) && clearContains(room,socket.center,socket.halfExtents) &&
+                  Math.abs(socket.center[1] - room.finishedFloorY) <= 1e-4 &&
+                  Math.abs(Math.hypot(...socket.direction) - 1) <= 1e-4;
+              }));
             for (const [value, name] of [
               [stair.clearWidth, "clearWidth"], [stair.clearHeight, "clearHeight"],
               [stair.rise, "rise"], [stair.run, "run"],
@@ -4184,14 +4563,16 @@ export function compileArchitecture(
               Math.abs(stair.rise - actualRise) > 1e-4 ||
               Math.abs(stair.rise - Math.abs(toRoom.finishedFloorY - fromRoom.finishedFloorY)) > 1e-4 ||
               Math.abs(stair.run - actualRun) > 1e-4 ||
-              (Math.abs(deltaX) > 1e-4) === (Math.abs(deltaZ) > 1e-4) ||
+              !multiFlightValid || !clearLandingsValid || !approachesValid ||
               !Number.isSafeInteger(stair.riserCount) || stair.riserCount < 2 || stair.riserCount > 64 ||
               stair.rise / stair.riserCount > 0.2 || stair.treadDepth < 0.25 || stair.treadDepth > 0.45 ||
               Math.abs(stair.riserCount * stair.treadDepth - stair.run) > 1e-4 ||
+              flights.reduce((sum, flight) => sum + flight.riserCount, 0) !== stair.riserCount ||
               stair.clearWidth < 0.8 || stair.clearHeight < 2 ||
               stair.bottomLandingDepth < stair.clearWidth || stair.topLandingDepth < stair.clearWidth ||
               !contains(fromRoom, fromLandingFar) || !contains(toRoom, toLandingFar) ||
               opening.halfExtents.some((axis) => axis <= 0) || !openingInsideRoom ||
+              !headroomOpeningValid ||
               !openingContains([stair.to[0] + perpendicular[0], stair.to[2] + perpendicular[1]]) ||
               !openingContains([stair.to[0] - perpendicular[0], stair.to[2] - perpendicular[1]]) ||
               !openingContains([approach[0] + perpendicular[0], approach[1] + perpendicular[1]]) ||
@@ -4278,7 +4659,7 @@ export function compileArchitecture(
           }
           if (visited.size !== authority.rooms.length) fail("every room must be connected to an exterior portal");
 
-          const colliders: { id: string; center: V3; halfExtents: V3 }[] = [];
+          const colliders: { id: string; center: V3; halfExtents: V3; rotation?: readonly [number,number,number,number] }[] = [];
           for (const wall of walls) for (const segment of wall.segments) {
             const yaw = segment.yawRadians ?? 0, quarter = Math.round(yaw / (Math.PI / 2));
             if (Math.abs(yaw - quarter * Math.PI / 2) > 1e-6)
@@ -4289,7 +4670,9 @@ export function compileArchitecture(
                 ? [segment.halfExtents[2], segment.halfExtents[1], segment.halfExtents[0]]
                 : [...segment.halfExtents] });
           }
+          const attachedFloorVolumeIds = new Set(attachedBayRecords.flatMap(({spec}) => [spec.hostVolumeId,spec.volumeId]));
           for (const volume of volumes) {
+            if (attachedFloorVolumeIds.has(volume.id)) continue;
             for (const slab of functionalFloorFragments.get(volume.id) ?? [volume.floor]) {
               const xs = slab.boundary.map((point) => point[0]), zs = slab.boundary.map((point) => point[1]);
               colliders.push({ id: `collider/${slab.id}`,
@@ -4298,17 +4681,77 @@ export function compileArchitecture(
             }
           }
           for (const window of windows) colliders.push({ id: `collider/${window.id}`, center: [...window.apertureCenter], halfExtents: [...window.apertureHalfExtents] });
+          for (const canopy of entranceCanopies) for (const post of canopy.posts)
+            colliders.push({id:`collider/${post.id}`,center:[...post.center],halfExtents:[...post.halfExtents]});
+          for (const {spec:bay,sharedBoundary} of attachedBayRecords) {
+            const host = volumes.find((volume) => volume.id === bay.hostVolumeId), attached = volumes.find((volume) => volume.id === bay.volumeId);
+            if (!host || !attached) {
+              fail(`attached bay ${bay.id} lost its floor collision volumes`);
+              throw new Error("architecture: unreachable attached-bay floor volume validation");
+            }
+            if (functionalFloorFragments.has(host.id) || functionalFloorFragments.has(attached.id))
+              fail(`attached bay ${bay.id} requires unfragmented host and bay floor collision authority`);
+            const hostBounds=axisAlignedBounds(host.floor.boundary),attachedBounds=axisAlignedBounds(attached.floor.boundary);
+            if(!hostBounds||!attachedBounds){
+              fail(`attached bay ${bay.id} floor union must be rectangular`);
+              throw new Error("architecture: unreachable attached-bay floor bounds validation");
+            }
+            const bottom=host.floor.bottomY,top=host.floor.topY;
+            if(Math.abs(attached.floor.bottomY-bottom)>EPS||Math.abs(attached.floor.topY-top)>EPS)
+              fail(`attached bay ${bay.id} floor union must be coplanar`);
+            const push=(id:string,x0:number,x1:number,z0:number,z1:number)=>colliders.push({id,
+              center:[(x0+x1)/2,(bottom+top)/2,(z0+z1)/2],halfExtents:[(x1-x0)/2,(top-bottom)/2,(z1-z0)/2]});
+            const ids=[`collider/functional-floor/${bay.id}/continuous-strip`,`collider/functional-floor/${bay.id}/host-side-0`,`collider/functional-floor/${bay.id}/host-side-1`] as const,
+              alongX=Math.abs(sharedBoundary[1][0]-sharedBoundary[0][0])>Math.abs(sharedBoundary[1][1]-sharedBoundary[0][1]);
+            if(alongX){
+              const stripX0=Math.min(sharedBoundary[0][0],sharedBoundary[1][0]),stripX1=Math.max(sharedBoundary[0][0],sharedBoundary[1][0]);
+              push(ids[0],stripX0,stripX1,Math.min(hostBounds.z0,attachedBounds.z0),Math.max(hostBounds.z1,attachedBounds.z1));
+              push(ids[1],hostBounds.x0,stripX0,hostBounds.z0,hostBounds.z1);
+              push(ids[2],stripX1,hostBounds.x1,hostBounds.z0,hostBounds.z1);
+            }else{
+              const stripZ0=Math.min(sharedBoundary[0][1],sharedBoundary[1][1]),stripZ1=Math.max(sharedBoundary[0][1],sharedBoundary[1][1]);
+              push(ids[0],Math.min(hostBounds.x0,attachedBounds.x0),Math.max(hostBounds.x1,attachedBounds.x1),stripZ0,stripZ1);
+              push(ids[1],hostBounds.x0,hostBounds.x1,hostBounds.z0,stripZ0);
+              push(ids[2],hostBounds.x0,hostBounds.x1,stripZ1,hostBounds.z1);
+            }
+          }
+          if(attachedBayRecords.length) for(const stair of authority.stairs) for(const [flightIndex,flight] of (stair.flights??[{from:stair.from,to:stair.to,riserCount:stair.riserCount}]).entries()){
+            const fromIsLow=flight.from[1]<=flight.to[1],low=fromIsLow?flight.from:flight.to,high=fromIsLow?flight.to:flight.from,
+              dx=high[0]-low[0],dz=high[2]-low[2],run=Math.hypot(dx,dz),rise=high[1]-low[1],slopeLength=Math.hypot(run,rise),
+              yaw=Math.atan2(dz,dx),pitch=Math.atan2(rise,run),halfThickness=.04,
+              treadSupportDrop=stair.flights?.length ? rise/(2*flight.riserCount) : 0,
+              // The authored V3 flight is cardinal. Orient a thin local-Z box along the
+              // slope, then yaw it onto the flight axis. q = qYaw * qPitchX.
+              qYaw:[number,number,number,number]=[0,Math.sin((Math.PI/2-yaw)/2),0,Math.cos((Math.PI/2-yaw)/2)],
+              qPitch:[number,number,number,number]=[-Math.sin(pitch/2),0,0,Math.cos(pitch/2)],
+              rotation:readonly[number,number,number,number]=Object.freeze([
+                qYaw[3]*qPitch[0]+qYaw[0]*qPitch[3]+qYaw[1]*qPitch[2]-qYaw[2]*qPitch[1],
+                qYaw[3]*qPitch[1]-qYaw[0]*qPitch[2]+qYaw[1]*qPitch[3]+qYaw[2]*qPitch[0],
+                qYaw[3]*qPitch[2]+qYaw[0]*qPitch[1]-qYaw[1]*qPitch[0]+qYaw[2]*qPitch[3],
+                qYaw[3]*qPitch[3]-qYaw[0]*qPitch[0]-qYaw[1]*qPitch[1]-qYaw[2]*qPitch[2],
+              ]);
+            const landingOverlap=.02;
+            if(!stair.flights)colliders.push({id:`collider/stairs/${stair.id}/walking-ramp`,
+              center:[(low[0]+high[0])/2,(low[1]+high[1])/2-halfThickness*Math.cos(pitch)-treadSupportDrop,(low[2]+high[2])/2],
+              // Multi-flight ramps extend below their adjacent landing slabs. This keeps the
+              // collider end-cap out of the capsule's approach path while the authored stair
+              // endpoints and visible construction remain exact.
+              halfExtents:[stair.clearWidth/2,halfThickness,slopeLength/2+landingOverlap],rotation});
+          }
           for (const stairPart of functionalStairPrimitives) {
+            if(attachedBayRecords.length&&/\/tread-\d+$/.test(stairPart.id)&&!/\/flight-\d+\//.test(stairPart.id))continue;
             const yaw = stairPart.yawRadians ?? 0, c = Math.abs(Math.cos(yaw)), s = Math.abs(Math.sin(yaw));
-            // Render treads remain construction solids, but collision authority is the bounded
-            // walking surface at each top. Full-height, mutually touching tread boxes make Rapier's
-            // capsule repeatedly confront cumulative blocks instead of individual legal risers and
-            // can strand it mid-flight. Thin slabs preserve every top/riser and bidirectional
-            // support while keeping the under-stair volume out of traversal authority.
-            const colliderHalfHeight = Math.min(.05, stairPart.halfExtents[1]),
-              top = stairPart.center[1] + stairPart.halfExtents[1];
+            const multiTread=stairPart.id.match(/^stairs\/(.+)\/flight-(\d+)\/tread-(\d+)$/),owner=multiTread?authority.stairs.find((stair)=>stair.id===multiTread[1]):undefined,
+              flightIndex=Number(multiTread?.[2]),treadIndex=Number(multiTread?.[3]),flight=owner?.flights?.[flightIndex],turn=owner?.intermediateLandings?.[flightIndex],
+              worldHalfX=c*stairPart.halfExtents[0]+s*stairPart.halfExtents[2],worldHalfZ=s*stairPart.halfExtents[0]+c*stairPart.halfExtents[2],
+              turnBearsTread=Boolean(flight&&turn&&treadIndex===flight.riserCount-1&&Math.abs(stairPart.center[1]+stairPart.halfExtents[1]-turn.center[1])<=1e-4&&
+                Math.abs(stairPart.center[0]-turn.center[0])+worldHalfX<=turn.halfExtents[0]+1e-4&&Math.abs(stairPart.center[2]-turn.center[2])+worldHalfZ<=turn.halfExtents[1]+1e-4);
+            if(turnBearsTread)continue;
+            // Thin top-bearing surfaces preserve legal risers for Rapier autostep while leaving
+            // the useful under-stair volume outside traversal collision authority.
+            const colliderHalfHeight = Math.min(.05, stairPart.halfExtents[1]), top = stairPart.center[1] + stairPart.halfExtents[1];
             colliders.push({ id: `collider/${stairPart.id}`, center: [stairPart.center[0], top - colliderHalfHeight, stairPart.center[2]],
-              halfExtents: [c * stairPart.halfExtents[0] + s * stairPart.halfExtents[2], colliderHalfHeight, s * stairPart.halfExtents[0] + c * stairPart.halfExtents[2]] });
+              halfExtents: [worldHalfX, colliderHalfHeight,worldHalfZ] });
           }
           const contractDoors = doorSpecs.map((spec) => {
             const door = doors.find((item) => item.id === spec.id)!, record = openingById.get(spec.openingId)!,
@@ -4326,7 +4769,27 @@ export function compileArchitecture(
             site: Object.freeze({ ...authority.site }), colliders: Object.freeze(colliders), doors: Object.freeze(contractDoors),
             rooms: Object.freeze(authority.rooms.map(({ volumeId: _volumeId, ...room }) => Object.freeze({ ...room, bounds: Object.freeze({ center: Object.freeze([...room.bounds.center]) as V3, halfExtents: Object.freeze([...room.bounds.halfExtents]) as V3 }), acoustics: Object.freeze({ ...room.acoustics }) }))),
             portals: Object.freeze(authority.portals.map((portal) => Object.freeze({ ...portal, roomIds: Object.freeze([...portal.roomIds]) as readonly [string | null, string | null], center: Object.freeze([...portal.center]) as V3, halfExtents: Object.freeze([...portal.halfExtents]) as V3 }))),
-            verticalLinks: Object.freeze(authority.stairs.map((stair) => Object.freeze({ id: stair.id, kind: "stairs" as const, fromRoomId: stair.fromRoomId, toRoomId: stair.toRoomId, from: Object.freeze([...stair.from]) as V3, to: Object.freeze([...stair.to]) as V3, clearWidth: stair.clearWidth, clearHeight: stair.clearHeight, rise: stair.rise, run: stair.run, riserCount: stair.riserCount, treadDepth: stair.treadDepth, upperFloorOpening: Object.freeze({ center: Object.freeze([...stair.upperFloorOpening.center]) as V2, halfExtents: Object.freeze([...stair.upperFloorOpening.halfExtents]) as V2 }) }))),
+            verticalLinks: Object.freeze(authority.stairs.map((stair) => Object.freeze({
+              id: stair.id, kind: "stairs" as const, fromRoomId: stair.fromRoomId, toRoomId: stair.toRoomId,
+              from: Object.freeze([...stair.from]) as V3, to: Object.freeze([...stair.to]) as V3,
+              clearWidth: stair.clearWidth, clearHeight: stair.clearHeight, rise: stair.rise, run: stair.run,
+              riserCount: stair.riserCount, treadDepth: stair.treadDepth,
+              ...(stair.flights ? {
+                bottomLandingDepth: stair.bottomLandingDepth, topLandingDepth: stair.topLandingDepth,
+                clearancePolicy: stair.clearancePolicy,
+                flights: Object.freeze(stair.flights.map((flight) => Object.freeze({
+                  from: Object.freeze([...flight.from]) as V3, to: Object.freeze([...flight.to]) as V3, riserCount: flight.riserCount,
+                }))),
+                intermediateLandings: Object.freeze((stair.intermediateLandings ?? []).map((landing) => Object.freeze({
+                  center: Object.freeze([...landing.center]) as V3, halfExtents: Object.freeze([...landing.halfExtents]) as V2, yawRadians: landing.yawRadians,
+                }))),
+                approaches: stair.approaches && Object.freeze({
+                  bottom: Object.freeze({ center: Object.freeze([...stair.approaches.bottom.center]) as V3, direction: Object.freeze([...stair.approaches.bottom.direction]) as V3, halfExtents: Object.freeze([...stair.approaches.bottom.halfExtents]) as V2 }),
+                  top: Object.freeze({ center: Object.freeze([...stair.approaches.top.center]) as V3, direction: Object.freeze([...stair.approaches.top.direction]) as V3, halfExtents: Object.freeze([...stair.approaches.top.halfExtents]) as V2 }),
+                }),
+              } : {}),
+              upperFloorOpening: Object.freeze({ center: Object.freeze([...stair.upperFloorOpening.center]) as V2, halfExtents: Object.freeze([...stair.upperFloorOpening.halfExtents]) as V2 }),
+            }))),
             spawnAnchors: Object.freeze(authority.spawnAnchors.map((anchor) => Object.freeze({ ...anchor, position: Object.freeze([...anchor.position]) as V3, direction: Object.freeze([...anchor.direction]) as V3 }))),
             visibilityCells: Object.freeze(authority.visibilityCells.map((cell) => Object.freeze({ ...cell, roomIds: Object.freeze([...cell.roomIds]), nodeIds: Object.freeze([...cell.nodeIds]) }))),
           });
@@ -4415,6 +4878,8 @@ export function compileArchitecture(
             center: [...window.apertureCenter],
             halfExtents: [...window.apertureHalfExtents],
           });
+        for (const canopy of entranceCanopies) for (const post of canopy.posts)
+          colliders.push({id:`collider/${post.id}`,center:[...post.center],halfExtents:[...post.halfExtents]});
         const contractDoors = doorSpecs.map((spec) => {
           const door = doors.find((item) => item.id === spec.id)!,
             record = openingById.get(spec.openingId)!,
@@ -4596,8 +5061,10 @@ export function compileArchitecture(
     irPayload = {
       primitives,
       volumes: compiledVolumes,
+      ...(compiledAttachedBays.length ? { attachedBays: compiledAttachedBays } : {}),
       walls,
       entrances,
+      ...(entranceCanopies.length ? { entranceCanopies } : {}),
       doors,
       windows,
       dormers,
@@ -4614,7 +5081,7 @@ export function compileArchitecture(
     },
     irHash = hash(irPayload),
     review = createArchitectureReview(specHash, irHash, {
-      foundations: input.foundations.map((x) => x.id),
+      foundations: foundationSpecs.map((x) => x.id),
       walls: wallSpecs.map((x) => x.id),
       frames: compiledPerceptualTimberFrames.map((x) => x.id),
       roofs: roofPlaneSpecs.map((x) => x.id),
@@ -4623,6 +5090,7 @@ export function compileArchitecture(
         ...doorSpecs.map((x) => x.id),
         ...windows.map((x) => x.id),
         ...dormers.map((x) => x.id),
+        ...entranceCanopies.map((x) => x.id),
       ],
       fireplaces: [
         ...(input.fireplaces ?? []).map((x) => x.id),
@@ -4636,8 +5104,10 @@ export function compileArchitecture(
     irHash,
     primitives: Object.freeze(primitives),
     volumes: Object.freeze(compiledVolumes),
+    ...(compiledAttachedBays.length ? { attachedBays: Object.freeze(compiledAttachedBays) } : {}),
     walls: Object.freeze(walls),
     entrances: Object.freeze(entrances),
+    ...(entranceCanopies.length ? { entranceCanopies: Object.freeze(entranceCanopies) } : {}),
     doors: Object.freeze(doors),
     windows: Object.freeze(windows),
     dormers: Object.freeze(dormers),

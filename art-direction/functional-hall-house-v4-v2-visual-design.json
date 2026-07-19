@@ -1,0 +1,194 @@
+{
+  "schema": "limina.visual-design-contract/v1",
+  "id": "building/functional-hall-house-v4/v2-articulation",
+  "subjectKind": "building",
+  "intendedFunction": "A functional two-storey timber hall-house with real upper-room daylight, a weather-protected primary entrance, and compiler-owned roof articulation that remains mechanically coherent from exterior approach through interior traversal.",
+  "prompt": "Generate the hall-house only through BuildingProgram V2 and compiler-owned architecture. Preserve every occupied upper-storey wall window. Add one south attic dormer for silhouette, one supported and flashed covered primary entry, and one fireplace-centerline chimney on the distinct north roof plane. Use the Project Gorgon set as visual-floor inspiration, never as pixel geometry or acceptance evidence.",
+  "references": [
+    {
+      "id": "gorgon/built-town-square",
+      "sourceUrl": "https://www.reddit.com/r/MMORPG/comments/1nwksxk/adventures_through_project_gorgon_screenshots/",
+      "creator": "u/PalwaJoko; Project: Gorgon by Elder Game, LLC",
+      "license": "All rights reserved; private internal visual reference only; not redistributed",
+      "retrievedAt": "2026-07-11T00:00:00Z",
+      "localPath": "art-direction/library/project-gorgon-floor-20260711/adventures-through-project-gorgon-screenshots-from-my-v0-58d3pxwdgssf1.webp",
+      "sha256": "sha256:d4a063fee863f1748cd1999f094987cc01e79bad2542b065c8f2286e44fd708f",
+      "roles": [
+        "silhouette",
+        "construction",
+        "material",
+        "weathering",
+        "function"
+      ]
+    },
+    {
+      "id": "gorgon/built-mountain-town",
+      "sourceUrl": "https://www.reddit.com/r/MMORPG/comments/1nwksxk/adventures_through_project_gorgon_screenshots/",
+      "creator": "u/PalwaJoko; Project: Gorgon by Elder Game, LLC",
+      "license": "All rights reserved; private internal visual reference only; not redistributed",
+      "retrievedAt": "2026-07-11T00:00:00Z",
+      "localPath": "art-direction/library/project-gorgon-floor-20260711/adventures-through-project-gorgon-screenshots-from-my-v0-fdp0qaqzfssf1.webp",
+      "sha256": "sha256:3c3f0adedc464d2b591d61cb7f30df3d0cbe942506386c80876d6d8a44f0ccd4",
+      "roles": [
+        "silhouette",
+        "construction",
+        "joinery",
+        "material",
+        "function"
+      ]
+    },
+    {
+      "id": "gorgon/built-desert-facade",
+      "sourceUrl": "https://www.reddit.com/r/MMORPG/comments/1nwksxk/adventures_through_project_gorgon_screenshots/",
+      "creator": "u/PalwaJoko; Project: Gorgon by Elder Game, LLC",
+      "license": "All rights reserved; private internal visual reference only; not redistributed",
+      "retrievedAt": "2026-07-11T00:00:00Z",
+      "localPath": "art-direction/library/project-gorgon-floor-20260711/adventures-through-project-gorgon-screenshots-from-my-v0-xdlyr2hvfssf1.webp",
+      "sha256": "sha256:c8e53c529b8006f03b2d5c6648701937c12f71a9c1192fa6842f52a788ae3f1f",
+      "roles": [
+        "silhouette",
+        "construction",
+        "material",
+        "weathering",
+        "function"
+      ]
+    }
+  ],
+  "cues": [
+    {
+      "id": "three-part-silhouette",
+      "statement": "The front and roof silhouette contains exactly one attic dormer, one covered entry canopy, and one offset chimney, with a measurably asymmetric front composition.",
+      "sourceIds": [
+        "gorgon/built-town-square",
+        "gorgon/built-mountain-town"
+      ],
+      "measurements": [
+        {
+          "name": "secondary-silhouette-elements",
+          "unit": "count",
+          "target": 3
+        },
+        {
+          "name": "front-facade-asymmetric",
+          "unit": "boolean",
+          "target": 1
+        }
+      ],
+      "verification": "engine"
+    },
+    {
+      "id": "attic-dormer-weather-layer",
+      "statement": "The south attic dormer cuts one roof host and closes its cheeks, gable, soffit bearing, valleys, curb, flashing, counterflashing, and roof planes without claiming bedroom daylight.",
+      "sourceIds": [
+        "gorgon/built-town-square",
+        "gorgon/built-mountain-town"
+      ],
+      "measurements": [
+        {
+          "name": "dormer-count",
+          "unit": "count",
+          "target": 1
+        },
+        {
+          "name": "open-dormer-junction-count",
+          "unit": "count",
+          "target": 0
+        },
+        {
+          "name": "occupied-window-loss-count",
+          "unit": "count",
+          "target": 0
+        }
+      ],
+      "verification": "compiler"
+    },
+    {
+      "id": "covered-primary-entry",
+      "statement": "The primary threshold and landing sit beneath one wall-attached roof with connected plate, header, two posts, grade footings, apron flashing, and counterflashing while preserving door sweep and headroom.",
+      "sourceIds": [
+        "gorgon/built-town-square",
+        "gorgon/built-desert-facade"
+      ],
+      "measurements": [
+        {
+          "name": "entry-canopy-count",
+          "unit": "count",
+          "target": 1
+        },
+        {
+          "name": "supported-canopy-post-count",
+          "unit": "count",
+          "target": 2
+        },
+        {
+          "name": "door-sweep-intersection-count",
+          "unit": "count",
+          "target": 0
+        }
+      ],
+      "verification": "compiler"
+    },
+    {
+      "id": "centerline-chimney-closure",
+      "statement": "The hearth flue remains centered from fireplace to north roof penetration and owns a complete curb, flashing, counterflashing, cricket, cap, and liner assembly in a roof bay distinct from the dormer.",
+      "sourceIds": [
+        "gorgon/built-mountain-town",
+        "gorgon/built-desert-facade"
+      ],
+      "measurements": [
+        {
+          "name": "fireplace-centerline-offset",
+          "unit": "m",
+          "target": 0
+        },
+        {
+          "name": "chimney-penetration-count",
+          "unit": "count",
+          "target": 1
+        },
+        {
+          "name": "open-penetration-junction-count",
+          "unit": "count",
+          "target": 0
+        }
+      ],
+      "verification": "compiler"
+    },
+    {
+      "id": "occupied-upper-daylight",
+      "statement": "Every occupied upper bedroom retains its declared exterior wall windows; attic articulation never substitutes for functional room daylight.",
+      "sourceIds": [
+        "gorgon/built-town-square",
+        "gorgon/built-desert-facade"
+      ],
+      "measurements": [
+        {
+          "name": "upper-bedroom-window-count",
+          "unit": "count",
+          "target": 4
+        },
+        {
+          "name": "attic-window-counted-as-bedroom",
+          "unit": "boolean",
+          "target": 0
+        }
+      ],
+      "verification": "compiler"
+    }
+  ],
+  "avoid": [
+    "pixel-matched facade recreation",
+    "generated whole-building GLB as architecture authority",
+    "attic window counted as bedroom daylight",
+    "unsupported porch posts",
+    "unflashed wall-roof or roof-penetration joints",
+    "symmetrical box-with-roof silhouette"
+  ],
+  "requiredViews": [
+    "front-elevation",
+    "front-three-quarter",
+    "roof-junctions",
+    "upper-room-daylight"
+  ],
+  "status": "candidate"
+}

@@ -108,7 +108,7 @@ bun run tools/asset-fetch.ts --kind <k> --prompt <p> --seed <n>
 
 # Editor lifecycle (three different reload rules — see failure mode #8)
 (cd js && npm run bundle:editor)                          # js/src changes → editor engine bundle
-./target/release/limina editor/server/editor_host.ts      # restart host (prints auth token)
+LIMINA_EDITOR_TOKEN=<private-capability> ./target/release/limina editor/server/editor_host.ts
 node tools/scaffold/scripts/serve.mjs editor 5173          # COOP/COEP static serve → localhost:5173
 curl -s -o /dev/null -w '%{http_code}' http://localhost:5173/assets/<some>.glb  # stale-server check
 ```

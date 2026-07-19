@@ -37,12 +37,27 @@ import {
   type WorldLogMeta,
 } from "./log.ts";
 import { IdleStepFilter } from "./step-filter.ts";
+import { cloneReplayValue } from "./replay-value.ts";
 
 // Approval controls resolve parked intents; they are not world mutations. A grant
 // re-enters the registry with the original skill, which is the only command replay
 // needs. Recording both makes replay depend on a transient approval queue and puts
 // the control command before the mutation it applies.
 const NON_REPLAYABLE_CONTROL_SKILLS = new Set(["approval.grant", "approval.deny"]);
+
+/** Physics calls that are observations and may cross the authoritative proxy
+ * without generating a command. Every mutator must either have a replay opcode
+ * in RECORDED_PHYSICS_METHODS or run through the explicit non-recording chain /
+ * recovery facade. Unknown physics methods fail closed. */
+const READ_ONLY_PHYSICS_METHODS = new Set([
+  "op_physics_snapshot",
+  "op_physics_body_pos",
+  "op_physics_body_transform",
+  "op_physics_drain_collisions",
+  "op_physics_take_collision_overflow_count",
+  "op_physics_raycast",
+  "op_physics_overlap_box",
+]);
 
 /** Whether the recorder deliberately never (re)records this skill. Rehydrate's
  *  strict accounting must exempt persisted lines from BEFORE this cut — they
@@ -72,43 +87,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // `undefined`-valued OBJECT KEYS are dropped (as JSON.stringify would), so the
 // in-memory command and its serialized-then-parsed on-disk twin carry the SAME
 // key set -- memory-replay and disk-replay stay byte-consistent.
-function cloneInput(value: unknown, seen: Set<object> = new Set()): unknown {
-  if (value === null) return null;
-  const t = typeof value;
-  if (t === "number" || t === "string" || t === "boolean" || t === "undefined") return value;
-  if (t === "bigint") throw new Error("WorldRecorder: cannot record a BigInt skill input (not replay-serializable)");
-  if (t === "function" || t === "symbol") throw new Error(`WorldRecorder: cannot record a ${t} skill input`);
-  const obj = value as object;
-  if (seen.has(obj)) throw new Error("WorldRecorder: cannot record a circular skill input");
-  seen.add(obj);
-  // Mirror JSON.stringify: a value exposing toJSON() serializes as that result, so
-  // clone the toJSON() output -- otherwise a Date/custom-serializer input would be an
-  // empty object {} in memory yet its toJSON string on disk, diverging the two replay
-  // paths. Cloning the toJSON result keeps the in-memory command and its on-disk twin
-  // identical.
-  const toJSON = (obj as { toJSON?: unknown }).toJSON;
-  if (typeof toJSON === "function") {
-    seen.delete(obj);
-    return cloneInput((toJSON as () => unknown).call(obj), seen);
+function cloneInput(value: unknown): unknown {
+  try {
+    return cloneReplayValue(value);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`WorldRecorder: ${message}`, { cause: error });
   }
-  let out: unknown;
-  if (Array.isArray(obj)) {
-    const arr = new Array<unknown>(obj.length);
-    for (let i = 0; i < obj.length; i++) arr[i] = cloneInput((obj as unknown[])[i], seen);
-    out = arr;
-  } else {
-    const rec: Record<string, unknown> = {};
-    for (const k of Object.keys(obj)) {
-      const cv = cloneInput((obj as Record<string, unknown>)[k], seen);
-      // Drop `undefined`-valued keys so the clone matches JSON's on-disk key set
-      // (JSON.stringify omits them) -- otherwise memory-replay would carry a key
-      // that disk-replay does not, diverging the two replay paths.
-      if (cv !== undefined) rec[k] = cv;
-    }
-    out = rec;
-  }
-  seen.delete(obj);
-  return out;
 }
 
 export interface WorldRecorderOptions {
@@ -144,6 +129,9 @@ export class WorldRecorder {
    *  `worldlog.ops.recordedDuringChain` trace event, so a stray in-skill path that
    *  captured the recording proxy is visible instead of silent. */
   private readonly liveChains = new Set<string>();
+  /** Object-identity capability paired with each live chain id. A string id by
+   * itself is never sufficient proof of nesting. */
+  private readonly liveChainTokens = new Map<string, object>();
   /** Per live head chain: how many `step` commands were RECORDED inside its
    *  async window (the legitimate C3 tick-loop-under-chain case). Feeds the
    *  registry's `skill.rollback.stepsDuringChain` disclosure — a failed chain's
@@ -203,6 +191,16 @@ export class WorldRecorder {
         const method = value as (...a: number[]) => unknown;
         const opName = typeof prop === "string" ? RECORDED_PHYSICS_METHODS[prop] : undefined;
         if (opName === undefined) {
+          if (typeof prop === "string" && prop.startsWith("op_physics_") && !READ_ONLY_PHYSICS_METHODS.has(prop)) {
+            const rejected = (): never => {
+              throw new Error(
+                `WorldRecorder: physics mutator '${prop}' has no authoritative replay mapping; ` +
+                "route snapshot/bootstrap recovery through recorder.chainOps() or define a deterministic command",
+              );
+            };
+            methods.set(prop, rejected);
+            return rejected;
+          }
           const bound = method.bind(target);
           methods.set(prop, bound);
           return bound;
@@ -231,6 +229,9 @@ export class WorldRecorder {
             rec.opDuringChainTripwire("step", recorded);
             return result;
           }
+          // Native physics operations are synchronous. Apply first so a throw
+          // cannot leave a finalized command for a mutation that never happened.
+          const result = method.apply(target, args);
           const tick = rec.tick;
           if (tick > rec.maxTick) rec.maxTick = tick;
           // Ops with a trailing out-buffer (e.g. move_character) carry no input in
@@ -242,7 +243,6 @@ export class WorldRecorder {
           rec.commands.push({ kind: "physics", seq, tick, op: opName, args: args2 });
           rec.markFinalized(seq);
           rec.opDuringChainTripwire(opName, true);
-          const result = method.apply(target, args);
           // The filter tracks dynamic bodies across every RECORDED op; in-skill ops
           // feed it through the chainOps facade, so its body set stays complete.
           filter?.observe(opName, args, result);
@@ -371,8 +371,17 @@ export class WorldRecorder {
     registry.setChainStepProbe((chainId) => rec.chainRecordedSteps.get(chainId) ?? 0);
     const original = registry.invoke.bind(registry);
     registry.invoke = function patched(name: string, input: unknown, base: InvokeBase): Promise<MCPResponse> {
-      const isHead = base.chainId === undefined;
-      const chainId = base.chainId ?? `chain_${rec.chainSeq++}`;
+      const prepared = registry.prepareInvocation(name, input);
+      // Unknown/invalid calls cannot mutate and therefore need no provisional
+      // command or chain facade. Let the canonical registry produce its exact
+      // not_found/invalid_input response without exposing recorder exceptions.
+      if (!prepared.ok) return original(name, input, base);
+      const normalizedInput = prepared.input;
+      const isNested = base.chainId !== undefined && base.chainToken !== undefined &&
+        rec.liveChainTokens.get(base.chainId) === base.chainToken;
+      const isHead = !isNested;
+      const chainId = isNested ? base.chainId! : `chain_${rec.chainSeq++}`;
+      const chainToken = isNested ? base.chainToken! : Object.freeze({});
       // Hold a reference to the command we record for the top-level invoke so the
       // post-invoke commit-back (below) can pin resolved identity into it.
       let cmd: SkillCommand | undefined;
@@ -388,20 +397,22 @@ export class WorldRecorder {
         const readOnly = def !== undefined && skillEffect(def) === "read";
         if (!readOnly && !NON_REPLAYABLE_CONTROL_SKILLS.has(name)) {
           const tick = base.tick;
-          if (tick > rec.maxTick) rec.maxTick = tick;
-          const seq = rec.seq++;
           const perms = [...base.permissions].sort();
           // Pin the caller's permission PROFILE NAME when its set is exactly that
           // profile's set: serialization then persists the name instead of the
           // ~70-string array (v2 log format). A narrowed/custom set keeps the full
           // array — resolving a profile on replay must never widen permissions.
           const profile = permissionProfileFor(base.profile, perms);
+          // Finish every throwing preparation step before minting a durable seq.
+          const clonedInput = normalizedInput === undefined ? undefined : cloneInput(normalizedInput);
+          if (tick > rec.maxTick) rec.maxTick = tick;
+          const seq = rec.seq++;
           cmd = {
             kind: "skill",
             seq,
             tick,
             tool: name,
-            input: input === undefined ? undefined : cloneInput(input),
+            input: clonedInput,
             actorId: base.agentId,
             sessionId: base.sessionId,
             perms,
@@ -410,16 +421,17 @@ export class WorldRecorder {
           rec.commands.push(cmd);
         }
         rec.liveChains.add(chainId);
+        rec.liveChainTokens.set(chainId, chainToken);
       }
       // The chain executes against the world facade: same shared WorldContext, but
       // `ops` resolves to the non-recording chainOps pass-through. Nested invokes
       // forward ctx.world (already the facade) + ctx.chainId, so the whole chain
       // rides one facade with no per-call rewrapping — and no per-call base spread:
       // a nested base already carrying this chain's id and the facade is reused as-is.
-      const childBase: InvokeBase = base.chainId === chainId && rec.facades.has(base.world)
+      const childBase: InvokeBase = base.chainId === chainId && base.chainToken === chainToken && rec.facades.has(base.world)
         ? base
-        : { ...base, chainId, world: rec.chainWorld(base.world) };
-      return original(name, input, childBase)
+        : { ...base, chainId, chainToken, world: rec.chainWorld(base.world) };
+      return original(name, normalizedInput, prepared.apply(childBase))
         .then((res) => {
           if (cmd !== undefined && !res.success) {
             rec.discardCommand(cmd.seq);
@@ -434,10 +446,13 @@ export class WorldRecorder {
             const def = registry.describe(name);
             const fields = def?.commitFields;
             if (fields !== undefined && fields.length > 0 && isRecord(res.result)) {
-              const into = isRecord(cmd.input) ? (cmd.input as Record<string, unknown>) : (cmd.input = {} as Record<string, unknown>);
+              const into = isRecord(cmd.input) ? (cmd.input as Record<string, unknown>) : {};
+              const additions: Record<string, unknown> = {};
               for (const f of fields) {
-                if (into[f] === undefined && f in res.result) into[f] = (res.result as Record<string, unknown>)[f];
+                if (into[f] === undefined && f in res.result) additions[f] = cloneInput((res.result as Record<string, unknown>)[f]);
               }
+              Object.assign(into, additions);
+              if (!isRecord(cmd.input)) cmd.input = into;
             }
             if (def?.shouldRecordResult !== undefined) {
               let shouldRecord = true;
@@ -466,6 +481,7 @@ export class WorldRecorder {
           // leaves the set untouched, so a concurrent sibling chain stays live.
           if (isHead) {
             rec.liveChains.delete(chainId);
+            rec.liveChainTokens.delete(chainId);
             rec.chainRecordedSteps.delete(chainId);
             if (cmd !== undefined) rec.markFinalized(cmd.seq);
           }

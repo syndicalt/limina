@@ -52,19 +52,23 @@ const importInput = z.object({
   /** Two-translation stochastic anti-tiling, shared across every supplied PBR map. */
   antiTiling: z.boolean().default(false),
   /** Bounded true parallax-occlusion mapping. Requires `displacement`. */
-  parallax: z.object({
-    heightScale: z.number().min(0).max(0.2).default(0.04),
-    minLayers: z.number().int().min(4).max(16).default(8),
-    maxLayers: z.number().int().min(8).max(24).default(16),
-    fadeStart: z.number().min(0).max(1000).default(20),
-    fadeEnd: z.number().positive().max(2000).default(40),
-  }).refine((value) => value.maxLayers >= value.minLayers, {
-    message: "maxLayers must be greater than or equal to minLayers",
-    path: ["maxLayers"],
-  }).refine((value) => value.fadeEnd > value.fadeStart, {
-    message: "fadeEnd must be greater than fadeStart",
-    path: ["fadeEnd"],
-  }).optional(),
+  parallax: z
+    .object({
+      heightScale: z.number().min(0).max(0.2).default(0.04),
+      minLayers: z.number().int().min(4).max(16).default(8),
+      maxLayers: z.number().int().min(8).max(24).default(16),
+      fadeStart: z.number().min(0).max(1000).default(20),
+      fadeEnd: z.number().positive().max(2000).default(40),
+    })
+    .refine((value) => value.maxLayers >= value.minLayers, {
+      message: "maxLayers must be greater than or equal to minLayers",
+      path: ["maxLayers"],
+    })
+    .refine((value) => value.fadeEnd > value.fadeStart, {
+      message: "fadeEnd must be greater than fadeStart",
+      path: ["fadeEnd"],
+    })
+    .optional(),
   /** The COMMITTED content addresses of the pack images (id → "sha256:..."). Absent at
    *  authoring (resolved + returned, then committed back by the recorder); present on REPLAY,
    *  where each resolved image is verified against it — a mismatch warns
@@ -82,11 +86,20 @@ const importOutput = z.object({
 
 /** Register the material.* skills bound to a content-addressed AssetRegistry (image bytes) and
  *  a MaterialRegistry (named built materials createEntity/setMaterial resolve). */
-export function registerMaterialSkills(registry: SkillRegistry, assets: AssetRegistry, materials: MaterialRegistry): void {
+export function registerMaterialSkills(
+  registry: SkillRegistry,
+  assets: AssetRegistry,
+  materials: MaterialRegistry,
+): void {
   const importSkill: SkillDefinition<z.infer<typeof importInput>, z.infer<typeof importOutput>> = {
     name: "material.import",
     version: "1.2.0",
-    description: "Import a CC0 texture pack (albedo + optional normal + roughness + ambient-occlusion images, BY content-addressed id) as a NAMED PBR material usable by scene.createEntity / three.setMaterial. Resolves + decodes the images through the content-addressed asset registry (bytes ride the export's assets.jsonl); the world log records only the import REQUEST (name + ids + committed hashes), never bytes. Optionally TRIPLANAR so the pack never UV-stretches on arbitrary primitives. Returns the name + pinned hashes.",
+    description:
+      "Import a CC0 texture pack (albedo + optional normal + roughness + ambient-occlusion images, BY " +
+      "content-addressed id) as a NAMED PBR material usable by scene.createEntity / three.setMaterial. " +
+      "Resolves + decodes the images through the content-addressed asset registry (bytes ride the export's " +
+      "assets.jsonl); the world log records only the import REQUEST (name + ids + committed hashes), never " +
+      "bytes. Optionally TRIPLANAR so the pack never UV-stretches on arbitrary primitives. Returns the name + pinned hashes.",
     category: "three",
     permissions: ["scene.write"],
     // The recorder copies the resolved per-image hashes back into the recorded command's input
@@ -109,7 +122,13 @@ export function registerMaterialSkills(registry: SkillRegistry, assets: AssetReg
         throw new Error("material.import: parallax requires a displacement map");
       }
 
-      const textures: ImportedTextures = { albedo: null, normal: null, roughness: null, occlusion: null, displacement: null };
+      const textures: ImportedTextures = {
+        albedo: null,
+        normal: null,
+        roughness: null,
+        occlusion: null,
+        displacement: null,
+      };
       const hashes: Record<string, string> = {};
       const maps: string[] = [];
       for (const slot of slots) {
@@ -128,21 +147,33 @@ export function registerMaterialSkills(registry: SkillRegistry, assets: AssetReg
         textures[slot.key] = await decodeImageToDataTexture(resolved.bytes, slot.srgb);
       }
 
-      materials.define(input.name, {
-        triplanar: input.triplanar,
-        scale: input.scale,
-        normalStrength: input.normalStrength,
-        sharpness: input.sharpness,
-        metalness: input.metalness,
-        roughness: input.baseRoughness,
-        occlusionStrength: input.occlusionStrength,
-        antiTiling: input.antiTiling,
-        parallax: input.parallax,
-        color: input.color,
-      }, textures, hashes);
+      materials.define(
+        input.name,
+        {
+          triplanar: input.triplanar,
+          scale: input.scale,
+          normalStrength: input.normalStrength,
+          sharpness: input.sharpness,
+          metalness: input.metalness,
+          roughness: input.baseRoughness,
+          occlusionStrength: input.occlusionStrength,
+          antiTiling: input.antiTiling,
+          parallax: input.parallax,
+          color: input.color,
+        },
+        textures,
+        hashes,
+      );
 
       // Record the REQUEST on the trace: name + image ids + pinned hashes, NEVER bytes.
-      ctx.emit("material.imported", { name: input.name, maps, hashes, triplanar: input.triplanar, antiTiling: input.antiTiling, parallax: input.parallax !== undefined });
+      ctx.emit("material.imported", {
+        name: input.name,
+        maps,
+        hashes,
+        triplanar: input.triplanar,
+        antiTiling: input.antiTiling,
+        parallax: input.parallax !== undefined,
+      });
       return { name: input.name, maps, hashes };
     },
   };

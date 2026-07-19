@@ -27,6 +27,7 @@
 
 import type { EngineOps } from "../engine.ts";
 import type { WasmRapierPhysics } from "./wasm-rapier-physics.ts";
+import { composePortableEngineOps } from "./engine-op-composition.ts";
 import { SharedTransformStorage } from "./sab-transforms.ts";
 import type { TransformSnapshot, TransformStore } from "./frame-interpolator.ts";
 import type { InputFrame } from "./sab-ringbuffer.ts";
@@ -54,84 +55,15 @@ export function shouldRenderLiveFrame(viewSuspended: boolean): boolean {
  *  makes `scene.createEntity` / `player.spawn` author deterministically. Mirrors
  *  the worker's own op composition so both threads author byte-identically.
  *
- *  This is intentionally a parallel of `composeWorkerOps` (sim-worker.ts) rather
- *  than an import of it: the worker module's shell auto-installs on a WorkerGlobalScope
- *  and that composition is its private detail; the render side owns its own. */
+ *  The worker module itself is not imported because its shell auto-installs on a
+ *  WorkerGlobalScope. Both realms instead consume the side-effect-free shared op
+ *  composition declaration, so their capability tables cannot drift. */
 export function composeAuthoringOps(P: WasmRapierPhysics, readAsset: (id: string) => Uint8Array = () => new Uint8Array(0)): EngineOps {
-  const noop = (): void => {};
-  return {
-    // ── physics: the REAL wasm-Rapier solver (bound so `this` is the adapter) ──
-    op_physics_create_world: P.op_physics_create_world.bind(P),
-    op_physics_add_ground: P.op_physics_add_ground.bind(P),
-    op_physics_add_box: P.op_physics_add_box.bind(P),
-    op_physics_add_box_material: P.op_physics_add_box_material.bind(P),
-    op_physics_add_sphere: P.op_physics_add_sphere.bind(P),
-    op_physics_add_capsule: P.op_physics_add_capsule.bind(P),
-    op_physics_add_static_box: P.op_physics_add_static_box.bind(P),
-    op_physics_add_static_sphere: P.op_physics_add_static_sphere.bind(P),
-    op_physics_add_static_capsule: P.op_physics_add_static_capsule.bind(P),
-    op_physics_add_heightfield: P.op_physics_add_heightfield.bind(P),
-    op_physics_add_character: P.op_physics_add_character.bind(P),
-    op_physics_move_character: P.op_physics_move_character.bind(P),
-    op_physics_remove_body: P.op_physics_remove_body.bind(P),
-    op_physics_apply_impulse: P.op_physics_apply_impulse.bind(P),
-    op_physics_step: P.op_physics_step.bind(P),
-    op_physics_snapshot: P.op_physics_snapshot.bind(P),
-    op_physics_restore: P.op_physics_restore.bind(P),
-    op_physics_body_pos: P.op_physics_body_pos.bind(P),
-    op_physics_body_transform: P.op_physics_body_transform.bind(P),
-    op_physics_set_body_transform: P.op_physics_set_body_transform.bind(P),
-    op_physics_drain_collisions: P.op_physics_drain_collisions.bind(P),
-    op_physics_raycast: P.op_physics_raycast.bind(P),
-    op_physics_overlap_box: P.op_physics_overlap_box.bind(P),
-    // ── render / loop / device input — the render-main renderer is built directly
-    //    via THREE.WebGPURenderer (buildRenderTarget), not through these ops; input
-    //    is pumped into the SAB ring, not these device hooks ──
-    op_create_window_context: () => ({}),
-    op_surface_present: noop,
-    op_surface_resize: noop,
-    op_set_frame_callback: noop,
-    op_set_fixed_step_callback: noop,
-    op_set_resize_callback: noop,
-    op_input_axes: noop,
-    op_input_look: noop,
-    op_input_buttons: noop,
-    // ── host services ──
-    op_log: noop,
-    op_http_post: () => Promise.resolve(""),
-    op_http_post_headers: () => Promise.resolve(""),
-    op_sleep_ms: () => Promise.resolve(),
-    // AssetRegistry is synchronous, so the caller prefetches known command assets
-    // before authoring and provides an in-memory reader. A miss returns empty bytes;
-    // browser I/O never blocks the render thread.
-    op_read_asset: readAsset,
-    op_sha256: () => "",
-    op_read_env: () => "",
-    // ── durable trace ──
-    op_write_trace: noop,
-    op_append_trace: noop,
-    op_read_trace: () => "",
-    // ── sandbox ──
-    op_sandbox_create: () => 0,
-    op_sandbox_eval: () => "",
-    op_sandbox_destroy: () => false,
-    op_sandbox_count: () => 0,
-    // ── native ECS spatial ──
-    op_ecs_spatial_query_batch: noop,
-    // ── audio ──
-    op_audio_init: () => 0,
-    op_audio_play: () => 0,
-    op_audio_ambient: () => 0,
-    op_audio_stop: noop,
-    op_audio_stop_all: noop,
-    op_audio_set_bus_volume: noop,
-    op_audio_play_spatial: () => 0,
-    op_audio_set_emitter: noop,
-    op_audio_set_listener: noop,
-    op_audio_set_volume: noop,
-    op_audio_speak: () => 0,
-    op_audio_play_buffer: () => 0,
-  };
+  // AssetRegistry is synchronous, so the caller prefetches known command assets
+  // and provides an in-memory reader. Physics mapping and every inert capability
+  // come from the shared portable host declaration used by the sim worker and
+  // keyframe playback; a newly-added mutating op cannot diverge between realms.
+  return composePortableEngineOps(P, { readAsset });
 }
 
 /**
@@ -150,7 +82,9 @@ export class SnapshotRing {
   private readonly present: Set<number>;
   private eids: number[];
   private readonly scaleSrc: TransformStore;
-  private which = 0;
+  private which = 1;
+  private lastSnapshot: TransformSnapshot;
+  private freezeConsistent = true;
 
   /** @param eids the live entity eids to mirror each tick (the authored set).
    *  @param scaleSrc the authored transform store carrying the static per-eid scale
@@ -162,11 +96,24 @@ export class SnapshotRing {
     // Two detached (non-shared) stores — plain ArrayBuffer backing is fine; they are
     // render-thread-local freeze targets, never posted across a thread boundary.
     this.stores = [new SharedTransformStorage(), new SharedTransformStorage()];
+    const initial = this.stores[0];
+    for (const eid of this.eids) {
+      initial.Scale.x[eid] = scaleSrc.Scale.x[eid];
+      initial.Scale.y[eid] = scaleSrc.Scale.y[eid];
+      initial.Scale.z[eid] = scaleSrc.Scale.z[eid];
+    }
+    this.lastSnapshot = { store: initial, present: this.present };
   }
 
   /** The set of eids every snapshot carries (for `FrameInterpolator.interpolate`). */
   get presentSet(): ReadonlySet<number> {
     return this.present;
+  }
+
+  /** Whether the most recent freeze consumed a coherent source publication.
+   * False means freeze returned the prior last-good snapshot after bounded retry. */
+  get lastFreezeWasConsistent(): boolean {
+    return this.freezeConsistent;
   }
 
   /** Add newly-authored eids to future freezes/interpolations without rebuilding
@@ -177,6 +124,11 @@ export class SnapshotRing {
       if (this.present.has(eid)) continue;
       this.present.add(eid);
       this.eids.push(eid);
+      for (const store of this.stores) {
+        store.Scale.x[eid] = this.scaleSrc.Scale.x[eid];
+        store.Scale.y[eid] = this.scaleSrc.Scale.y[eid];
+        store.Scale.z[eid] = this.scaleSrc.Scale.z[eid];
+      }
     }
   }
 
@@ -194,18 +146,32 @@ export class SnapshotRing {
   /** Freeze the live SAB (`src`) into the next ping-pong store and return a snapshot.
    *  Copies Position+Rotation from `src` (the worker's writes) and Scale from the
    *  authored static source, for every tracked eid. */
-  freeze(src: TransformStore): TransformSnapshot {
+  freeze(src: TransformStore, maxAttempts = 8): TransformSnapshot {
+    if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1) {
+      throw new RangeError("SnapshotRing maxAttempts must be a positive safe integer");
+    }
     const dst = this.stores[this.which];
-    this.which ^= 1;
     const sp = src.Position, sr = src.Rotation;
     const dp = dst.Position, dr = dst.Rotation, ds = dst.Scale;
     const cs = this.scaleSrc.Scale;
-    for (const eid of this.eids) {
-      dp.x[eid] = sp.x[eid]; dp.y[eid] = sp.y[eid]; dp.z[eid] = sp.z[eid];
-      dr.x[eid] = sr.x[eid]; dr.y[eid] = sr.y[eid]; dr.z[eid] = sr.z[eid]; dr.w[eid] = sr.w[eid];
-      ds.x[eid] = cs.x[eid]; ds.y[eid] = cs.y[eid]; ds.z[eid] = cs.z[eid];
+    const shared = src instanceof SharedTransformStorage ? src : undefined;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const before = shared?.publicationGeneration() ?? 0;
+      if ((before & 1) !== 0) continue;
+      for (const eid of this.eids) {
+        dp.x[eid] = sp.x[eid]; dp.y[eid] = sp.y[eid]; dp.z[eid] = sp.z[eid];
+        dr.x[eid] = sr.x[eid]; dr.y[eid] = sr.y[eid]; dr.z[eid] = sr.z[eid]; dr.w[eid] = sr.w[eid];
+        ds.x[eid] = cs.x[eid]; ds.y[eid] = cs.y[eid]; ds.z[eid] = cs.z[eid];
+      }
+      const after = shared?.publicationGeneration() ?? 0;
+      if (before !== after || (after & 1) !== 0) continue;
+      this.which ^= 1;
+      this.freezeConsistent = true;
+      this.lastSnapshot = { store: dst, present: this.present };
+      return this.lastSnapshot;
     }
-    return { store: dst, present: this.present };
+    this.freezeConsistent = false;
+    return this.lastSnapshot;
   }
 }
 

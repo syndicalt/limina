@@ -1,0 +1,102 @@
+{
+  "schema": "limina.static-behavioral-authorities/v1",
+  "entries": [
+    {
+      "staticTest": "js/test/browser_camera_framing_static.test.cjs",
+      "authorities": [
+        { "kind": "limina", "path": "js/test/p_camera_framing.ts" },
+        { "kind": "limina", "path": "js/test/p_editor_navigation.ts" },
+        { "kind": "chromium-live", "path": "editor/test/camera_navigation_browser.test.cjs" }
+      ]
+    },
+    {
+      "staticTest": "js/test/browser_derived_transaction_static.test.cjs",
+      "authorities": [
+        { "kind": "limina", "path": "js/test/p_sim_derived_activation.ts" },
+        { "kind": "limina", "path": "js/test/p_derived_runtime_worker.ts" },
+        { "kind": "chromium-live", "path": "editor/test/play_workflow_browser.test.cjs" }
+      ]
+    },
+    {
+      "staticTest": "js/test/browser_derived_verify_static.test.cjs",
+      "authorities": [
+        { "kind": "limina", "path": "js/test/p99_derived_verify_worker.ts" }
+      ]
+    },
+    {
+      "staticTest": "js/test/browser_editor_navigation_static.test.cjs",
+      "authorities": [
+        { "kind": "limina", "path": "js/test/p_editor_navigation.ts" },
+        { "kind": "chromium-live", "path": "editor/test/camera_navigation_browser.test.cjs" }
+      ]
+    },
+    {
+      "staticTest": "editor/test/atlas_bridge_wiring_static.test.mjs",
+      "authorities": [
+        { "kind": "node-test", "path": "editor/test/atlas_editor_protocol.test.mjs" },
+        { "kind": "node-test", "path": "editor/test/atlas_workspace_state.test.mjs" },
+        { "kind": "node-test", "path": "editor/test/atlas_handoff.test.mjs" },
+        { "kind": "chromium-live", "path": "editor/test/atlas_bridge_browser.test.cjs" },
+        { "kind": "chromium-live", "path": "editor/test/atlas_standalone_handoff_browser.test.cjs" }
+      ]
+    },
+    {
+      "staticTest": "editor/test/authoring_editor_wiring.test.mjs",
+      "authorities": [
+        { "kind": "node-test", "path": "editor/test/authoring_gateway.test.mjs" },
+        { "kind": "limina", "path": "js/test/p_authoring_skills.ts" }
+      ]
+    },
+    {
+      "staticTest": "editor/test/chat_plan_card.test.mjs",
+      "authorities": [
+        { "kind": "chromium-static", "path": "editor/test/chat_behavior_browser.test.cjs" }
+      ]
+    },
+    {
+      "staticTest": "editor/test/chat_step_state.test.mjs",
+      "authorities": [
+        { "kind": "chromium-static", "path": "editor/test/chat_behavior_browser.test.cjs" }
+      ]
+    },
+    {
+      "staticTest": "editor/test/derived_population_activation_static.test.cjs",
+      "authorities": [
+        { "kind": "limina", "path": "js/test/p_derived_runtime_transport.ts" },
+        { "kind": "limina", "path": "js/test/p_biome_population_mount.ts" },
+        { "kind": "limina", "path": "js/test/p_sim_derived_activation.ts" }
+      ]
+    },
+    {
+      "staticTest": "editor/test/navigation_ui_static.test.mjs",
+      "authorities": [
+        { "kind": "chromium-static", "path": "editor/test/navigation_ui_browser.test.cjs" }
+      ]
+    },
+    {
+      "staticTest": "editor/test/orbit_controls_static.test.cjs",
+      "authorities": [
+        { "kind": "limina", "path": "js/test/p_editor_navigation.ts" },
+        { "kind": "chromium-live", "path": "editor/test/camera_navigation_browser.test.cjs" }
+      ]
+    },
+    {
+      "staticTest": "editor/test/viewport_derived_wiring_static.test.cjs",
+      "authorities": [
+        { "kind": "limina", "path": "js/test/p99_derived_verify_worker.ts" },
+        { "kind": "limina", "path": "js/test/p_derived_runtime_transport.ts" },
+        { "kind": "limina", "path": "js/test/p_sim_derived_activation.ts" },
+        { "kind": "chromium-live", "path": "editor/test/play_workflow_browser.test.cjs" }
+      ]
+    },
+    {
+      "staticTest": "editor/test/viewport_navigation_wiring_static.test.cjs",
+      "authorities": [
+        { "kind": "node-test", "path": "editor/test/navigation_destination.test.mjs" },
+        { "kind": "node-test", "path": "editor/test/navigation_state.test.mjs" },
+        { "kind": "limina", "path": "js/test/p_editor_navigation.ts" },
+        { "kind": "chromium-live", "path": "editor/test/project_navigation_browser.test.cjs" }
+      ]
+    }
+  ]
+}

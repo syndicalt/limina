@@ -69,6 +69,7 @@ async function stopLauncher(launcher) {
 
 function startLauncher(projectRoot, ports) {
   const [editorPort, uiPort, derivedPort, atlasPort] = ports;
+  const token = randomBytes(24).toString("base64url");
   const child = spawn("npm", ["run", "editor"], {
     cwd: projectRoot,
     detached: true,
@@ -81,7 +82,7 @@ function startLauncher(projectRoot, ports) {
       LIMINA_EDITOR_UI_PORT: String(uiPort),
       LIMINA_DERIVED_RUNTIME_PORT: String(derivedPort),
       LIMINA_ATLAS_PORT: String(atlasPort),
-      LIMINA_EDITOR_TOKEN: randomBytes(24).toString("base64url"),
+      LIMINA_EDITOR_TOKEN: token,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -117,12 +118,17 @@ function startLauncher(projectRoot, ports) {
     const host = output.match(/Editor host:\s+(ws:\/\/localhost:[1-9][0-9]{0,4}\/)/)?.[1];
     const atlas = output.match(/Atlas solo:\s+(http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}\/)/)?.[1];
     const derived = output.match(/Derived API:\s+(http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4})/)?.[1];
-    const token = output.match(/Editor key:\s+([A-Za-z0-9_-]{32,128})/)?.[1];
-    if (browser && host && atlas && derived && token) {
+    const capability = output.match(/Capability:\s+(\S+\/editor-capability\.json) \(private, mode 0600\)/)?.[1];
+    if (browser && host && atlas && derived && capability) {
+      if (output.includes(token)) {
+        finish(new Error("generated-water launcher exposed the raw editor capability in its output"));
+        return;
+      }
       finish(undefined, Object.freeze({
         child,
         host,
         token,
+        capability,
         editorUrl: new URL(browser).origin + "/",
         derivedUrl: derived + "/",
         atlasUrl: atlas,
@@ -174,7 +180,7 @@ async function compileFixture(atlasUrl) {
 }
 
 async function bindTerrainSource(chromium, executablePath, launch, mapAssetId) {
-  const browser = await chromium.launch({ executablePath, headless: true, args: ["--no-sandbox", "--enable-unsafe-swiftshader"] });
+  const browser = await chromium.launch({ executablePath, headless: true, args: ["--no-sandbox", "--disable-gpu", "--enable-unsafe-swiftshader"] });
   const page = await browser.newPage();
   try {
     await page.goto(launch.editorUrl, { waitUntil: "domcontentloaded" });

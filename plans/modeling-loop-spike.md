@@ -61,12 +61,12 @@ selected recipe ─► assemble ─► [STRUCTURAL GATE] ─fail→ reject/repai
                               ▼
                     headless render (canonical angles)
                               ▼
-              critique vs the card's reference image  (silhouette / proportions /
-              features present / material read → structured deltas)
+              critique vs locked measurable cues + visual floor
+              (silhouette / proportions / construction / junctions → structured deltas)
                               ▼
-                    refine recipe ──► (loop until it reads like the ref)
+                    refine program/rulebook ──► (loop until cues close)
                               ▼
-              card status: verified · recipe saved (deterministic, replayable)
+              engine evidence + exact HITL decision (deterministic, replayable)
 ```
 The structural gate runs EVERY iteration (cheap); the render+critique runs when structure is sound.
 
@@ -121,11 +121,10 @@ way).
   treatments, opening shapes) — which is an *extensible registry*, not a fixed list. Think HTML vs.
   CSS: the recipe is the structural grammar; art direction is the styling. A sci-fi outpost and a
   medieval cottage are *different vocabulary + materials in the same recipe format*. Two guard-rails
-  keep it from ever becoming a ceiling: (a) roof/wall/opening **types are a registry** new styles
-  extend; (b) a recipe part may carry **raw custom geometry** as an escape hatch, so anything the
-  vocabulary can't yet express is still buildable. The modeling LOOP is itself style-agnostic — it
-  converges toward whatever **reference** you give it; the reference defines the style, the recipe +
-  loop just hit it.
+  keep it from ever becoming a ceiling: roof/wall/opening **types are a registry** new styles extend.
+  Production buildings do not admit raw custom geometry as an escape hatch: a missing architectural
+  concept becomes a named compiler primitive/contract with invariants and tests. References inform
+  source-neutral measurable cues; they never replace program, compiler, engine, or HITL authority.
 - **Critique = me-in-the-loop** (view render-vs-reference each iteration). Works today; a vision model
   is a later drop-in, not a prerequisite.
 - **Proof scope = cottage first**, lock the machine, then generalize to longhall / watchtower.

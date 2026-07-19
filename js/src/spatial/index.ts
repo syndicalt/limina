@@ -77,10 +77,6 @@ function cellCoord(value: number, cellSize: number): number {
   return Math.floor(value / cellSize);
 }
 
-function cellKey(cx: number, cy: number, cz: number): string {
-  return `${cx},${cy},${cz}`;
-}
-
 function compareDistanceThenEntity(a: SpatialQueryEntity, b: SpatialQueryEntity): number {
   return a.distance - b.distance;
 }
@@ -118,7 +114,10 @@ function materialize(
 
 export class UniformGridSpatialIndex {
   readonly cellSize: number;
-  private readonly cells = new Map<string, IndexedEntity[]>();
+  // Nested numeric maps avoid allocating and hashing a `${x},${y},${z}` string
+  // for every entity and every candidate cell while remaining collision-free
+  // across the full safe integer coordinate range.
+  private readonly cells = new Map<number, Map<number, Map<number, IndexedEntity[]>>>();
   private readonly records: IndexedEntity[] = [];
   private indexedEntityVersion = -1;
   private indexedTransformVersion = -1;
@@ -133,6 +132,27 @@ export class UniformGridSpatialIndex {
 
   invalidate(): void {
     this.invalidationVersion++;
+  }
+
+  private cell(cx: number, cy: number, cz: number, create: boolean): IndexedEntity[] | undefined {
+    let ys = this.cells.get(cx);
+    if (ys === undefined) {
+      if (!create) return undefined;
+      ys = new Map();
+      this.cells.set(cx, ys);
+    }
+    let zs = ys.get(cy);
+    if (zs === undefined) {
+      if (!create) return undefined;
+      zs = new Map();
+      ys.set(cy, zs);
+    }
+    let bucket = zs.get(cz);
+    if (bucket === undefined && create) {
+      bucket = [];
+      zs.set(cz, bucket);
+    }
+    return bucket;
   }
 
   ensureFresh(world: SpatialWorld): boolean {
@@ -166,19 +186,18 @@ export class UniformGridSpatialIndex {
         z: Position.z[entry.eid],
       };
       this.records.push(record);
-      const key = cellKey(
+      this.cell(
         cellCoord(record.x, this.cellSize),
         cellCoord(record.y, this.cellSize),
         cellCoord(record.z, this.cellSize),
-      );
-      let bucket = this.cells.get(key);
-      if (bucket === undefined) {
-        bucket = [];
-        this.cells.set(key, bucket);
-      }
-      bucket.push(record);
+        true,
+      )!.push(record);
     }
-    for (const bucket of this.cells.values()) bucket.sort(compareRecordOrder);
+    for (const ys of this.cells.values()) {
+      for (const zs of ys.values()) {
+        for (const bucket of zs.values()) bucket.sort(compareRecordOrder);
+      }
+    }
     this.indexedEntityVersion = entityVersion(world.entities);
     this.indexedTransformVersion = transformVersion(world.transforms);
     this.indexedInvalidationVersion = this.invalidationVersion;
@@ -215,7 +234,7 @@ export class UniformGridSpatialIndex {
       for (let cy = minY; cy <= maxY; cy++) {
         for (let cz = minZ; cz <= maxZ; cz++) {
           candidateCells++;
-          const bucket = this.cells.get(cellKey(cx, cy, cz));
+          const bucket = this.cell(cx, cy, cz, false);
           if (bucket !== undefined) candidates.push(...bucket);
         }
       }

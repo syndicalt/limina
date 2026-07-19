@@ -2,79 +2,760 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { buildingCompositionManifestV2Hash, validateBuildingCompositionManifestV2 } from "../../js/src/assets/building-composition-manifest-v2.mjs";
-import { buildingInteriorPlanV2Hash, validateBuildingInteriorPlanV2 } from "../../js/src/assets/building-interior-plan-v2.mjs";
-import { validateBuildingHitlDecision, validateBuildingStageArtifact } from "../../js/src/assets/staged-building-pipeline.mjs";
-import { furnitureDesignContractHash, validateFurnitureDesignContract } from "../../js/src/architecture/furniture-design-contract.ts";
+import {
+  buildingCompositionManifestV2Hash,
+  validateBuildingCompositionManifestV2,
+} from "../../js/src/assets/building-composition-manifest-v2.mjs";
+import {
+  buildingInteriorPlanV2Hash,
+  validateBuildingInteriorPlanV2,
+} from "../../js/src/assets/building-interior-plan-v2.mjs";
+import {
+  validateBuildingHitlDecision,
+  validateBuildingStageArtifact,
+} from "../../js/src/assets/staged-building-pipeline.mjs";
+import {
+  furnitureDesignContractHash,
+  validateFurnitureDesignContract,
+} from "../../js/src/architecture/furniture-design-contract.ts";
 import { verifyFurnitureFunction } from "../../js/src/architecture/furniture-functional-verifier.ts";
 import { inspectFurnitureGlb } from "./glb-runtime-geometry.mjs";
 
-export const FURNISHED_C1_FUNCTIONAL_EVIDENCE_SCHEMA="limina.building-composition-functional-evidence/v1";
-const EXPECTED=Object.freeze({manifestId:"composition/functional-hall-house-v4/r3",supersedes:"composition/functional-hall-house-v4/r2",shellId:"shell/functional-hall-house-v4/r4",materialId:"materials/functional-hall-house-v4/r2",interiorId:"interior/functional-hall-house-v4/r4",catalogIds:Object.freeze(["furniture/dining-chair-v1/r1","furniture/dining-table-v1/r1","furniture/hearth-settle-v3/r1","furniture/service-storage-v1/r1"]),roles:Object.freeze({"dining-table":"proxy/dining-table","dining-chair":"proxy/dining-chair","hearth-settle":"proxy/hearth-settle","service-storage":"proxy/storage-shelf"})});
-const sha=bytes=>`sha256:${createHash("sha256").update(bytes).digest("hex")}`,close=(a,b,tolerance=2e-3)=>Math.abs(a-b)<=tolerance,volume=bounds=>(bounds.max[0]-bounds.min[0])*(bounds.max[1]-bounds.min[1])*(bounds.max[2]-bounds.min[2]),rotate2=([x,z],yaw)=>[Math.cos(yaw)*x+Math.sin(yaw)*z,-Math.sin(yaw)*x+Math.cos(yaw)*z];
-const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==="object"?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
-const portable=(root,path)=>relative(root,path).split(sep).join("/");
-function insideRoot(root,path){const full=resolve(root,path),rel=relative(root,full);if(rel===""||(!rel.startsWith("..")&&!rel.startsWith(`${sep}..`)&&!rel.includes(`..${sep}`)))return full;throw new Error(`resource escapes repository root: ${path}`);}
-async function exact(root,resource,label,json=false){const full=insideRoot(root,resource.path),bytes=await readFile(full),actual=sha(bytes);if(actual!==resource.sha256)throw new Error(`${label} exact bytes drifted`);return Object.freeze({path:portable(root,full),bytes,sha256:actual,...(json?{json:JSON.parse(bytes.toString("utf8"))}:{})});}
-async function artifact(root,ref,label){const full=insideRoot(root,ref.artifactPath),bytes=await readFile(full),actual=sha(bytes);if(actual!==ref.artifactSha256)throw new Error(`${label} exact artifact bytes drifted`);const value=validateBuildingStageArtifact(JSON.parse(bytes.toString("utf8")));for(const key of["artifactId","kind","status","contractHash","contentHash"])if(value[key]!==ref[key])throw new Error(`${label} artifact ${key} drifted`);return Object.freeze({path:portable(root,full),bytes,sha256:actual,json:value});}
-function exactApproval(stage,decision,label){if(decision.schema!=="limina.building-hitl-decision/v1"||decision.decision!=="approve"||decision.blockingFindings?.length!==0)throw new Error(`${label} lacks an unblocked human approval`);for(const key of["artifactId","contractHash","contentHash"])if(decision[key]!==stage[key])throw new Error(`${label} approval ${key} drifted`);}
-function obbCorners(box){const result=[];for(const x of[-box.half[0],box.half[0]])for(const z of[-box.half[1],box.half[1]]){const offset=rotate2([x,z],box.yaw);result.push([box.center[0]+offset[0],box.center[1]+offset[1]]);}return result;}
-function projection(points,axis){const values=points.map(point=>point[0]*axis[0]+point[1]*axis[1]);return[Math.min(...values),Math.max(...values)];}
-function obbOverlap(left,right,epsilon=1e-8){const a=obbCorners(left),b=obbCorners(right),axes=[rotate2([1,0],left.yaw),rotate2([0,1],left.yaw),rotate2([1,0],right.yaw),rotate2([0,1],right.yaw)];return axes.every(axis=>{const pa=projection(a,axis),pb=projection(b,axis);return pa[0]<pb[1]-epsilon&&pa[1]>pb[0]+epsilon;});}
-function segmentHitsObb(from,to,obb,padding=0){const c=Math.cos(obb.yaw),s=Math.sin(obb.yaw),local=point=>{const dx=point[0]-obb.center[0],dz=point[2]-obb.center[1];return[c*dx-s*dz,s*dx+c*dz];},a=local(from),b=local(to);let enter=0,exit=1;for(const axis of[0,1]){const delta=b[axis]-a[axis],low=-obb.half[axis]-padding,high=obb.half[axis]+padding;if(Math.abs(delta)<1e-12){if(a[axis]<low||a[axis]>high)return false;continue;}const p=(low-a[axis])/delta,q=(high-a[axis])/delta;enter=Math.max(enter,Math.min(p,q));exit=Math.min(exit,Math.max(p,q));if(enter>exit)return false;}return true;}
-function signedAngleDelta(from,to){const angle=value=>{let result=value%(Math.PI*2);if(result<0)result+=Math.PI*2;return result;};let result=angle(to)-angle(from);if(result>Math.PI)result-=Math.PI*2;if(result<-Math.PI)result+=Math.PI*2;return result;}
-function angleInSweep(candidate,from,to,padding=0){const sweep=signedAngleDelta(from,to),delta=signedAngleDelta(from,candidate);return sweep>=0?delta>=-padding&&delta<=sweep+padding:delta<=padding&&delta>=sweep-padding;}
-function doorHitsCollider(door,collider){if(collider.maxY<door.hinge[1]||collider.minY>door.hinge[1]+door.heightM)return false;const dx=collider.box.center[0]-door.hinge[0],dz=collider.box.center[1]-door.hinge[2],distance=Math.hypot(dx,dz),radius=Math.hypot(...collider.box.half);if(distance>door.radiusM+radius||distance+radius<door.leafThicknessM/2)return false;if(distance<=radius)return true;return angleInSweep(Math.atan2(dz,dx),door.closedYawRadians,door.openYawRadians,Math.asin(Math.min(1,radius/distance)));}
-function pointInFloor(room,point){return room.floorRegions.some(region=>Math.abs(point[0]-region.center[0])<=region.halfExtents[0]+1e-8&&Math.abs(point[1]-region.center[1])<=region.halfExtents[1]+1e-8);}
-function pointInBounds(bounds,point){return point.every((value,axis)=>Math.abs(value-bounds.center[axis])<=bounds.halfExtents[axis]+1e-8);}
-function circleHitsObb(center,radius,box){const delta=[center[0]-box.center[0],center[1]-box.center[1]],local=rotate2(delta,-box.yaw),x=Math.max(-box.half[0],Math.min(box.half[0],local[0])),z=Math.max(-box.half[1],Math.min(box.half[1],local[1]));return Math.hypot(local[0]-x,local[1]-z)<radius-1e-8;}
-function transformedColliders(instance,contract){return contract.colliders.map(collider=>{const offset=rotate2([collider.center[0],collider.center[2]],instance.placement.yawRadians);return Object.freeze({instanceId:instance.id,colliderId:collider.id,box:{center:[instance.placement.position[0]+offset[0],instance.placement.position[2]+offset[1]],half:[collider.halfExtents[0],collider.halfExtents[2]],yaw:instance.placement.yawRadians},minY:instance.placement.position[1]+collider.center[1]-collider.halfExtents[1],maxY:instance.placement.position[1]+collider.center[1]+collider.halfExtents[1]});});}
-
-export async function verifyFurnishedC1Composition({manifestPath,root=resolve(dirname(fileURLToPath(import.meta.url)),"../.."),outputPath,write=false,revisionBaseManifestPath}={}){
-  if(!manifestPath)throw new Error("manifestPath is required");root=resolve(root);const manifestFull=insideRoot(root,manifestPath),manifestBytes=await readFile(manifestFull),manifest=validateBuildingCompositionManifestV2(JSON.parse(manifestBytes.toString("utf8"))),checks=[];
-  let revisionBase;
-  if(revisionBaseManifestPath!==undefined){const baseFull=insideRoot(root,revisionBaseManifestPath),baseBytes=await readFile(baseFull),base=validateBuildingCompositionManifestV2(JSON.parse(baseBytes.toString("utf8")));revisionBase={full:baseFull,bytes:baseBytes,manifest:base,sha256:sha(baseBytes)};}
-  const check=async(id,evaluate)=>{try{const result=await evaluate(),findings=[...(result?.findings??[])].sort();checks.push({id,passed:findings.length===0,findings,metrics:Object.fromEntries(Object.entries(result?.metrics??{}).sort(([a],[b])=>a.localeCompare(b)))});}catch(error){checks.push({id,passed:false,findings:[error instanceof Error?error.message:String(error)],metrics:{}});}};
-  const loaded={catalog:new Map()};
-  await check("exact-approved-byte-closure",async()=>{
-    const findings=[];
-    if(revisionBase){const base=revisionBase.manifest;if(base.id!==EXPECTED.manifestId||base.revision!==3||base.supersedes!==EXPECTED.supersedes) findings.push("bounded revision base is not exact C1 r3");if(manifest.id!=="composition/functional-hall-house-v4/r4"||manifest.revision!==4||manifest.supersedes!==base.id||manifest.instances.length!==7)findings.push("bounded C1 r4 append-only identity or seven-instance inventory drifted");if(JSON.stringify(manifest.dependencies)!==JSON.stringify(base.dependencies))findings.push("bounded revision dependency closure drifted from exact C1 r3");if(JSON.stringify(manifest.coordinateSystem)!==JSON.stringify(base.coordinateSystem)||manifest.buildingId!==base.buildingId||JSON.stringify(manifest.legacyExclusions)!==JSON.stringify(base.legacyExclusions))findings.push("bounded revision building or semantic closure drifted from exact C1 r3");const baseById=new Map(base.instances.map(instance=>[instance.id,instance]));for(const instance of manifest.instances){const prior=baseById.get(instance.id);if(!prior){findings.push(`${instance.id} is not an exact C1 r3 instance`);continue;}for(const key of["kind","role","catalogArtifactId","replacesSemanticIds","bindings","constraints"])if(JSON.stringify(instance[key])!==JSON.stringify(prior[key]))findings.push(`${instance.id} protected ${key} drifted from exact C1 r3`);if(JSON.stringify(instance.placement.scale)!==JSON.stringify(prior.placement.scale)||instance.placement.position[1]!==prior.placement.position[1])findings.push(`${instance.id} changed protected scale or Y placement`);}}
-    else if(manifest.id!==EXPECTED.manifestId||manifest.revision!==3||manifest.supersedes!==EXPECTED.supersedes||manifest.instances.length!==7)findings.push("C1 r3 append-only identity or seven-instance inventory drifted");
-    const loadStage=async(dependency,label)=>{const stage=await artifact(root,dependency.artifact,label),decision=await exact(root,dependency.approvalDecision,`${label} approval`,true);exactApproval(stage.json,validateBuildingHitlDecision(decision.json),label);if(stage.json.metadata?.approval?.path!==decision.path||stage.json.metadata?.approval?.sha256!==decision.sha256)findings.push(`${label} artifact does not bind the exact decision bytes`);return{stage,decision};};
-    loaded.shell=await loadStage(manifest.dependencies.shell,"shell");loaded.shellSource=await exact(root,manifest.dependencies.shell.sourceBlend,"shell source blend");loaded.shellRuntime=await exact(root,manifest.dependencies.shell.runtimeGlb,"shell runtime GLB");
-    loaded.material=await loadStage(manifest.dependencies.materialPalette,"M1");loaded.materialLock=await exact(root,manifest.dependencies.materialPalette.materialsLock,"M1 materials lock");loaded.materialRuntime=await exact(root,manifest.dependencies.materialPalette.runtimeGlb,"M1 runtime GLB");
-    loaded.interior=await loadStage(manifest.dependencies.interiorPlan,"I1 r4");loaded.planFile=await exact(root,manifest.dependencies.interiorPlan.plan,"I1 r4 plan",true);loaded.plan=validateBuildingInteriorPlanV2(loaded.planFile.json);
-    for(const entry of manifest.dependencies.catalog){
-      const approved=await loadStage(entry,entry.role),contractFile=await exact(root,entry.designContract,`${entry.role} design contract`,true),buildFile=await exact(root,entry.buildEvidence,`${entry.role} build evidence`,true),functionalFile=await exact(root,entry.functionalEvidence,`${entry.role} functional evidence`,true),source=await exact(root,entry.sourceBlend,`${entry.role} source blend`),runtime=await exact(root,entry.runtimeGlb,`${entry.role} runtime GLB`),contract=validateFurnitureDesignContract(contractFile.json),contractHash=furnitureDesignContractHash(contract),artifactValue=approved.stage.json;
-      if(contractHash!==artifactValue.contractHash)findings.push(`${entry.role} design contract hash drifted from its approved artifact`);
-      if(functionalFile.json.verdict!=="pass"||functionalFile.json.inputs?.runtimeGlbSha256!==runtime.sha256)findings.push(`${entry.role} stored functional evidence is not an exact pass for its runtime`);
-      if(buildFile.json.asset?.sha256!==runtime.sha256||buildFile.json.sourceBlend?.sha256!==source.sha256||buildFile.json.payloadHash!==contractHash)findings.push(`${entry.role} build/source/runtime closure drifted`);
-      const metadata=artifactValue.metadata?.functionalEvidence;if(metadata?.path!==functionalFile.path||metadata?.sha256!==functionalFile.sha256||metadata?.contractPath!==contractFile.path||metadata?.contractSha256!==contractFile.sha256)findings.push(`${entry.role} approved artifact does not bind exact contract/evidence bytes`);
-      loaded.catalog.set(entry.role,{entry,stage:artifactValue,contract,contractHash,build:buildFile.json,functional:functionalFile.json,source,runtime});
+export const FURNISHED_C1_FUNCTIONAL_EVIDENCE_SCHEMA = "limina.building-composition-functional-evidence/v1";
+const EXPECTED = Object.freeze({
+  manifestId: "composition/functional-hall-house-v4/r3",
+  supersedes: "composition/functional-hall-house-v4/r2",
+  shellId: "shell/functional-hall-house-v4/r4",
+  materialId: "materials/functional-hall-house-v4/r2",
+  interiorId: "interior/functional-hall-house-v4/r4",
+  catalogIds: Object.freeze([
+    "furniture/dining-chair-v1/r1",
+    "furniture/dining-table-v1/r1",
+    "furniture/hearth-settle-v3/r1",
+    "furniture/service-storage-v1/r1",
+  ]),
+  roles: Object.freeze({
+    "dining-table": "proxy/dining-table",
+    "dining-chair": "proxy/dining-chair",
+    "hearth-settle": "proxy/hearth-settle",
+    "service-storage": "proxy/storage-shelf",
+  }),
+});
+const sha = (bytes) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+  close = (a, b, tolerance = 2e-3) => Math.abs(a - b) <= tolerance,
+  volume = (bounds) =>
+    (bounds.max[0] - bounds.min[0]) * (bounds.max[1] - bounds.min[1]) * (bounds.max[2] - bounds.min[2]),
+  rotate2 = ([x, z], yaw) => [Math.cos(yaw) * x + Math.sin(yaw) * z, -Math.sin(yaw) * x + Math.cos(yaw) * z];
+const canonical = (value) =>
+  Array.isArray(value)
+    ? value.map(canonical)
+    : value && typeof value === "object"
+      ? Object.fromEntries(
+          Object.keys(value)
+            .sort()
+            .map((key) => [key, canonical(value[key])]),
+        )
+      : value;
+const portable = (root, path) => relative(root, path).split(sep).join("/");
+function insideRoot(root, path) {
+  const full = resolve(root, path),
+    rel = relative(root, full);
+  if (rel === "" || (!rel.startsWith("..") && !rel.startsWith(`${sep}..`) && !rel.includes(`..${sep}`))) return full;
+  throw new Error(`resource escapes repository root: ${path}`);
+}
+async function exact(root, resource, label, json = false) {
+  const full = insideRoot(root, resource.path),
+    bytes = await readFile(full),
+    actual = sha(bytes);
+  if (actual !== resource.sha256) throw new Error(`${label} exact bytes drifted`);
+  return Object.freeze({
+    path: portable(root, full),
+    bytes,
+    sha256: actual,
+    ...(json ? { json: JSON.parse(bytes.toString("utf8")) } : {}),
+  });
+}
+async function artifact(root, ref, label) {
+  const full = insideRoot(root, ref.artifactPath),
+    bytes = await readFile(full),
+    actual = sha(bytes);
+  if (actual !== ref.artifactSha256) throw new Error(`${label} exact artifact bytes drifted`);
+  const value = validateBuildingStageArtifact(JSON.parse(bytes.toString("utf8")));
+  for (const key of ["artifactId", "kind", "status", "contractHash", "contentHash"])
+    if (value[key] !== ref[key]) throw new Error(`${label} artifact ${key} drifted`);
+  return Object.freeze({ path: portable(root, full), bytes, sha256: actual, json: value });
+}
+function exactApproval(stage, decision, label) {
+  if (
+    decision.schema !== "limina.building-hitl-decision/v1" ||
+    decision.decision !== "approve" ||
+    decision.blockingFindings?.length !== 0
+  )
+    throw new Error(`${label} lacks an unblocked human approval`);
+  for (const key of ["artifactId", "contractHash", "contentHash"])
+    if (decision[key] !== stage[key]) throw new Error(`${label} approval ${key} drifted`);
+}
+function obbCorners(box) {
+  const result = [];
+  for (const x of [-box.half[0], box.half[0]])
+    for (const z of [-box.half[1], box.half[1]]) {
+      const offset = rotate2([x, z], box.yaw);
+      result.push([box.center[0] + offset[0], box.center[1] + offset[1]]);
     }
-    if(loaded.shell.stage.json.artifactId!==EXPECTED.shellId||loaded.material.stage.json.artifactId!==EXPECTED.materialId||loaded.interior.stage.json.artifactId!==EXPECTED.interiorId)findings.push("shell/M1/I1 selected artifact identities drifted");if(buildingInteriorPlanV2Hash(loaded.plan)!==loaded.interior.stage.json.contractHash||loaded.planFile.sha256!==loaded.interior.stage.json.contentHash)findings.push("I1 canonical or exact plan-byte identity drifted");const catalogIds=[...loaded.catalog.values()].map(item=>item.stage.artifactId).sort();if(JSON.stringify(catalogIds)!==JSON.stringify([...EXPECTED.catalogIds]))findings.push("approved furniture catalog identity drifted");return{findings,metrics:{catalogAssets:loaded.catalog.size,instances:manifest.instances.length,resources:4+4+3+loaded.catalog.size*8}};
+  return result;
+}
+function projection(points, axis) {
+  const values = points.map((point) => point[0] * axis[0] + point[1] * axis[1]);
+  return [Math.min(...values), Math.max(...values)];
+}
+function obbOverlap(left, right, epsilon = 1e-8) {
+  const a = obbCorners(left),
+    b = obbCorners(right),
+    axes = [
+      rotate2([1, 0], left.yaw),
+      rotate2([0, 1], left.yaw),
+      rotate2([1, 0], right.yaw),
+      rotate2([0, 1], right.yaw),
+    ];
+  return axes.every((axis) => {
+    const pa = projection(a, axis),
+      pb = projection(b, axis);
+    return pa[0] < pb[1] - epsilon && pa[1] > pb[0] + epsilon;
+  });
+}
+function segmentHitsObb(from, to, obb, padding = 0) {
+  const c = Math.cos(obb.yaw),
+    s = Math.sin(obb.yaw),
+    local = (point) => {
+      const dx = point[0] - obb.center[0],
+        dz = point[2] - obb.center[1];
+      return [c * dx - s * dz, s * dx + c * dz];
+    },
+    a = local(from),
+    b = local(to);
+  let enter = 0,
+    exit = 1;
+  for (const axis of [0, 1]) {
+    const delta = b[axis] - a[axis],
+      low = -obb.half[axis] - padding,
+      high = obb.half[axis] + padding;
+    if (Math.abs(delta) < 1e-12) {
+      if (a[axis] < low || a[axis] > high) return false;
+      continue;
+    }
+    const p = (low - a[axis]) / delta,
+      q = (high - a[axis]) / delta;
+    enter = Math.max(enter, Math.min(p, q));
+    exit = Math.min(exit, Math.max(p, q));
+    if (enter > exit) return false;
+  }
+  return true;
+}
+function signedAngleDelta(from, to) {
+  const angle = (value) => {
+    let result = value % (Math.PI * 2);
+    if (result < 0) result += Math.PI * 2;
+    return result;
+  };
+  let result = angle(to) - angle(from);
+  if (result > Math.PI) result -= Math.PI * 2;
+  if (result < -Math.PI) result += Math.PI * 2;
+  return result;
+}
+function angleInSweep(candidate, from, to, padding = 0) {
+  const sweep = signedAngleDelta(from, to),
+    delta = signedAngleDelta(from, candidate);
+  return sweep >= 0 ? delta >= -padding && delta <= sweep + padding : delta <= padding && delta >= sweep - padding;
+}
+function doorHitsCollider(door, collider) {
+  if (collider.maxY < door.hinge[1] || collider.minY > door.hinge[1] + door.heightM) return false;
+  const dx = collider.box.center[0] - door.hinge[0],
+    dz = collider.box.center[1] - door.hinge[2],
+    distance = Math.hypot(dx, dz),
+    radius = Math.hypot(...collider.box.half);
+  if (distance > door.radiusM + radius || distance + radius < door.leafThicknessM / 2) return false;
+  if (distance <= radius) return true;
+  return angleInSweep(
+    Math.atan2(dz, dx),
+    door.closedYawRadians,
+    door.openYawRadians,
+    Math.asin(Math.min(1, radius / distance)),
+  );
+}
+function pointInFloor(room, point) {
+  return room.floorRegions.some(
+    (region) =>
+      Math.abs(point[0] - region.center[0]) <= region.halfExtents[0] + 1e-8 &&
+      Math.abs(point[1] - region.center[1]) <= region.halfExtents[1] + 1e-8,
+  );
+}
+function pointInBounds(bounds, point) {
+  return point.every((value, axis) => Math.abs(value - bounds.center[axis]) <= bounds.halfExtents[axis] + 1e-8);
+}
+function circleHitsObb(center, radius, box) {
+  const delta = [center[0] - box.center[0], center[1] - box.center[1]],
+    local = rotate2(delta, -box.yaw),
+    x = Math.max(-box.half[0], Math.min(box.half[0], local[0])),
+    z = Math.max(-box.half[1], Math.min(box.half[1], local[1]));
+  return Math.hypot(local[0] - x, local[1] - z) < radius - 1e-8;
+}
+function transformedColliders(instance, contract) {
+  return contract.colliders.map((collider) => {
+    const offset = rotate2([collider.center[0], collider.center[2]], instance.placement.yawRadians);
+    return Object.freeze({
+      instanceId: instance.id,
+      colliderId: collider.id,
+      box: {
+        center: [instance.placement.position[0] + offset[0], instance.placement.position[2] + offset[1]],
+        half: [collider.halfExtents[0], collider.halfExtents[2]],
+        yaw: instance.placement.yawRadians,
+      },
+      minY: instance.placement.position[1] + collider.center[1] - collider.halfExtents[1],
+      maxY: instance.placement.position[1] + collider.center[1] + collider.halfExtents[1],
+    });
+  });
+}
+
+export async function verifyFurnishedC1Composition({
+  manifestPath,
+  root = resolve(dirname(fileURLToPath(import.meta.url)), "../.."),
+  outputPath,
+  write = false,
+  revisionBaseManifestPath,
+} = {}) {
+  if (!manifestPath) throw new Error("manifestPath is required");
+  root = resolve(root);
+  const manifestFull = insideRoot(root, manifestPath),
+    manifestBytes = await readFile(manifestFull),
+    manifest = validateBuildingCompositionManifestV2(JSON.parse(manifestBytes.toString("utf8"))),
+    checks = [];
+  let revisionBase;
+  if (revisionBaseManifestPath !== undefined) {
+    const baseFull = insideRoot(root, revisionBaseManifestPath),
+      baseBytes = await readFile(baseFull),
+      base = validateBuildingCompositionManifestV2(JSON.parse(baseBytes.toString("utf8")));
+    revisionBase = { full: baseFull, bytes: baseBytes, manifest: base, sha256: sha(baseBytes) };
+  }
+  const check = async (id, evaluate) => {
+    try {
+      const result = await evaluate(),
+        findings = [...(result?.findings ?? [])].sort();
+      checks.push({
+        id,
+        passed: findings.length === 0,
+        findings,
+        metrics: Object.fromEntries(Object.entries(result?.metrics ?? {}).sort(([a], [b]) => a.localeCompare(b))),
+      });
+    } catch (error) {
+      checks.push({
+        id,
+        passed: false,
+        findings: [error instanceof Error ? error.message : String(error)],
+        metrics: {},
+      });
+    }
+  };
+  const loaded = { catalog: new Map() };
+  await check("exact-approved-byte-closure", async () => {
+    const findings = [];
+    if (revisionBase) {
+      const base = revisionBase.manifest;
+      if (base.id !== EXPECTED.manifestId || base.revision !== 3 || base.supersedes !== EXPECTED.supersedes)
+        findings.push("bounded revision base is not exact C1 r3");
+      if (
+        manifest.id !== "composition/functional-hall-house-v4/r4" ||
+        manifest.revision !== 4 ||
+        manifest.supersedes !== base.id ||
+        manifest.instances.length !== 7
+      )
+        findings.push("bounded C1 r4 append-only identity or seven-instance inventory drifted");
+      if (JSON.stringify(manifest.dependencies) !== JSON.stringify(base.dependencies))
+        findings.push("bounded revision dependency closure drifted from exact C1 r3");
+      if (
+        JSON.stringify(manifest.coordinateSystem) !== JSON.stringify(base.coordinateSystem) ||
+        manifest.buildingId !== base.buildingId ||
+        JSON.stringify(manifest.legacyExclusions) !== JSON.stringify(base.legacyExclusions)
+      )
+        findings.push("bounded revision building or semantic closure drifted from exact C1 r3");
+      const baseById = new Map(base.instances.map((instance) => [instance.id, instance]));
+      for (const instance of manifest.instances) {
+        const prior = baseById.get(instance.id);
+        if (!prior) {
+          findings.push(`${instance.id} is not an exact C1 r3 instance`);
+          continue;
+        }
+        for (const key of ["kind", "role", "catalogArtifactId", "replacesSemanticIds", "bindings", "constraints"])
+          if (JSON.stringify(instance[key]) !== JSON.stringify(prior[key]))
+            findings.push(`${instance.id} protected ${key} drifted from exact C1 r3`);
+        if (
+          JSON.stringify(instance.placement.scale) !== JSON.stringify(prior.placement.scale) ||
+          instance.placement.position[1] !== prior.placement.position[1]
+        )
+          findings.push(`${instance.id} changed protected scale or Y placement`);
+      }
+    } else if (
+      manifest.id !== EXPECTED.manifestId ||
+      manifest.revision !== 3 ||
+      manifest.supersedes !== EXPECTED.supersedes ||
+      manifest.instances.length !== 7
+    )
+      findings.push("C1 r3 append-only identity or seven-instance inventory drifted");
+    const loadStage = async (dependency, label) => {
+      const stage = await artifact(root, dependency.artifact, label),
+        decision = await exact(root, dependency.approvalDecision, `${label} approval`, true);
+      exactApproval(stage.json, validateBuildingHitlDecision(decision.json), label);
+      if (
+        stage.json.metadata?.approval?.path !== decision.path ||
+        stage.json.metadata?.approval?.sha256 !== decision.sha256
+      )
+        findings.push(`${label} artifact does not bind the exact decision bytes`);
+      return { stage, decision };
+    };
+    loaded.shell = await loadStage(manifest.dependencies.shell, "shell");
+    loaded.shellSource = await exact(root, manifest.dependencies.shell.sourceBlend, "shell source blend");
+    loaded.shellRuntime = await exact(root, manifest.dependencies.shell.runtimeGlb, "shell runtime GLB");
+    loaded.material = await loadStage(manifest.dependencies.materialPalette, "M1");
+    loaded.materialLock = await exact(root, manifest.dependencies.materialPalette.materialsLock, "M1 materials lock");
+    loaded.materialRuntime = await exact(root, manifest.dependencies.materialPalette.runtimeGlb, "M1 runtime GLB");
+    loaded.interior = await loadStage(manifest.dependencies.interiorPlan, "I1 r4");
+    loaded.planFile = await exact(root, manifest.dependencies.interiorPlan.plan, "I1 r4 plan", true);
+    loaded.plan = validateBuildingInteriorPlanV2(loaded.planFile.json);
+    for (const entry of manifest.dependencies.catalog) {
+      const approved = await loadStage(entry, entry.role),
+        contractFile = await exact(root, entry.designContract, `${entry.role} design contract`, true),
+        buildFile = await exact(root, entry.buildEvidence, `${entry.role} build evidence`, true),
+        functionalFile = await exact(root, entry.functionalEvidence, `${entry.role} functional evidence`, true),
+        source = await exact(root, entry.sourceBlend, `${entry.role} source blend`),
+        runtime = await exact(root, entry.runtimeGlb, `${entry.role} runtime GLB`),
+        contract = validateFurnitureDesignContract(contractFile.json),
+        contractHash = furnitureDesignContractHash(contract),
+        artifactValue = approved.stage.json;
+      if (contractHash !== artifactValue.contractHash)
+        findings.push(`${entry.role} design contract hash drifted from its approved artifact`);
+      if (functionalFile.json.verdict !== "pass" || functionalFile.json.inputs?.runtimeGlbSha256 !== runtime.sha256)
+        findings.push(`${entry.role} stored functional evidence is not an exact pass for its runtime`);
+      if (
+        buildFile.json.asset?.sha256 !== runtime.sha256 ||
+        buildFile.json.sourceBlend?.sha256 !== source.sha256 ||
+        buildFile.json.payloadHash !== contractHash
+      )
+        findings.push(`${entry.role} build/source/runtime closure drifted`);
+      const metadata = artifactValue.metadata?.functionalEvidence;
+      if (
+        metadata?.path !== functionalFile.path ||
+        metadata?.sha256 !== functionalFile.sha256 ||
+        metadata?.contractPath !== contractFile.path ||
+        metadata?.contractSha256 !== contractFile.sha256
+      )
+        findings.push(`${entry.role} approved artifact does not bind exact contract/evidence bytes`);
+      loaded.catalog.set(entry.role, {
+        entry,
+        stage: artifactValue,
+        contract,
+        contractHash,
+        build: buildFile.json,
+        functional: functionalFile.json,
+        source,
+        runtime,
+      });
+    }
+    if (
+      loaded.shell.stage.json.artifactId !== EXPECTED.shellId ||
+      loaded.material.stage.json.artifactId !== EXPECTED.materialId ||
+      loaded.interior.stage.json.artifactId !== EXPECTED.interiorId
+    )
+      findings.push("shell/M1/I1 selected artifact identities drifted");
+    if (
+      buildingInteriorPlanV2Hash(loaded.plan) !== loaded.interior.stage.json.contractHash ||
+      loaded.planFile.sha256 !== loaded.interior.stage.json.contentHash
+    )
+      findings.push("I1 canonical or exact plan-byte identity drifted");
+    const catalogIds = [...loaded.catalog.values()].map((item) => item.stage.artifactId).sort();
+    if (JSON.stringify(catalogIds) !== JSON.stringify([...EXPECTED.catalogIds]))
+      findings.push("approved furniture catalog identity drifted");
+    return {
+      findings,
+      metrics: {
+        catalogAssets: loaded.catalog.size,
+        instances: manifest.instances.length,
+        resources: 4 + 4 + 3 + loaded.catalog.size * 8,
+      },
+    };
   });
 
-  await check("approved-m1-runtime-provenance",async()=>{const findings=[];if(!loaded.material)return{findings:["exact byte closure did not load M1"],metrics:{}};const m=loaded.material.stage.json,s=loaded.shell.stage.json,facets=new Map(m.facets.map(entry=>[entry.scope,entry.hash]));if(!["role-contract","source-lock","surface-parameters","runtime-textures","encoding-budget"].every(scope=>facets.has(scope)))findings.push("M1 approved facet closure is incomplete");if(m.metadata?.materialsLock?.path!==loaded.materialLock.path||m.metadata?.materialsLock?.sha256!==loaded.materialLock.sha256)findings.push("M1 materials lock provenance drifted");if(m.metadata?.derivedRuntime?.path!==loaded.materialRuntime.path||m.metadata?.derivedRuntime?.sha256!==loaded.materialRuntime.sha256||m.contentHash!==loaded.materialRuntime.sha256)findings.push("M1 runtime provenance drifted");if(m.metadata?.approvedShell?.artifactId!==s.artifactId||m.metadata?.approvedShell?.contractHash!==s.contractHash||m.metadata?.approvedShell?.contentHash!==s.contentHash)findings.push("M1 no longer derives from the exact approved shell");for(const item of loaded.catalog.values()){const input=item.stage.inputs?.find(entry=>entry.artifactId===m.artifactId&&entry.kind==="material-palette");if(!input||input.facets.some(facet=>facets.get(facet.scope)!==facet.hash))findings.push(`${item.entry.role} material input does not resolve exact approved M1 facets`);}return{findings,metrics:{materialFacets:facets.size,runtimeBytes:loaded.materialRuntime.bytes.length}};});
+  await check("approved-m1-runtime-provenance", async () => {
+    const findings = [];
+    if (!loaded.material) return { findings: ["exact byte closure did not load M1"], metrics: {} };
+    const m = loaded.material.stage.json,
+      s = loaded.shell.stage.json,
+      facets = new Map(m.facets.map((entry) => [entry.scope, entry.hash]));
+    if (
+      !["role-contract", "source-lock", "surface-parameters", "runtime-textures", "encoding-budget"].every((scope) =>
+        facets.has(scope),
+      )
+    )
+      findings.push("M1 approved facet closure is incomplete");
+    if (
+      m.metadata?.materialsLock?.path !== loaded.materialLock.path ||
+      m.metadata?.materialsLock?.sha256 !== loaded.materialLock.sha256
+    )
+      findings.push("M1 materials lock provenance drifted");
+    if (
+      m.metadata?.derivedRuntime?.path !== loaded.materialRuntime.path ||
+      m.metadata?.derivedRuntime?.sha256 !== loaded.materialRuntime.sha256 ||
+      m.contentHash !== loaded.materialRuntime.sha256
+    )
+      findings.push("M1 runtime provenance drifted");
+    if (
+      m.metadata?.approvedShell?.artifactId !== s.artifactId ||
+      m.metadata?.approvedShell?.contractHash !== s.contractHash ||
+      m.metadata?.approvedShell?.contentHash !== s.contentHash
+    )
+      findings.push("M1 no longer derives from the exact approved shell");
+    for (const item of loaded.catalog.values()) {
+      const input = item.stage.inputs?.find(
+        (entry) => entry.artifactId === m.artifactId && entry.kind === "material-palette",
+      );
+      if (!input || input.facets.some((facet) => facets.get(facet.scope) !== facet.hash))
+        findings.push(`${item.entry.role} material input does not resolve exact approved M1 facets`);
+    }
+    return { findings, metrics: { materialFacets: facets.size, runtimeBytes: loaded.materialRuntime.bytes.length } };
+  });
 
-  await check("furniture-functional-rerun-i1-r4",async()=>{const findings=[],i1={artifact:loaded.interior.stage.json,plan:loaded.plan,canonicalPlanHash:buildingInteriorPlanV2Hash(loaded.plan),planContentHash:loaded.planFile.sha256};for(const [role,item]of loaded.catalog){try{const inspected=inspectFurnitureGlb(item.runtime.bytes,item.contract),build={...item.build,glbValidation:{...item.build.glbValidation,pivot:inspected.pivot,partBounds:inspected.partBounds}};if(item.build.bounds.min.some((value,axis)=>!close(value,inspected.bounds.min[axis],1e-6))||item.build.bounds.max.some((value,axis)=>!close(value,inspected.bounds.max[axis],1e-6)))findings.push(`${role} independent GLB bounds drifted from build evidence`);const evidence=verifyFurnitureFunction({contract:item.contract,contractHash:item.contractHash,buildEvidence:build,runtimeGlbSha256:item.runtime.sha256,approvedI1:i1,selectedProxyArchetypeId:EXPECTED.roles[role],placementClosurePolicy:"current-composition-i1"});item.inspected=inspected;item.rerun=evidence;if(evidence.verdict!=="pass")findings.push(`${role} failed I1 r4 functional re-run: ${evidence.checks.filter(entry=>!entry.passed).map(entry=>entry.id).join(",")}`);}catch(error){findings.push(`${role} functional re-run error: ${error instanceof Error?error.message:String(error)}`);}}return{findings,metrics:{passed:[...loaded.catalog.values()].filter(item=>item.rerun?.verdict==="pass").length,rerunAssets:loaded.catalog.size}};});
+  await check("furniture-functional-rerun-i1-r4", async () => {
+    const findings = [],
+      i1 = {
+        artifact: loaded.interior.stage.json,
+        plan: loaded.plan,
+        canonicalPlanHash: buildingInteriorPlanV2Hash(loaded.plan),
+        planContentHash: loaded.planFile.sha256,
+      };
+    for (const [role, item] of loaded.catalog) {
+      try {
+        const inspected = inspectFurnitureGlb(item.runtime.bytes, item.contract),
+          build = {
+            ...item.build,
+            glbValidation: { ...item.build.glbValidation, pivot: inspected.pivot, partBounds: inspected.partBounds },
+          };
+        if (
+          item.build.bounds.min.some((value, axis) => !close(value, inspected.bounds.min[axis], 1e-6)) ||
+          item.build.bounds.max.some((value, axis) => !close(value, inspected.bounds.max[axis], 1e-6))
+        )
+          findings.push(`${role} independent GLB bounds drifted from build evidence`);
+        const evidence = verifyFurnitureFunction({
+          contract: item.contract,
+          contractHash: item.contractHash,
+          buildEvidence: build,
+          runtimeGlbSha256: item.runtime.sha256,
+          approvedI1: i1,
+          selectedProxyArchetypeId: EXPECTED.roles[role],
+          placementClosurePolicy: "current-composition-i1",
+        });
+        item.inspected = inspected;
+        item.rerun = evidence;
+        if (evidence.verdict !== "pass")
+          findings.push(
+            `${role} failed I1 r4 functional re-run: ${evidence.checks
+              .filter((entry) => !entry.passed)
+              .map((entry) => entry.id)
+              .join(",")}`,
+          );
+      } catch (error) {
+        findings.push(`${role} functional re-run error: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return {
+      findings,
+      metrics: {
+        passed: [...loaded.catalog.values()].filter((item) => item.rerun?.verdict === "pass").length,
+        rerunAssets: loaded.catalog.size,
+      },
+    };
+  });
 
-  const composition=[];
-  await check("seven-exact-i1-transforms-support-containment",async()=>{const findings=[],placements=new Map(loaded.plan.placements.map(entry=>[entry.id,entry])),rooms=new Map(loaded.plan.rooms.map(entry=>[entry.id,entry])),zones=new Map(loaded.plan.zones.map(entry=>[entry.id,entry]));for(const instance of manifest.instances){const replaced=instance.replacesSemanticIds;if(replaced.length!==1||!placements.has(replaced[0])){findings.push(`${instance.id} does not replace exactly one real I1 placement`);continue;}const placement=placements.get(replaced[0]),item=loaded.catalog.get(instance.role),exactTransform=!revisionBase;if(placement.archetypeId!==EXPECTED.roles[instance.role]||(exactTransform&&(placement.position.some((value,axis)=>!close(value,instance.placement.position[axis],1e-9))||!close(placement.yawRadians,instance.placement.yawRadians,1e-9)))||placement.roomId!==instance.bindings.roomId||placement.zoneId!==instance.bindings.zoneId||placement.supportSocketId!==instance.bindings.supportSocketId||placement.facingTargetId!==instance.bindings.facingTargetId)findings.push(`${instance.id} transform/archetype/bindings drifted from exact I1 r4`);const support=loaded.plan.surfaceSockets.find(entry=>entry.id===instance.bindings.supportSocketId),room=rooms.get(instance.bindings.roomId),zone=zones.get(instance.bindings.zoneId),colliders=transformedColliders(instance,item.contract);if(!support||support.kind!=="floor"||support.position.some((value,axis)=>!close(value,instance.placement.position[axis],.05))||support.normal[1]<.999) findings.push(`${instance.id} lacks exact floor support`);const requiredMass=(item.inspected?.partBounds??item.build.glbValidation.partBounds??[]).reduce((sum,entry)=>sum+volume(entry.bounds)*650,0)+(item.contract.chair?.ratedLoadKg??item.contract.settle?.ratedLoadKg??(item.contract.storage?item.contract.storage.ratedLoadKgPerTier*item.contract.storage.tierPartIds.length:0));if(!support||support.capacityKg+1e-8<requiredMass)findings.push(`${instance.id} floor capacity is below furniture plus rated load`);if(!close(instance.placement.position[1]+item.build.bounds.min[1],instance.constraints.floorContact.targetY,instance.constraints.floorContact.toleranceM)||instance.constraints.floorContact.surfaceId!==support?.surfaceId)findings.push(`${instance.id} runtime floor contact drifted`);for(const collider of colliders){if(!room||!zone||collider.minY<room.finishedFloorY-.01||collider.maxY>room.ceilingY+.01||obbCorners(collider.box).some(point=>!pointInFloor(room,point))||obbCorners(collider.box).some(point=>!pointInBounds(zone.bounds,[point[0],(collider.minY+collider.maxY)/2,point[1]])))findings.push(`${instance.id}/${collider.colliderId} escapes room/zone containment`);}composition.push({instance,item,placement,colliders});}if(new Set(composition.map(entry=>entry.placement.id)).size!==7)findings.push("composition does not cover seven unique exact I1 placements");return{findings,metrics:{instances:composition.length,transformedColliders:composition.reduce((sum,entry)=>sum+entry.colliders.length,0)}};});
+  const composition = [];
+  await check("seven-exact-i1-transforms-support-containment", async () => {
+    const findings = [],
+      placements = new Map(loaded.plan.placements.map((entry) => [entry.id, entry])),
+      rooms = new Map(loaded.plan.rooms.map((entry) => [entry.id, entry])),
+      zones = new Map(loaded.plan.zones.map((entry) => [entry.id, entry]));
+    for (const instance of manifest.instances) {
+      const replaced = instance.replacesSemanticIds;
+      if (replaced.length !== 1 || !placements.has(replaced[0])) {
+        findings.push(`${instance.id} does not replace exactly one real I1 placement`);
+        continue;
+      }
+      const placement = placements.get(replaced[0]),
+        item = loaded.catalog.get(instance.role),
+        exactTransform = !revisionBase;
+      if (
+        placement.archetypeId !== EXPECTED.roles[instance.role] ||
+        (exactTransform &&
+          (placement.position.some((value, axis) => !close(value, instance.placement.position[axis], 1e-9)) ||
+            !close(placement.yawRadians, instance.placement.yawRadians, 1e-9))) ||
+        placement.roomId !== instance.bindings.roomId ||
+        placement.zoneId !== instance.bindings.zoneId ||
+        placement.supportSocketId !== instance.bindings.supportSocketId ||
+        placement.facingTargetId !== instance.bindings.facingTargetId
+      )
+        findings.push(`${instance.id} transform/archetype/bindings drifted from exact I1 r4`);
+      const support = loaded.plan.surfaceSockets.find((entry) => entry.id === instance.bindings.supportSocketId),
+        room = rooms.get(instance.bindings.roomId),
+        zone = zones.get(instance.bindings.zoneId),
+        colliders = transformedColliders(instance, item.contract);
+      if (
+        !support ||
+        support.kind !== "floor" ||
+        support.position.some((value, axis) => !close(value, instance.placement.position[axis], 0.05)) ||
+        support.normal[1] < 0.999
+      )
+        findings.push(`${instance.id} lacks exact floor support`);
+      const requiredMass =
+        (item.inspected?.partBounds ?? item.build.glbValidation.partBounds ?? []).reduce(
+          (sum, entry) => sum + volume(entry.bounds) * 650,
+          0,
+        ) +
+        (item.contract.chair?.ratedLoadKg ??
+          item.contract.settle?.ratedLoadKg ??
+          (item.contract.storage
+            ? item.contract.storage.ratedLoadKgPerTier * item.contract.storage.tierPartIds.length
+            : 0));
+      if (!support || support.capacityKg + 1e-8 < requiredMass)
+        findings.push(`${instance.id} floor capacity is below furniture plus rated load`);
+      if (
+        !close(
+          instance.placement.position[1] + item.build.bounds.min[1],
+          instance.constraints.floorContact.targetY,
+          instance.constraints.floorContact.toleranceM,
+        ) ||
+        instance.constraints.floorContact.surfaceId !== support?.surfaceId
+      )
+        findings.push(`${instance.id} runtime floor contact drifted`);
+      for (const collider of colliders) {
+        if (
+          !room ||
+          !zone ||
+          collider.minY < room.finishedFloorY - 0.01 ||
+          collider.maxY > room.ceilingY + 0.01 ||
+          obbCorners(collider.box).some((point) => !pointInFloor(room, point)) ||
+          obbCorners(collider.box).some(
+            (point) => !pointInBounds(zone.bounds, [point[0], (collider.minY + collider.maxY) / 2, point[1]]),
+          )
+        )
+          findings.push(`${instance.id}/${collider.colliderId} escapes room/zone containment`);
+      }
+      composition.push({ instance, item, placement, colliders });
+    }
+    if (new Set(composition.map((entry) => entry.placement.id)).size !== 7)
+      findings.push("composition does not cover seven unique exact I1 placements");
+    return {
+      findings,
+      metrics: {
+        instances: composition.length,
+        transformedColliders: composition.reduce((sum, entry) => sum + entry.colliders.length, 0),
+      },
+    };
+  });
 
-  await check("transformed-compound-collider-separation",async()=>{const findings=[];for(let leftIndex=0;leftIndex<composition.length;leftIndex++)for(let rightIndex=leftIndex+1;rightIndex<composition.length;rightIndex++)for(const left of composition[leftIndex].colliders)for(const right of composition[rightIndex].colliders)if(left.minY<right.maxY-1e-8&&left.maxY>right.minY+1e-8&&obbOverlap(left.box,right.box))findings.push(`${left.instanceId}/${left.colliderId} intersects ${right.instanceId}/${right.colliderId}`);return{findings,metrics:{instancePairs:composition.length*(composition.length-1)/2}};});
+  await check("transformed-compound-collider-separation", async () => {
+    const findings = [];
+    for (let leftIndex = 0; leftIndex < composition.length; leftIndex++)
+      for (let rightIndex = leftIndex + 1; rightIndex < composition.length; rightIndex++)
+        for (const left of composition[leftIndex].colliders)
+          for (const right of composition[rightIndex].colliders)
+            if (left.minY < right.maxY - 1e-8 && left.maxY > right.minY + 1e-8 && obbOverlap(left.box, right.box))
+              findings.push(`${left.instanceId}/${left.colliderId} intersects ${right.instanceId}/${right.colliderId}`);
+    return { findings, metrics: { instancePairs: (composition.length * (composition.length - 1)) / 2 } };
+  });
 
-  await check("interaction-sockets-clearances-facing",async()=>{const findings=[],targets=new Map(loaded.plan.facingTargets.map(entry=>[entry.id,entry]));for(const entry of composition){const{instance,item,placement}=entry,composed=instance.placement,sockets=new Map(item.contract.sockets.map(socket=>[socket.id,socket])),occupancy=item.contract.sockets.filter(socket=>socket.kind==="occupancy").map(socket=>socket.id),approach=item.contract.sockets.filter(socket=>socket.kind==="approach").map(socket=>socket.id),clearances=loaded.plan.interactionClearances.filter(clearance=>clearance.placementId===placement.id);if(JSON.stringify([...instance.bindings.occupancySocketIds].sort())!==JSON.stringify(occupancy.sort())||JSON.stringify([...instance.bindings.approachSocketIds].sort())!==JSON.stringify(approach.sort()))findings.push(`${instance.id} socket bindings drifted from exact contract semantics`);if(JSON.stringify([...instance.bindings.clearanceIds].sort())!==JSON.stringify(clearances.map(value=>value.id).sort()))findings.push(`${instance.id} clearance bindings drifted from exact I1 r4`);for(const clearance of clearances){if(clearance.kind==="occupancy"){const candidates=instance.bindings.occupancySocketIds.map(id=>sockets.get(id)).filter(Boolean),matched=candidates.some(socket=>{const offset=rotate2([socket.position[0],socket.position[2]],composed.yawRadians);return Math.hypot(composed.position[0]+offset[0]-clearance.center[0],composed.position[2]+offset[1]-clearance.center[2])<=.002&&socket.clearanceRadiusM<=clearance.radiusM+.002;});if(!matched)findings.push(`${instance.id} occupancy clearance does not resolve a transformed real seat socket`);}else for(const other of composition)for(const collider of other.colliders)if(circleHitsObb([clearance.center[0],clearance.center[2]],clearance.radiusM,collider.box))findings.push(`${instance.id} approach clearance intersects ${other.instance.id}/${collider.colliderId}`);}
-      if(instance.constraints.facing){const target=targets.get(instance.bindings.facingTargetId);if(!target)findings.push(`${instance.id} lacks exact facing target`);else for(const socketId of instance.constraints.facing.socketIds){const socket=sockets.get(socketId);if(!socket){findings.push(`${instance.id} facing socket ${socketId} is absent`);continue;}const offset=rotate2([socket.position[0],socket.position[2]],composed.yawRadians),world=[composed.position[0]+offset[0],composed.position[2]+offset[1]],forward=rotate2([socket.facing[0],socket.facing[2]],composed.yawRadians),delta=[target.position[0]-world[0],target.position[2]-world[1]],length=Math.hypot(...delta),dot=length>0?(forward[0]*delta[0]+forward[1]*delta[1])/length:-1;if(dot<instance.constraints.facing.minimumDot)findings.push(`${instance.id}/${socketId} does not face its exact target`);}}
-    }return{findings,metrics:{clearances:loaded.plan.interactionClearances.length,facingInstances:composition.filter(entry=>entry.instance.constraints.facing).length}};});
+  await check("interaction-sockets-clearances-facing", async () => {
+    const findings = [],
+      targets = new Map(loaded.plan.facingTargets.map((entry) => [entry.id, entry]));
+    for (const entry of composition) {
+      const { instance, item, placement } = entry,
+        composed = instance.placement,
+        sockets = new Map(item.contract.sockets.map((socket) => [socket.id, socket])),
+        occupancy = item.contract.sockets.filter((socket) => socket.kind === "occupancy").map((socket) => socket.id),
+        approach = item.contract.sockets.filter((socket) => socket.kind === "approach").map((socket) => socket.id),
+        clearances = loaded.plan.interactionClearances.filter((clearance) => clearance.placementId === placement.id);
+      if (
+        JSON.stringify([...instance.bindings.occupancySocketIds].sort()) !== JSON.stringify(occupancy.sort()) ||
+        JSON.stringify([...instance.bindings.approachSocketIds].sort()) !== JSON.stringify(approach.sort())
+      )
+        findings.push(`${instance.id} socket bindings drifted from exact contract semantics`);
+      if (
+        JSON.stringify([...instance.bindings.clearanceIds].sort()) !==
+        JSON.stringify(clearances.map((value) => value.id).sort())
+      )
+        findings.push(`${instance.id} clearance bindings drifted from exact I1 r4`);
+      for (const clearance of clearances) {
+        if (clearance.kind === "occupancy") {
+          const candidates = instance.bindings.occupancySocketIds.map((id) => sockets.get(id)).filter(Boolean),
+            matched = candidates.some((socket) => {
+              const offset = rotate2([socket.position[0], socket.position[2]], composed.yawRadians);
+              return (
+                Math.hypot(
+                  composed.position[0] + offset[0] - clearance.center[0],
+                  composed.position[2] + offset[1] - clearance.center[2],
+                ) <= 0.002 && socket.clearanceRadiusM <= clearance.radiusM + 0.002
+              );
+            });
+          if (!matched)
+            findings.push(`${instance.id} occupancy clearance does not resolve a transformed real seat socket`);
+        } else
+          for (const other of composition)
+            for (const collider of other.colliders)
+              if (circleHitsObb([clearance.center[0], clearance.center[2]], clearance.radiusM, collider.box))
+                findings.push(
+                  `${instance.id} approach clearance intersects ${other.instance.id}/${collider.colliderId}`,
+                );
+      }
+      if (instance.constraints.facing) {
+        const target = targets.get(instance.bindings.facingTargetId);
+        if (!target) findings.push(`${instance.id} lacks exact facing target`);
+        else
+          for (const socketId of instance.constraints.facing.socketIds) {
+            const socket = sockets.get(socketId);
+            if (!socket) {
+              findings.push(`${instance.id} facing socket ${socketId} is absent`);
+              continue;
+            }
+            const offset = rotate2([socket.position[0], socket.position[2]], composed.yawRadians),
+              world = [composed.position[0] + offset[0], composed.position[2] + offset[1]],
+              forward = rotate2([socket.facing[0], socket.facing[2]], composed.yawRadians),
+              delta = [target.position[0] - world[0], target.position[2] - world[1]],
+              length = Math.hypot(...delta),
+              dot = length > 0 ? (forward[0] * delta[0] + forward[1] * delta[1]) / length : -1;
+            if (dot < instance.constraints.facing.minimumDot)
+              findings.push(`${instance.id}/${socketId} does not face its exact target`);
+          }
+      }
+    }
+    return {
+      findings,
+      metrics: {
+        clearances: loaded.plan.interactionClearances.length,
+        facingInstances: composition.filter((entry) => entry.instance.constraints.facing).length,
+      },
+    };
+  });
 
-  await check("door-circulation-hearth-exclusions",async()=>{const findings=[],nodes=new Map(loaded.plan.navigation.nodes.map(node=>[node.id,node]));for(const entry of composition)for(const collider of entry.colliders){for(const door of loaded.plan.doorSweeps)if(door.roomId===entry.instance.bindings.roomId&&doorHitsCollider(door,collider))findings.push(`${entry.instance.id}/${collider.colliderId} intersects ${door.id}`);for(const edge of loaded.plan.navigation.edges){const from=nodes.get(edge.fromNodeId),to=nodes.get(edge.toNodeId);if(from?.roomId===entry.instance.bindings.roomId&&segmentHitsObb(from.position,to.position,collider.box,edge.halfWidthM)&&collider.minY<from.position[1]+edge.clearHeightM)findings.push(`${entry.instance.id}/${collider.colliderId} intersects circulation ${edge.id}`);}for(const hearth of loaded.plan.hearthExclusions){if(hearth.roomId!==entry.instance.bindings.roomId)continue;const frontOffset=hearth.halfExtents[1]+hearth.minimumClearanceM/2,front={center:[hearth.center[0]+Math.sin(hearth.yawRadians)*frontOffset,hearth.center[2]+Math.cos(hearth.yawRadians)*frontOffset],half:[hearth.halfExtents[0]+hearth.minimumClearanceM,hearth.minimumClearanceM/2],yaw:hearth.yawRadians};if(collider.minY<hearth.center[1]+hearth.heightM&&collider.maxY>hearth.center[1]&&obbOverlap(collider.box,front))findings.push(`${entry.instance.id}/${collider.colliderId} violates ${hearth.id}`);}}return{findings,metrics:{circulationEdges:loaded.plan.navigation.edges.length,doorSweeps:loaded.plan.doorSweeps.length,hearthExclusions:loaded.plan.hearthExclusions.length}};});
+  await check("door-circulation-hearth-exclusions", async () => {
+    const findings = [],
+      nodes = new Map(loaded.plan.navigation.nodes.map((node) => [node.id, node]));
+    for (const entry of composition)
+      for (const collider of entry.colliders) {
+        for (const door of loaded.plan.doorSweeps)
+          if (door.roomId === entry.instance.bindings.roomId && doorHitsCollider(door, collider))
+            findings.push(`${entry.instance.id}/${collider.colliderId} intersects ${door.id}`);
+        for (const edge of loaded.plan.navigation.edges) {
+          const from = nodes.get(edge.fromNodeId),
+            to = nodes.get(edge.toNodeId);
+          if (
+            from?.roomId === entry.instance.bindings.roomId &&
+            segmentHitsObb(from.position, to.position, collider.box, edge.halfWidthM) &&
+            collider.minY < from.position[1] + edge.clearHeightM
+          )
+            findings.push(`${entry.instance.id}/${collider.colliderId} intersects circulation ${edge.id}`);
+        }
+        for (const hearth of loaded.plan.hearthExclusions) {
+          if (hearth.roomId !== entry.instance.bindings.roomId) continue;
+          const frontOffset = hearth.halfExtents[1] + hearth.minimumClearanceM / 2,
+            front = {
+              center: [
+                hearth.center[0] + Math.sin(hearth.yawRadians) * frontOffset,
+                hearth.center[2] + Math.cos(hearth.yawRadians) * frontOffset,
+              ],
+              half: [hearth.halfExtents[0] + hearth.minimumClearanceM, hearth.minimumClearanceM / 2],
+              yaw: hearth.yawRadians,
+            };
+          if (
+            collider.minY < hearth.center[1] + hearth.heightM &&
+            collider.maxY > hearth.center[1] &&
+            obbOverlap(collider.box, front)
+          )
+            findings.push(`${entry.instance.id}/${collider.colliderId} violates ${hearth.id}`);
+        }
+      }
+    return {
+      findings,
+      metrics: {
+        circulationEdges: loaded.plan.navigation.edges.length,
+        doorSweeps: loaded.plan.doorSweeps.length,
+        hearthExclusions: loaded.plan.hearthExclusions.length,
+      },
+    };
+  });
 
-  await check("semantic-uniqueness-proxy-legacy-removal",async()=>{const findings=[],replaced=manifest.instances.flatMap(instance=>instance.replacesSemanticIds),legacy=[...manifest.legacyExclusions];if(new Set(manifest.instances.map(entry=>entry.id)).size!==7||new Set(replaced).size!==7)findings.push("instance or replacement semantic identities are not unique");if(JSON.stringify([...replaced].sort())!==JSON.stringify([...legacy].sort())||JSON.stringify([...legacy].sort())!==JSON.stringify(loaded.plan.placements.map(entry=>entry.id).sort()))findings.push("legacy exclusions do not exactly remove all seven I1 proxies");if(manifest.dependencies.catalog.some(entry=>/hearth-settle\/v(?:1|2)(?:-|\/|$)/.test(entry.artifact.artifactId)))findings.push("legacy oversized settle remains in the C1 catalog");if(manifest.instances.some(instance=>instance.replacesSemanticIds.some(id=>!id.startsWith("placement/"))))findings.push("composition invents non-I1 replacement semantics");return{findings,metrics:{legacyExclusions:legacy.length,replacedSemantics:replaced.length,uniqueInstances:new Set(manifest.instances.map(entry=>entry.id)).size}};});
+  await check("semantic-uniqueness-proxy-legacy-removal", async () => {
+    const findings = [],
+      replaced = manifest.instances.flatMap((instance) => instance.replacesSemanticIds),
+      legacy = [...manifest.legacyExclusions];
+    if (new Set(manifest.instances.map((entry) => entry.id)).size !== 7 || new Set(replaced).size !== 7)
+      findings.push("instance or replacement semantic identities are not unique");
+    if (
+      JSON.stringify([...replaced].sort()) !== JSON.stringify([...legacy].sort()) ||
+      JSON.stringify([...legacy].sort()) !== JSON.stringify(loaded.plan.placements.map((entry) => entry.id).sort())
+    )
+      findings.push("legacy exclusions do not exactly remove all seven I1 proxies");
+    if (
+      manifest.dependencies.catalog.some((entry) => /hearth-settle\/v(?:1|2)(?:-|\/|$)/.test(entry.artifact.artifactId))
+    )
+      findings.push("legacy oversized settle remains in the C1 catalog");
+    if (manifest.instances.some((instance) => instance.replacesSemanticIds.some((id) => !id.startsWith("placement/"))))
+      findings.push("composition invents non-I1 replacement semantics");
+    return {
+      findings,
+      metrics: {
+        legacyExclusions: legacy.length,
+        replacedSemantics: replaced.length,
+        uniqueInstances: new Set(manifest.instances.map((entry) => entry.id)).size,
+      },
+    };
+  });
 
-  const failed=checks.filter(entry=>!entry.passed).length,evidence=Object.freeze({schema:FURNISHED_C1_FUNCTIONAL_EVIDENCE_SCHEMA,verdict:failed===0?"pass":"fail",inputs:{manifestId:manifest.id,manifestHash:buildingCompositionManifestV2Hash(manifest),manifestSha256:sha(manifestBytes),shellArtifactId:manifest.dependencies.shell.artifact.artifactId,materialArtifactId:manifest.dependencies.materialPalette.artifact.artifactId,interiorArtifactId:manifest.dependencies.interiorPlan.artifact.artifactId},checks,summary:{passed:checks.length-failed,failed}});
-  if(write){if(!outputPath)throw new Error("outputPath is required when writing");const output=insideRoot(root,outputPath);await mkdir(dirname(output),{recursive:true,mode:0o700});await writeFile(output,`${JSON.stringify(canonical(evidence))}\n`,{flag:"wx",mode:0o600});}
+  const failed = checks.filter((entry) => !entry.passed).length,
+    evidence = Object.freeze({
+      schema: FURNISHED_C1_FUNCTIONAL_EVIDENCE_SCHEMA,
+      verdict: failed === 0 ? "pass" : "fail",
+      inputs: {
+        manifestId: manifest.id,
+        manifestHash: buildingCompositionManifestV2Hash(manifest),
+        manifestSha256: sha(manifestBytes),
+        shellArtifactId: manifest.dependencies.shell.artifact.artifactId,
+        materialArtifactId: manifest.dependencies.materialPalette.artifact.artifactId,
+        interiorArtifactId: manifest.dependencies.interiorPlan.artifact.artifactId,
+      },
+      checks,
+      summary: { passed: checks.length - failed, failed },
+    });
+  if (write) {
+    if (!outputPath) throw new Error("outputPath is required when writing");
+    const output = insideRoot(root, outputPath);
+    await mkdir(dirname(output), { recursive: true, mode: 0o700 });
+    await writeFile(output, `${JSON.stringify(canonical(evidence))}\n`, { flag: "wx", mode: 0o600 });
+  }
   return evidence;
 }
 
-if(import.meta.url===pathToFileURL(process.argv[1]??"").href){const args=process.argv.slice(2),at=flag=>{const index=args.indexOf(flag);if(index<0||!args[index+1])throw new Error(`missing ${flag}`);return args[index+1];};const evidence=await verifyFurnishedC1Composition({manifestPath:at("--manifest"),outputPath:at("--out"),write:true});console.log(JSON.stringify({schema:evidence.schema,verdict:evidence.verdict,failed:evidence.summary.failed,output:at("--out")},null,2));if(evidence.verdict!=="pass")process.exitCode=2;}
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  const args = process.argv.slice(2),
+    at = (flag) => {
+      const index = args.indexOf(flag);
+      if (index < 0 || !args[index + 1]) throw new Error(`missing ${flag}`);
+      return args[index + 1];
+    };
+  const evidence = await verifyFurnishedC1Composition({
+    manifestPath: at("--manifest"),
+    outputPath: at("--out"),
+    write: true,
+  });
+  console.log(
+    JSON.stringify(
+      { schema: evidence.schema, verdict: evidence.verdict, failed: evidence.summary.failed, output: at("--out") },
+      null,
+      2,
+    ),
+  );
+  if (evidence.verdict !== "pass") process.exitCode = 2;
+}

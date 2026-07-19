@@ -30,7 +30,7 @@ function makeWorld(worldOps: EngineOps): WorldContext {
     ops: worldOps, mode: "headless", simWorker: true } as WorldContext;
 }
 
-const assetPath = "buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-d0ca1e327841/functional-hall-house-fb4-multi-room.glb";
+const assetPath = "buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-1b4470041e01/functional-hall-house-fb4-multi-room.glb";
 const bytes = ops.op_read_asset(assetPath), parsed = parseFunctionalBuildingContract(bytes);
 assert(parsed.schema === "limina.functional-building/v2", "candidate lost v2 functional authority");
 const contract = parsed as FunctionalBuildingContractV2;

@@ -57,6 +57,49 @@ export interface BuildingVolumeSpec {
   supportVolumeIds?: readonly string[];
   openings?: readonly VolumeOpeningSpec[];
 }
+/**
+ * Compiler-owned, habitable cross-gable projection. The authored ids are
+ * deliberately explicit so program synthesis and functional evidence can bind
+ * the derived structure without reproducing any geometry calculations.
+ *
+ * The compiler derives a rectangular volume and foundation outside exactly one
+ * host edge, suppresses the coincident rear wall, cuts one reciprocal passage
+ * in the host wall, emits one front window, and terminates both cross-gable
+ * planes against the declared upper headwall with continuous flashing.
+ */
+export interface AttachedBaySpec {
+  id: string;
+  hostVolumeId: string;
+  hostEdgeIndex: number;
+  headwallVolumeId: string;
+  headwallEdgeIndex: number;
+  volumeId: string;
+  foundationId: string;
+  roofSystemId: string;
+  passageOpeningId: string;
+  frontWindowId: string;
+  functionalRoomId: string;
+  portalId: string;
+  alongOffset: number;
+  width: number;
+  projection: number;
+  eaveY: number;
+  foundationDepth: number;
+  passageWidth: number;
+  passageHeight: number;
+  windowWidth: number;
+  windowHeight: number;
+  windowSillY: number;
+  pitchDegrees: number;
+  eaveOverhang: number;
+  roofThickness: number;
+  flashingWidth: number;
+  flashingUpstand: number;
+  /** Additive weather-face termination; omission preserves the legacy centerline junction. */
+  headwallTermination?: "exterior-weather-face-v1";
+  /** Additive eave cover/bearing authority; omission preserves the legacy roof datum. */
+  roofWallConnection?: "weather-bearing-v1";
+}
 export interface EntranceSpec {
   id: string;
   wallId: string;
@@ -70,6 +113,28 @@ export interface EntranceSpec {
   /** Opts into final-walking-surface stair semantics and site-grade support authority. */
   constructionPolicy?: "finished-surface-authority";
   bearingDepth?: number;
+}
+/**
+ * Compiler-owned weather protection bound to an existing entrance. Geometry is
+ * derived from the entrance wall/opening so the canopy cannot drift away from
+ * the threshold or establish a second doorway authority.
+ */
+export interface EntranceCanopySpec {
+  id: string;
+  entranceId: string;
+  width: number;
+  projection: number;
+  wallPlateY: number;
+  pitchDegrees: number;
+  roofThickness: number;
+  postSize: number;
+  footingDepth: number;
+  lateralClearance: number;
+  flashingWidth: number;
+  flashingThickness: number;
+  counterflashingUpstand: number;
+  /** Additive compiler-owned header/post joinery; omission preserves v1/v2 output. */
+  joineryPolicy?: "wall-plate-header-post-brace";
 }
 export interface DoorAssemblySpec {
   id: string;
@@ -102,7 +167,11 @@ export interface GableRoofSystemSpec {
   pitchDegrees: number;
   eaveOverhang: number;
   ridgeEndOverhang: readonly [number, number];
+  /** Additive inward trim at the two ridge-axis ends. */
+  ridgeEndInset?: readonly [number, number];
   thickness: number;
+  /** Additive eave cover/bearing authority; omission preserves the legacy roof datum. */
+  roofWallConnection?: "weather-bearing-v1";
 }
 export interface RoofJunctionSpec {
   id: string;
@@ -160,6 +229,8 @@ export interface FireplaceSpec {
   lightId?: string;
   /** Lowest structural bearing elevation for the hearth base. */
   supportY?: number;
+  /** Opt-in corrected thin soot lining; omission preserves historical compiler replay. */
+  fireboxPolicy?: "rear-soot-lining";
 }
 export interface PracticalLightSpec {
   id: string;
@@ -251,6 +322,10 @@ export interface RoofPenetrationSpec {
   capThickness: number;
   cricketDepth: number;
   cricketRise: number;
+  /** Opt-in proof that the complete flue remains centered on its fireplace. */
+  alignmentPolicy?: "fireplace-centerline";
+  /** Additive hollow masonry connection from the hearth hood to the shaft. */
+  flueConnectionPolicy?: "enclosed-masonry-breast-v1";
 }
 export interface FunctionalArchitectureSpec {
   buildingId: string;
@@ -320,6 +395,27 @@ export interface FunctionalStairSpec {
   treadDepth: number;
   bottomLandingDepth: number;
   topLandingDepth: number;
+  /** Additive structural-wall and controller-socket clearance validation. */
+  clearancePolicy?: "structural-footprints-and-controller-sockets-v1";
+  /**
+   * Additive multi-flight construction authority. Omission preserves the
+   * original single straight flight between `from` and `to`.
+   */
+  flights?: readonly {
+    from: V3;
+    to: V3;
+    riserCount: number;
+  }[];
+  intermediateLandings?: readonly {
+    center: V3;
+    halfExtents: V2;
+    yawRadians: number;
+  }[];
+  /** Explicit clear-floor controller sockets outside the constructed landings. */
+  approaches?: {
+    bottom: { center: V3; direction: V3; halfExtents: V2 };
+    top: { center: V3; direction: V3; halfExtents: V2 };
+  };
   /** Compiler-owned void through the destination floor; retained in v2 traversal authority. */
   upperFloorOpening: { center: V2; halfExtents: V2 };
 }
@@ -374,10 +470,12 @@ export interface ArchitectureSpec {
   id: string;
   foundations: readonly FoundationSpec[];
   volumes?: readonly BuildingVolumeSpec[];
+  attachedBays?: readonly AttachedBaySpec[];
   walls?: readonly WallRunSpec[];
   /** Interior walls are additive to volume-derived exterior shell walls. */
   interiorPartitions?: readonly InteriorPartitionSpec[];
   entrances: readonly EntranceSpec[];
+  entranceCanopies?: readonly EntranceCanopySpec[];
   doors?: readonly DoorAssemblySpec[];
   roofSystems?: readonly GableRoofSystemSpec[];
   roofJunctions?: readonly RoofJunctionSpec[];
@@ -523,6 +621,36 @@ export interface CompiledEntrance {
   finishedFloorY: number;
   exteriorGradeY: number;
 }
+export interface CompiledEntranceCanopy {
+  id: string;
+  entranceId: string;
+  roof: PlaneSlab;
+  wallPlate: LinearMember;
+  header: LinearMember;
+  flashing: LinearMember;
+  counterflashing: LinearMember;
+  posts: readonly SolidBox[];
+  footings: readonly SolidBox[];
+  kneeBraces?: readonly [LinearMember, LinearMember];
+  coveredThresholdId: string;
+}
+export interface CompiledAttachedBay {
+  id: string;
+  hostVolumeId: string;
+  headwallVolumeId: string;
+  volumeId: string;
+  foundationId: string;
+  roofSystemId: string;
+  sharedBoundary: readonly [V2, V2];
+  passageOpeningId: string;
+  frontWindowId: string;
+  functionalRoomId: string;
+  portalId: string;
+  passageThreshold: SolidBox;
+  functionalFloorColliderIds: readonly [string, string, string];
+  roofPlaneIds: readonly [string, string];
+  roofAbutmentIds: readonly [string, string];
+}
 export interface CompiledDoor {
   id: string;
   wallId?: string;
@@ -579,6 +707,7 @@ export interface CompiledFireplace {
   emberBed: SolidBox;
   flames: readonly TaperedFlame[];
   lightPosition: V3;
+  flueTransition?: readonly PlaneSlab[];
   chimney?: SolidBox;
   penetrationId?: string;
 }
@@ -649,7 +778,7 @@ export interface CompiledFunctionalContract {
   portalIds: readonly string[];
   entryAnchor: V3;
   site: FunctionalArchitectureSpec["site"];
-  colliders: readonly { id: string; center: V3; halfExtents: V3 }[];
+  colliders: readonly { id: string; center: V3; halfExtents: V3; rotation?: readonly [number, number, number, number] }[];
   doors: readonly {
     id: string;
     roomId: string;
@@ -671,7 +800,7 @@ export interface CompiledFunctionalContractV2 {
   portalIds: readonly string[];
   entryAnchor: V3;
   site: FunctionalArchitectureSpec["site"];
-  colliders: readonly { id: string; center: V3; halfExtents: V3 }[];
+  colliders: readonly { id: string; center: V3; halfExtents: V3; rotation?: readonly [number, number, number, number] }[];
   doors: CompiledFunctionalContract["doors"];
   rooms: readonly CompiledFunctionalRoom[];
   portals: readonly FunctionalPortalSpec[];
@@ -688,6 +817,12 @@ export interface CompiledFunctionalContractV2 {
     run: number;
     riserCount: number;
     treadDepth: number;
+    bottomLandingDepth?: number;
+    topLandingDepth?: number;
+    clearancePolicy?: FunctionalStairSpec["clearancePolicy"];
+    flights?: FunctionalStairSpec["flights"];
+    intermediateLandings?: FunctionalStairSpec["intermediateLandings"];
+    approaches?: FunctionalStairSpec["approaches"];
     upperFloorOpening: { center: V2; halfExtents: V2 };
   }[];
   spawnAnchors: readonly FunctionalSpawnAnchorSpec[];
@@ -700,8 +835,12 @@ export interface CompiledArchitecture {
   irHash: string;
   primitives: readonly ArchitecturePrimitive[];
   volumes: readonly CompiledVolume[];
+  /** Present only when compiler-owned attached-bay authority was authored. */
+  attachedBays?: readonly CompiledAttachedBay[];
   walls: readonly CompiledWall[];
   entrances: readonly CompiledEntrance[];
+  /** Present only for additive specs that author compiler-owned entry weather protection. */
+  entranceCanopies?: readonly CompiledEntranceCanopy[];
   doors: readonly CompiledDoor[];
   windows: readonly CompiledWindow[];
   dormers: readonly CompiledDormer[];

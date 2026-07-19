@@ -13,69 +13,26 @@
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { measureGlb } from "../../gates/design/asset-qc-gate.mjs";
 import { readAssetManifest, runAssetManifestGate } from "./asset-manifest.mjs";
 
 export const CAP_M = 60;        // nothing in the library should exceed ~60m in any axis (a big keep is ~20m)
 export const DEGEN_M = 0.02;    // any axis under 2cm ⇒ effectively empty
 
-// 4x4 column-major helpers (glTF convention).
-function mul(a, b) {
-  const o = new Array(16).fill(0);
-  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) { let s = 0; for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k]; o[c * 4 + r] = s; }
-  return o;
-}
-function trs(t = [0, 0, 0], q = [0, 0, 0, 1], s = [1, 1, 1]) {
-  const [x, y, z, w] = q, x2 = x + x, y2 = y + y, z2 = z + z;
-  const xx = x * x2, xy = x * y2, xz = x * z2, yy = y * y2, yz = y * z2, zz = z * z2, wx = w * x2, wy = w * y2, wz = w * z2;
-  return [
-    (1 - (yy + zz)) * s[0], (xy + wz) * s[0], (xz - wy) * s[0], 0,
-    (xy - wz) * s[1], (1 - (xx + zz)) * s[1], (yz + wx) * s[1], 0,
-    (xz + wy) * s[2], (yz - wx) * s[2], (1 - (xx + yy)) * s[2], 0,
-    t[0], t[1], t[2], 1,
-  ];
-}
-const nodeMat = (n) => (Array.isArray(n.matrix) ? n.matrix.slice() : trs(n.translation, n.rotation, n.scale));
-function apply(m, p) { // world = m * [p,1]
-  return [
-    m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12],
-    m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13],
-    m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14],
-  ];
-}
-
 // TRANSFORM-AWARE world bbox: walk the scene node hierarchy, accumulate each node's world
 // matrix, and for every mesh transform its primitives' POSITION accessor min/max (all 8
 // corners) into world space — the SAME size a scatter/place sees. Ignoring node transforms
-// (raw accessor bounds) mis-reads assets that carry scale/offset in their nodes.
+// (raw accessor bounds) mis-reads assets that carry scale/offset in their nodes. The asset-QC
+// gate owns this general-purpose walk; this compatibility wrapper preserves the long-standing
+// {mn,mx} API used by host tools without maintaining a second matrix implementation.
 export function glbBbox(buf) {
-  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  if (dv.getUint32(0, true) !== 0x46546c67) return null; // 'glTF'
-  const jsonLen = dv.getUint32(12, true);
-  const json = JSON.parse(new TextDecoder().decode(buf.subarray(20, 20 + jsonLen)));
-  const nodes = json.nodes || [], meshes = json.meshes || [], accessors = json.accessors || [];
-  const scene = json.scenes?.[json.scene ?? 0];
-  const roots = scene?.nodes ?? nodes.map((_, i) => i);
-  let mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity], any = false;
-  const visit = (idx, parent) => {
-    const n = nodes[idx]; if (!n) return;
-    const world = mul(parent, nodeMat(n));
-    if (n.mesh !== undefined) {
-      for (const prim of meshes[n.mesh]?.primitives || []) {
-        const a = accessors[prim.attributes?.POSITION];
-        if (a?.type === "VEC3" && Array.isArray(a.min) && Array.isArray(a.max)) {
-          any = true;
-          for (const cx of [a.min[0], a.max[0]]) for (const cy of [a.min[1], a.max[1]]) for (const cz of [a.min[2], a.max[2]]) {
-            const w = apply(world, [cx, cy, cz]);
-            for (let i = 0; i < 3; i++) { mn[i] = Math.min(mn[i], w[i]); mx[i] = Math.max(mx[i], w[i]); }
-          }
-        }
-      }
-    }
-    for (const c of n.children || []) visit(c, world);
-  };
-  const I = trs();
-  for (const r of roots) visit(r, I);
-  return any ? { mn, mx } : null;
+  if (!buf || buf.byteLength < 4) throw new RangeError("invalid GLB header");
+  const header = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  if (header.getUint32(0, true) !== 0x46546c67) return null; // Preserve the GLB-only compatibility API.
+  const measured = measureGlb(buf);
+  if (!measured.readable) throw new Error("invalid GLB");
+  if (measured.bboxMin === null || measured.bboxMax === null) return null;
+  return { mn: measured.bboxMin.slice(), mx: measured.bboxMax.slice() };
 }
 
 // Given a world-space size [dx,dy,dz] and min-corner [x0,y0,z0] (as returned by glbBbox: d = mx-mn,

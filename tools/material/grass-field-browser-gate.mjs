@@ -35,7 +35,8 @@ let forbiddenCompute=0;
 const manager=new GrassFieldStreamManager(scene,{tileSize:12,radius:0,renderer,visualPackage:INTERACTIVE_TEMPERATE_MEADOW_PACKAGE,source:()=>({seed:19,spacing:.6,elevationMin:-1}),
   buildComputeBatch:()=>{forbiddenCompute++;throw new Error("forceWebGL constructed native compute");}});
 manager.noteTile("0:0",{tx:0,tz:0},tile); const launch=manager.update(1,1); await manager.settle();
-if(launch.grown!==1||forbiddenCompute!==0||manager.takeErrors().length!==0) throw new Error("forceWebGL did not select the streamed CPU fallback");
+const streamErrors=manager.takeErrors();
+if(launch.grown!==1||forbiddenCompute!==0||streamErrors.length!==0) throw new Error("forceWebGL did not select the streamed CPU fallback: "+JSON.stringify({launch,forbiddenCompute,backend:{initialized:renderer.hasInitialized?.(),isWebGPUBackend:renderer.backend?.isWebGPUBackend??null,isWebGLBackend:renderer.backend?.isWebGLBackend??null},errors:streamErrors.map(error=>error instanceof Error?error.message:String(error))}));
 const meshes=[]; scene.traverse((object)=>{if(object.isInstancedMesh)meshes.push(object);});
 const instances=meshes.reduce((sum,mesh)=>sum+mesh.count,0);
 if(meshes.length<1||instances<100||manager.grassKeys().size!==1) throw new Error("stream manager did not publish the bounded CPU fallback field: meshes="+meshes.length+", instances="+instances);

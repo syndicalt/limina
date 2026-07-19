@@ -1,42 +1,223 @@
-import {createHash} from "node:crypto";
-import {mkdir,readFile,writeFile} from "node:fs/promises";
-import {dirname,resolve} from "node:path";
-import {fileURLToPath} from "node:url";
-import {parseFunctionalBuildingContract} from "../../js/src/assets/functional-building-contract.ts";
-import {resolveFunctionalBuildingSitePlacement} from "../../js/src/assets/functional-building-site.ts";
-import {loadTemperateFidelityCandidate} from "../../js/src/render/temperate-fidelity-scene.ts";
-import {PRODUCTION_REVIEW_LOCAL_VIEWS_V5,PRODUCTION_REVIEW_SITE_V5,PRODUCTION_REVIEW_VIEWS_V5} from "./production-review-site-v5.mjs";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseFunctionalBuildingContract } from "../../js/src/assets/functional-building-contract.ts";
+import { resolveFunctionalBuildingSitePlacement } from "../../js/src/assets/functional-building-site.ts";
+import { loadTemperateFidelityCandidate } from "../../js/src/render/temperate-fidelity-scene.ts";
+import {
+  PRODUCTION_REVIEW_LOCAL_VIEWS_V5,
+  PRODUCTION_REVIEW_SITE_V5,
+  PRODUCTION_REVIEW_VIEWS_V5,
+} from "./production-review-site-v5.mjs";
 
-const ROOT=resolve(dirname(fileURLToPath(import.meta.url)),"../.."),BASE="assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653";
-const PATHS=Object.freeze({environmentAuthority:"art-direction/temperate-fidelity-scene.json",runtimeBundle:"assets/derived/temperate-fidelity/runtime/bundle.json",productionGlb:`${BASE}/functional-hall-house-v4-production.glb`,interiorPlan:"assets/buildings/authoring/functional-hall-house-v4/interior-r4/interior-plan.json",approvedCameraAuthority:"assets/buildings/authoring/functional-hall-house-v4/composition-r3/review-authority-v2.json"});
-const sha=(bytes:Uint8Array)=>`sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-const read=async(path:string)=>{const bytes=new Uint8Array(await readFile(resolve(ROOT,path)));return{path,bytes,sha256:sha(bytes)}};
-const ref=({path,sha256}:{path:string;sha256:string})=>({path,sha256});
-const round=(value:number)=>Number(value.toFixed(12));
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../.."),
+  BASE = "assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653";
+const PATHS = Object.freeze({
+  environmentAuthority: "art-direction/temperate-fidelity-scene.json",
+  runtimeBundle: "assets/derived/temperate-fidelity/runtime/bundle.json",
+  productionGlb: `${BASE}/functional-hall-house-v4-production.glb`,
+  interiorPlan: "assets/buildings/authoring/functional-hall-house-v4/interior-r4/interior-plan.json",
+  approvedCameraAuthority:
+    "assets/buildings/authoring/functional-hall-house-v4/composition-r3/review-authority-v2.json",
+});
+const sha = (bytes: Uint8Array) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+const read = async (path: string) => {
+  const bytes = new Uint8Array(await readFile(resolve(ROOT, path)));
+  return { path, bytes, sha256: sha(bytes) };
+};
+const ref = ({ path, sha256 }: { path: string; sha256: string }) => ({ path, sha256 });
+const round = (value: number) => Number(value.toFixed(12));
 
-export async function buildProductionReviewSiteFit({outputPath=`${BASE}/production-review-site-fit-v3.json`,write=true}={}){
-  const [environmentAuthorityFile,runtimeBundleFile,productionFile,interiorPlanFile,approvedCameraAuthorityFile]=await Promise.all(Object.values(PATHS).map(read));
-  const decoder=new TextDecoder("utf-8",{fatal:true}),reader={readJson:async(path:string)=>JSON.parse(decoder.decode((await read(path)).bytes)),readBytes:async(path:string)=>(await read(path)).bytes};
-  let loaded:Awaited<ReturnType<typeof loadTemperateFidelityCandidate>>|undefined;
-  try{
-  loaded=await loadTemperateFidelityCandidate({reader,shot:"river-leading-line"});const contract=parseFunctionalBuildingContract(productionFile.bytes);
-  if(contract.site===undefined)throw new Error("production review site fit requires authored site policy");
-  const sampleHeight=(x:number,z:number)=>loaded.candidate.snapshot.terrain.sampleHeight(x,z)??undefined;
-  const placement=resolveFunctionalBuildingSitePlacement({contract,position:PRODUCTION_REVIEW_SITE_V5.position as [number,number,number],yaw:PRODUCTION_REVIEW_SITE_V5.yaw,sampleHeight,maximumSampleSpacing:.5});
-  const interiorPlan=JSON.parse(decoder.decode(interiorPlanFile.bytes)),approvedCameraAuthority=JSON.parse(decoder.decode(approvedCameraAuthorityFile.bytes)),room=interiorPlan.rooms?.find((entry:any)=>entry.id==="room/main"),bounds=room?.bounds;
-  if(!bounds||!Array.isArray(bounds.center)||!Array.isArray(bounds.halfExtents))throw new Error("production review requires the approved main-room bounds");
-  const insideRoom=([x,y,z]:readonly number[],margin=.2)=>Math.abs(x-bounds.center[0])<=bounds.halfExtents[0]-margin&&y>=room.finishedFloorY+margin&&y<=room.ceilingY-margin&&Math.abs(z-bounds.center[2])<=bounds.halfExtents[2]-margin;
-  const pointAabbDistance=([x,y,z]:readonly number[],collider:any)=>Math.hypot(Math.max(Math.abs(x-collider.center[0])-collider.halfExtents[0],0),Math.max(Math.abs(y-collider.center[1])-collider.halfExtents[1],0),Math.max(Math.abs(z-collider.center[2])-collider.halfExtents[2],0));
-  const approvedIds=new Map([["interior-overall","overall-room"],["hearth-fire-seating","hearth-seating"],["dining-service","dining-three-quarter"]]),interiorCameraSafety=PRODUCTION_REVIEW_LOCAL_VIEWS_V5.filter(view=>approvedIds.has(view.id)).map(view=>{const sourceId=approvedIds.get(view.id),source=approvedCameraAuthority.evidenceViews?.find((entry:any)=>entry.id===sourceId),clearance=Math.min(...contract.colliders.map((collider:any)=>pointAabbDistance(view.camera.position,collider)));if(!source||JSON.stringify(view.camera.position)!==JSON.stringify(source.position)||JSON.stringify(view.camera.target)!==JSON.stringify(source.target)||view.camera.fovDeg!==source.fovDeg)throw new Error(`${view.id} drifted from its approved composition camera`);if(!insideRoom(view.camera.position)||!insideRoom(view.camera.target,0))throw new Error(`${view.id} leaves the approved interior room envelope`);if(clearance<.25)throw new Error(`${view.id} camera is only ${clearance}m from a building collider`);return{id:view.id,approvedSourceId:sourceId,positionInsideRoom:true,targetInsideRoom:true,minimumBoundaryMarginM:.2,minimumColliderClearanceM:round(clearance)};});
-  const cameras=PRODUCTION_REVIEW_VIEWS_V5.map(view=>{const positionTerrain=sampleHeight(view.camera.position[0],view.camera.position[2]),targetTerrain=sampleHeight(view.camera.target[0],view.camera.target[2]);if(positionTerrain===undefined||targetTerrain===undefined)throw new Error(`${view.id} leaves exact resident terrain domain`);const resolvedPosition=[view.camera.position[0],view.camera.position[1]+placement.rootWorldY,view.camera.position[2]],resolvedTarget=[view.camera.target[0],view.camera.target[1]+placement.rootWorldY,view.camera.target[2]],distance=Math.hypot(resolvedPosition[0]-resolvedTarget[0],resolvedPosition[1]-resolvedTarget[1],resolvedPosition[2]-resolvedTarget[2]),positionClearance=resolvedPosition[1]-positionTerrain,targetClearance=resolvedTarget[1]-targetTerrain;if(positionClearance<=view.camera.near||targetClearance<0||distance<=view.camera.near||distance>=view.camera.far)throw new Error(`${view.id} camera domain safety failed`);return{id:view.id,terrainSamples:{position:round(positionTerrain),target:round(targetTerrain)},resolved:{position:resolvedPosition.map(round),target:resolvedTarget.map(round)},positionTerrainClearanceM:round(positionClearance),targetTerrainClearanceM:round(targetClearance),viewRayLengthM:round(distance),residentTerrain:true,aboveTerrain:true,withinClipDomain:true};});
-  const residentTerrain=loaded.chunks.map((entry:any)=>{const descriptor=entry.resource.artifacts.terrain,index=loaded.bundle.artifactIndex.find((candidate:any)=>candidate.contentHash===descriptor.contentHash),path=`assets/${index.assetId}`;return{chunkId:entry.chunkId,tx:entry.chunk.tx,tz:entry.chunk.tz,path,contentHash:descriptor.contentHash,byteLength:descriptor.byteLength,rawSha256:""};});
-  // Hash exact resident terrain bytes independently; descriptor content hashes remain semantic authority.
-  for(const entry of residentTerrain){const bytes=await reader.readBytes(entry.path);entry.rawSha256=sha(bytes);if(bytes.byteLength!==entry.byteLength)throw new Error(`${entry.chunkId} byte length drifted`);}
-  const evidence={schema:"limina.building-production-review-site-fit/v1",verdict:"pass",inputs:{environmentAuthority:ref(environmentAuthorityFile),runtimeBundle:ref(runtimeBundleFile),manifestHash:loaded.bundle.manifest.manifestHash,productionGlb:ref(productionFile),interiorPlan:ref(interiorPlanFile),approvedCameraAuthority:ref(approvedCameraAuthorityFile),buildingId:contract.buildingId,sitePolicy:contract.site},placement:PRODUCTION_REVIEW_SITE_V5,terrain:{grid:loaded.bundle.manifest.grid,residentChunks:residentTerrain},fit:{rootWorldY:round(placement.rootWorldY),terrainMinimum:round(placement.terrainMinimum),terrainMaximum:round(placement.terrainMaximum),terrainRelief:round(placement.terrainRelief),sampleCount:placement.sampleCount,maximumTerrainRelief:contract.site.maximumTerrainRelief,entranceSupport:placement.entranceSupport?{terrainMinimum:round(placement.entranceSupport.terrainMinimum),terrainMaximum:round(placement.entranceSupport.terrainMaximum),terrainVariation:round(placement.entranceSupport.terrainVariation),worldGradeY:round(placement.entranceSupport.worldGradeY),fillDepth:round(placement.entranceSupport.fillDepth),cutDepth:round(placement.entranceSupport.cutDepth),sampleCount:placement.entranceSupport.sampleCount}:null},cameraDomain:{basis:"terrain-root-relative",interiorRoom:{id:room.id,bounds:room.bounds,finishedFloorY:room.finishedFloorY,ceilingY:room.ceilingY,views:interiorCameraSafety},views:cameras}};
-  const serialized=`${JSON.stringify(evidence,null,2)}\n`;
-  if(write){const target=resolve(ROOT,outputPath);await mkdir(dirname(target),{recursive:true});await writeFile(target,serialized,{flag:"wx",mode:0o600});}
-  return Object.freeze({evidence,outputPath,sha256:sha(new TextEncoder().encode(serialized))});
-  }finally{loaded?.candidate.dispose();}
+export async function buildProductionReviewSiteFit({
+  outputPath = `${BASE}/production-review-site-fit-v3.json`,
+  write = true,
+} = {}) {
+  const [environmentAuthorityFile, runtimeBundleFile, productionFile, interiorPlanFile, approvedCameraAuthorityFile] =
+    await Promise.all(Object.values(PATHS).map(read));
+  const decoder = new TextDecoder("utf-8", { fatal: true }),
+    reader = {
+      readJson: async (path: string) => JSON.parse(decoder.decode((await read(path)).bytes)),
+      readBytes: async (path: string) => (await read(path)).bytes,
+    };
+  let loaded: Awaited<ReturnType<typeof loadTemperateFidelityCandidate>> | undefined;
+  try {
+    loaded = await loadTemperateFidelityCandidate({ reader, shot: "river-leading-line" });
+    const contract = parseFunctionalBuildingContract(productionFile.bytes);
+    if (contract.site === undefined) throw new Error("production review site fit requires authored site policy");
+    const sampleHeight = (x: number, z: number) => loaded.candidate.snapshot.terrain.sampleHeight(x, z) ?? undefined;
+    const placement = resolveFunctionalBuildingSitePlacement({
+      contract,
+      position: PRODUCTION_REVIEW_SITE_V5.position as [number, number, number],
+      yaw: PRODUCTION_REVIEW_SITE_V5.yaw,
+      sampleHeight,
+      maximumSampleSpacing: 0.5,
+    });
+    const interiorPlan = JSON.parse(decoder.decode(interiorPlanFile.bytes)),
+      approvedCameraAuthority = JSON.parse(decoder.decode(approvedCameraAuthorityFile.bytes)),
+      room = interiorPlan.rooms?.find((entry: any) => entry.id === "room/main"),
+      bounds = room?.bounds;
+    if (!bounds || !Array.isArray(bounds.center) || !Array.isArray(bounds.halfExtents))
+      throw new Error("production review requires the approved main-room bounds");
+    const insideRoom = ([x, y, z]: readonly number[], margin = 0.2) =>
+      Math.abs(x - bounds.center[0]) <= bounds.halfExtents[0] - margin &&
+      y >= room.finishedFloorY + margin &&
+      y <= room.ceilingY - margin &&
+      Math.abs(z - bounds.center[2]) <= bounds.halfExtents[2] - margin;
+    const pointAabbDistance = ([x, y, z]: readonly number[], collider: any) =>
+      Math.hypot(
+        Math.max(Math.abs(x - collider.center[0]) - collider.halfExtents[0], 0),
+        Math.max(Math.abs(y - collider.center[1]) - collider.halfExtents[1], 0),
+        Math.max(Math.abs(z - collider.center[2]) - collider.halfExtents[2], 0),
+      );
+    const approvedIds = new Map([
+        ["interior-overall", "overall-room"],
+        ["hearth-fire-seating", "hearth-seating"],
+        ["dining-service", "dining-three-quarter"],
+      ]),
+      interiorCameraSafety = PRODUCTION_REVIEW_LOCAL_VIEWS_V5.filter((view) => approvedIds.has(view.id)).map((view) => {
+        const sourceId = approvedIds.get(view.id),
+          source = approvedCameraAuthority.evidenceViews?.find((entry: any) => entry.id === sourceId),
+          clearance = Math.min(
+            ...contract.colliders.map((collider: any) => pointAabbDistance(view.camera.position, collider)),
+          );
+        if (
+          !source ||
+          JSON.stringify(view.camera.position) !== JSON.stringify(source.position) ||
+          JSON.stringify(view.camera.target) !== JSON.stringify(source.target) ||
+          view.camera.fovDeg !== source.fovDeg
+        )
+          throw new Error(`${view.id} drifted from its approved composition camera`);
+        if (!insideRoom(view.camera.position) || !insideRoom(view.camera.target, 0))
+          throw new Error(`${view.id} leaves the approved interior room envelope`);
+        if (clearance < 0.25) throw new Error(`${view.id} camera is only ${clearance}m from a building collider`);
+        return {
+          id: view.id,
+          approvedSourceId: sourceId,
+          positionInsideRoom: true,
+          targetInsideRoom: true,
+          minimumBoundaryMarginM: 0.2,
+          minimumColliderClearanceM: round(clearance),
+        };
+      });
+    const cameras = PRODUCTION_REVIEW_VIEWS_V5.map((view) => {
+      const positionTerrain = sampleHeight(view.camera.position[0], view.camera.position[2]),
+        targetTerrain = sampleHeight(view.camera.target[0], view.camera.target[2]);
+      if (positionTerrain === undefined || targetTerrain === undefined)
+        throw new Error(`${view.id} leaves exact resident terrain domain`);
+      const resolvedPosition = [
+          view.camera.position[0],
+          view.camera.position[1] + placement.rootWorldY,
+          view.camera.position[2],
+        ],
+        resolvedTarget = [view.camera.target[0], view.camera.target[1] + placement.rootWorldY, view.camera.target[2]],
+        distance = Math.hypot(
+          resolvedPosition[0] - resolvedTarget[0],
+          resolvedPosition[1] - resolvedTarget[1],
+          resolvedPosition[2] - resolvedTarget[2],
+        ),
+        positionClearance = resolvedPosition[1] - positionTerrain,
+        targetClearance = resolvedTarget[1] - targetTerrain;
+      if (
+        positionClearance <= view.camera.near ||
+        targetClearance < 0 ||
+        distance <= view.camera.near ||
+        distance >= view.camera.far
+      )
+        throw new Error(`${view.id} camera domain safety failed`);
+      return {
+        id: view.id,
+        terrainSamples: { position: round(positionTerrain), target: round(targetTerrain) },
+        resolved: { position: resolvedPosition.map(round), target: resolvedTarget.map(round) },
+        positionTerrainClearanceM: round(positionClearance),
+        targetTerrainClearanceM: round(targetClearance),
+        viewRayLengthM: round(distance),
+        residentTerrain: true,
+        aboveTerrain: true,
+        withinClipDomain: true,
+      };
+    });
+    const residentTerrain = loaded.chunks.map((entry: any) => {
+      const descriptor = entry.resource.artifacts.terrain,
+        index = loaded.bundle.artifactIndex.find((candidate: any) => candidate.contentHash === descriptor.contentHash),
+        path = `assets/${index.assetId}`;
+      return {
+        chunkId: entry.chunkId,
+        tx: entry.chunk.tx,
+        tz: entry.chunk.tz,
+        path,
+        contentHash: descriptor.contentHash,
+        byteLength: descriptor.byteLength,
+        rawSha256: "",
+      };
+    });
+    // Hash exact resident terrain bytes independently; descriptor content hashes remain semantic authority.
+    for (const entry of residentTerrain) {
+      const bytes = await reader.readBytes(entry.path);
+      entry.rawSha256 = sha(bytes);
+      if (bytes.byteLength !== entry.byteLength) throw new Error(`${entry.chunkId} byte length drifted`);
+    }
+    const evidence = {
+      schema: "limina.building-production-review-site-fit/v1",
+      verdict: "pass",
+      inputs: {
+        environmentAuthority: ref(environmentAuthorityFile),
+        runtimeBundle: ref(runtimeBundleFile),
+        manifestHash: loaded.bundle.manifest.manifestHash,
+        productionGlb: ref(productionFile),
+        interiorPlan: ref(interiorPlanFile),
+        approvedCameraAuthority: ref(approvedCameraAuthorityFile),
+        buildingId: contract.buildingId,
+        sitePolicy: contract.site,
+      },
+      placement: PRODUCTION_REVIEW_SITE_V5,
+      terrain: { grid: loaded.bundle.manifest.grid, residentChunks: residentTerrain },
+      fit: {
+        rootWorldY: round(placement.rootWorldY),
+        terrainMinimum: round(placement.terrainMinimum),
+        terrainMaximum: round(placement.terrainMaximum),
+        terrainRelief: round(placement.terrainRelief),
+        sampleCount: placement.sampleCount,
+        maximumTerrainRelief: contract.site.maximumTerrainRelief,
+        entranceSupport: placement.entranceSupport
+          ? {
+              terrainMinimum: round(placement.entranceSupport.terrainMinimum),
+              terrainMaximum: round(placement.entranceSupport.terrainMaximum),
+              terrainVariation: round(placement.entranceSupport.terrainVariation),
+              worldGradeY: round(placement.entranceSupport.worldGradeY),
+              fillDepth: round(placement.entranceSupport.fillDepth),
+              cutDepth: round(placement.entranceSupport.cutDepth),
+              sampleCount: placement.entranceSupport.sampleCount,
+            }
+          : null,
+      },
+      cameraDomain: {
+        basis: "terrain-root-relative",
+        interiorRoom: {
+          id: room.id,
+          bounds: room.bounds,
+          finishedFloorY: room.finishedFloorY,
+          ceilingY: room.ceilingY,
+          views: interiorCameraSafety,
+        },
+        views: cameras,
+      },
+    };
+    const serialized = `${JSON.stringify(evidence, null, 2)}\n`;
+    if (write) {
+      const target = resolve(ROOT, outputPath);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, serialized, { flag: "wx", mode: 0o600 });
+    }
+    return Object.freeze({ evidence, outputPath, sha256: sha(new TextEncoder().encode(serialized)) });
+  } finally {
+    loaded?.candidate.dispose();
+  }
 }
 
-if(import.meta.main){const result=await buildProductionReviewSiteFit();console.log(JSON.stringify({outputPath:result.outputPath,sha256:result.sha256,fit:result.evidence.fit},null,2));}
+if (import.meta.main) {
+  const result = await buildProductionReviewSiteFit();
+  console.log(
+    JSON.stringify({ outputPath: result.outputPath, sha256: result.sha256, fit: result.evidence.fit }, null, 2),
+  );
+}

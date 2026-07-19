@@ -192,7 +192,9 @@ const builderWrites: string[][] = [];
 const builders = Array.from({ length: 3 }, (_unused, index) => {
   const writes: string[] = [];
   builderWrites.push(writes);
-  return new StdioMcpTransport(mcp, (line) => writes.push(line));
+  return new StdioMcpTransport(mcp, (line) => writes.push(line), {
+    allowedProfiles: new Set(["builder.readWrite"]), specProfile: "builder.readWrite",
+  });
 });
 
 async function builderRequest(builderIndex: number, id: number, method: string, params: Record<string, unknown>): Promise<JsonRpcResponse> {

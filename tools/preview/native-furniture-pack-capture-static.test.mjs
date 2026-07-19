@@ -1,17 +1,28 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { GUARDED_NATIVE_CAPTURE_CONTRACTS } from "./guarded-capture-publication.mjs";
+import {
+  assertCall,
+  assertPropertyValue,
+  findPropertyAssignments,
+  parseTypeScript,
+} from "./source-semantics.test-helper.mjs";
 
 const launcher = readFileSync(new URL("./run-native-furniture-pack-capture.mjs", import.meta.url), "utf8");
+const launcherFile = parseTypeScript(launcher, "run-native-furniture-pack-capture.mjs");
 
 test("furniture launcher is native-only and fail-closed around NVIDIA Xid", () => {
   assert.match(launcher, /js\/src\/demos\/furniture_pack_capture_window\.ts/);
-  assert.match(launcher, /\["--window"/);
-  assert.match(launcher, /current boot already contains an NVIDIA Xid/);
-  assert.match(launcher, /journalctl.*-f.*-n.*0/s);
-  assert.match(launcher, /setInterval\(.*kernelLog.*250/s);
-  assert.match(launcher, /NVIDIA Xid detected after capture/);
-  assert.match(launcher, /must not be retried before reboot/);
+  assert.deepEqual(
+    GUARDED_NATIVE_CAPTURE_CONTRACTS.find(({ runner }) => runner.endsWith("run-native-furniture-pack-capture.mjs")),
+    {
+      runner: "tools/preview/run-native-furniture-pack-capture.mjs",
+      module: "js/src/demos/furniture_pack_capture_window.ts",
+    },
+  );
+  assertCall(launcherFile, "runGuardedCaptureWithSourceClosure");
+  assert.doesNotMatch(launcher, /node:child_process|journalctl/);
 });
 
 test("furniture launcher forbids timestamp risk and validates engine evidence", () => {
@@ -32,19 +43,23 @@ test("furniture launcher forbids timestamp risk and validates engine evidence", 
 });
 
 test("furniture launcher binds all views and writes only private review artifacts", () => {
-  assert.match(launcher, /--authority/);assert.match(launcher, /--out-dir/);
+  assert.match(launcher, /--authority/);
+  assert.match(launcher, /--out-dir/);
   assert.doesNotMatch(launcher, /hearth-settle-v2-r2/);
-  assert.match(launcher, /authority\.evidenceViews\.map/);
+  assertCall(launcherFile, "authority.evidenceViews.map");
   assert.match(launcher, /assets\/qc\/internal\/furniture/);
   assert.match(launcher, /append-only furniture capture output already exists/);
   assert.match(launcher, /chmod\(reviewRoot, 0o700\)/);
-  assert.match(launcher, /flag:"wx"/);
+  assertPropertyValue(launcherFile, "flag", "wx");
   assert.match(launcher, /capture-evidence\.json/);
-  assert.match(launcher, /captures: artifact\.captures\.map\(\(\{ rgbaBase64/);
+  assertCall(launcherFile, "artifact.captures.map");
   assert.doesNotMatch(launcher, /0\.0\.0\.0|--serve|http\.createServer/);
 });
 
-test("furniture launcher passes only an explicit authority to the native demo and cleans its trace",()=>{
-  assert.match(launcher,/LIMINA_FURNITURE_REVIEW_AUTHORITY/);assert.match(launcher,/unlink\(tracePath\)/);
-  assert.match(launcher,/capture\.reviewState/);assert.match(launcher,/expectedViews\[index\]\.type/);assert.match(launcher,/appliedState/);
+test("furniture launcher passes only an explicit authority to the native demo and cleans its trace", () => {
+  assert.ok(findPropertyAssignments(launcherFile, "LIMINA_FURNITURE_REVIEW_AUTHORITY").length > 0);
+  assertCall(launcherFile, "unlink", ["tracePath"]);
+  assert.match(launcher, /capture\.reviewState/);
+  assert.match(launcher, /expectedViews\[index\]\.type/);
+  assert.match(launcher, /appliedState/);
 });

@@ -101,15 +101,21 @@ assert(MAX_STEPS_PER_FRAME === 5, "MAX_STEPS_PER_FRAME must be 5");
 {
   class FakeKv implements AsyncKvStore {
     readonly data = new Map<string, string>();
-    seeded: Array<[string, string]> = [];
-    puts = 0;
-    async loadAll(): Promise<Array<[string, string]>> { return this.seeded; }
-    async put(key: string, value: string): Promise<void> { this.puts++; this.data.set(key, value); }
+    commits = 0;
+    async loadAll(): Promise<Array<[string, string]>> { return [...this.data]; }
+    async put(key: string, value: string): Promise<void> { this.data.set(key, value); }
+    async commit(expectedKey: string, expectedValue: string | null, writes: readonly (readonly [string, string])[]): Promise<boolean> {
+      const actual = this.data.get(expectedKey) ?? null;
+      if (actual !== expectedValue) return false;
+      this.commits++;
+      for (const [key, value] of writes) this.data.set(key, value);
+      return true;
+    }
   }
 
   // Hydrate brings prior traces into the synchronous mirror.
   const kv = new FakeKv();
-  kv.seeded = [["ses.events.jsonl", "line-a\n"]];
+  kv.data.set("ses.events.jsonl", "line-a\n");
   const store = new DurableTraceStore(kv);
   await store.hydrate();
   assert(store.op_read_trace("ses.events.jsonl") === "line-a\n", "hydrate must seed the mirror");
@@ -123,8 +129,11 @@ assert(MAX_STEPS_PER_FRAME === 5, "MAX_STEPS_PER_FRAME must be 5");
   assert(store.op_read_trace("t") === "AAABBBCCC", "append_trace must concatenate in the mirror");
 
   await store.whenIdle(); // drain write-behind queue
-  assert(kv.data.get("t") === "AAABBBCCC", "write-behind must persist the latest value to the KV");
-  assert(kv.puts >= 3, `each mutation should enqueue a persist (got ${kv.puts})`);
+  const reopened = new DurableTraceStore(kv);
+  await reopened.hydrate();
+  assert(reopened.op_read_trace("t") === "AAABBBCCC", "segmented write-behind did not survive reopen");
+  assert(kv.data.get("t") === undefined, "new trace unexpectedly persisted a monolithic full value");
+  assert(kv.commits === 3, `each mutation should enqueue one atomic segment/metadata commit (got ${kv.commits})`);
 }
 
 // ===========================================================================

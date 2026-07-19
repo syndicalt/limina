@@ -37,6 +37,7 @@ import { acquireKernel, type LockIO } from "../../js/src/kernel/daemon-lock.ts";
 import { derivedRuntimeDiscovery, registerDerivedRuntimeDiscoverySkill } from "../../js/src/skills/derived-runtime-discovery.ts";
 import { AnthropicProvider } from "../../js/src/agents/llm.ts";
 import { runChatTurn, type ChatTurnPersistRecord } from "../../js/src/agents/chat-turn.ts";
+import { ChatAdmissionGate } from "../../js/src/agents/chat-admission.ts";
 import type { ProviderMap } from "../../js/src/agents/systems.ts";
 
 const net = ops as unknown as NetOps;
@@ -55,25 +56,12 @@ const DERIVED_RUNTIME_DISCOVERY = derivedRuntimeDiscovery({
 const WORLDLOG_NAME = ops.op_read_env("LIMINA_EDITOR_WORLDLOG") || "editor_host_worldlog.jsonl";
 const TRACE_NAME = ops.op_read_env("LIMINA_EDITOR_TRACE") || "editor_host_trace.jsonl";
 const CHAT_NAME = ops.op_read_env("LIMINA_EDITOR_CHAT") || "editor_host_chat.jsonl";
-// Auth token: LIMINA_EDITOR_TOKEN wins. Otherwise use the host CSPRNG when exposed.
-// This deno_core host exposes no `crypto` global today, so the fallback hashes 64 draws
-// of the NATIVE Math.random (captured before any world can install the seeded
-// deterministic RNG over it — a seeded Math.random would make the token reproducible
-// from the world seed) through op_sha256. V8 seeds Math.random from OS entropy, but it
-// is not CSPRNG-grade; the real fix is a getrandom-backed host op (what --mcp-ws's
-// generate_ws_auth_token does in Rust).
-function generateEditorAuthToken(): string {
-  const hostCrypto = (globalThis as { crypto?: { getRandomValues?<T extends Uint8Array>(array: T): T } }).crypto;
-  if (hostCrypto?.getRandomValues) {
-    const bytes = hostCrypto.getRandomValues(new Uint8Array(16));
-    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-  }
-  const nativeRandom = Math.random;
-  const samples: number[] = [];
-  for (let i = 0; i < 64; i++) samples.push(nativeRandom());
-  return ops.op_sha256(`editor:${Date.now()}:${samples.join(":")}`).slice(0, 32);
+// The Node launcher owns OS-random capability generation and its private 0600
+// handoff. This host fails closed instead of manufacturing a weaker V8 fallback.
+const EDITOR_AUTH_TOKEN = ops.op_read_env("LIMINA_EDITOR_TOKEN");
+if (!/^[A-Za-z0-9_-]{32,128}$/.test(EDITOR_AUTH_TOKEN)) {
+  throw new Error("editor_host: LIMINA_EDITOR_TOKEN must be supplied by the editor launcher as a 32-128 character URL-safe capability");
 }
-const EDITOR_AUTH_TOKEN = ops.op_read_env("LIMINA_EDITOR_TOKEN") || generateEditorAuthToken();
 const EDITOR_ALLOWED_PROFILES = new Set([
   "reviewer",
   "system.readonly",
@@ -114,6 +102,8 @@ function persistChat(record: ChatTurnPersistRecord): void {
   ops.op_append_trace(CHAT_NAME, JSON.stringify(record) + "\n");
 }
 
+const chatAdmission = new ChatAdmissionGate();
+
 // KERNEL K3 -- daemon reuse. The project's kernel port IS the liveness lock: the
 // first surface to bind it OWNS the kernel and records its port + capability token
 // in a per-project lock file; a concurrent second surface (another `npm run editor`,
@@ -137,7 +127,7 @@ if (acq.role === "attached") {
   // (the module falls through with no keep-alive) -- do NOT double-spawn.
   ops.op_log(
     `editor_host: a kernel is ALREADY running for this project on ws://localhost:${acq.record.port}/ -- ` +
-      `attach your surface there (token ${acq.record.token}). Not spawning a second server or workspace.`,
+      "use the launcher's private capability handoff to attach. Not spawning a second server or workspace.",
   );
 } else {
   if (acq.reclaimedStaleLock) {
@@ -185,8 +175,27 @@ const server = new AuthoritativeServer(editorTransport, {
       return true;
     }
 
-    const model = resolveAnthropicModel(p.model);
-    await ctx.reply({ ok: true, turnId: p.turnId });
+    const admission = chatAdmission.acquire(ctx.session.sessionId, p.text);
+    if (!admission.ok) {
+      await ctx.push("chat/error", {
+        type: "chat.error",
+        turnId: p.turnId,
+        message: admission.message,
+        code: admission.code,
+        retryAfterMs: admission.retryAfterMs,
+      });
+      await ctx.reply({ ok: false, error: admission.message, code: admission.code, retryAfterMs: admission.retryAfterMs });
+      return true;
+    }
+
+    let model: string;
+    try {
+      model = resolveAnthropicModel(p.model);
+      await ctx.reply({ ok: true, turnId: p.turnId });
+    } catch (error) {
+      admission.release();
+      throw error;
+    }
     // Wire shape: JSON-RPC notification method is chat/<event>, params is the
     // full self-describing { type:"chat.<event>", turnId, ... } object.
     void runChatTurn({
@@ -213,6 +222,8 @@ const server = new AuthoritativeServer(editorTransport, {
     }).catch((err) => {
       const message = err instanceof Error ? err.message : String(err);
       void ctx.push("chat/error", { type: "chat.error", turnId: p.turnId, message });
+    }).finally(() => {
+      admission.release();
     });
     return true;
   },
@@ -266,8 +277,8 @@ ops.op_log(
   `editor_host: gate-enabled authoritative MCP-ws server listening on ws://localhost:${port}/ ` +
     `(allowed browser origins: ${EDITOR_ALLOWED_ORIGINS.join(", ")}; native clients without Origin still require token). ` +
     `(profiles: reviewer = the editor, builder.review = a proposing agent, ` +
-    `reviewer.coordinator = the cottage coordinator -> tools/call coordinator.build). ` +
-    `Paste token ${EDITOR_AUTH_TOKEN} into editor/index.html.`,
+    "reviewer.coordinator = the cottage coordinator -> tools/call coordinator.build). " +
+    "Capability available through the launcher's private handoff.",
 );
 
 // Keep the process alive; the accept + tick loops run in the background.

@@ -1,57 +1,362 @@
 import * as THREE from "../../build/three.bundle.mjs";
-import {createEngine,ops} from "../engine.ts";
-import {renderSyncSystem} from "../ecs/world.ts";
-import {isSoftwareAdapter} from "../render/fidelity-benchmark.ts";
-import {withFrozenRendererTime} from "../render/frozen-render-time.ts";
-import {readNativeSurfaceRgba,withPresentedNativeSurfaceFrame} from "../render/native-surface-readback.ts";
-import {validateBuildingFireReviewAuthority,verifyBuildingFireReviewClosure} from "../render/building-fire-review-authority.ts";
-import {mountBuildingFireReview} from "../render/building-fire-review-scene.ts";
-import {captureRenderResourceTelemetry,captureRenderSubmissionTelemetry,requireSubjectPairedRenderSubmissionTelemetry,requireWholeFrameRenderSubmissionTelemetry,type RendererInfoLike} from "../render/telemetry.ts";
-import {portableAssetContentHash} from "../world/asset-content-hash.mjs";
-import {sha256} from "../world/sha256.mjs";
-import {GltfSceneCache} from "../skills/three.ts";
-import type {WorldContext} from "../skills/registry.ts";
+import { createEngine, ops } from "../engine.ts";
+import { renderSyncSystem } from "../ecs/world.ts";
+import { isSoftwareAdapter } from "../render/fidelity-benchmark.ts";
+import { withFrozenRendererTime } from "../render/frozen-render-time.ts";
+import { readNativeSurfaceRgba, withPresentedNativeSurfaceFrame } from "../render/native-surface-readback.ts";
+import {
+  validateBuildingFireReviewAuthority,
+  verifyBuildingFireReviewClosure,
+} from "../render/building-fire-review-authority.ts";
+import { mountBuildingFireReview } from "../render/building-fire-review-scene.ts";
+import {
+  captureRenderResourceTelemetry,
+  captureRenderSubmissionTelemetry,
+  requireSubjectPairedRenderSubmissionTelemetry,
+  requireWholeFrameRenderSubmissionTelemetry,
+  type RendererInfoLike,
+} from "../render/telemetry.ts";
+import { portableAssetContentHash } from "../world/asset-content-hash.mjs";
+import { sha256 } from "../world/sha256.mjs";
+import { GltfSceneCache } from "../skills/three.ts";
+import type { WorldContext } from "../skills/registry.ts";
 
-const TRACE_NAME="building-fire-native-capture.json",AUTHORITY_PATH=ops.op_read_env("LIMINA_BUILDING_FIRE_REVIEW_AUTHORITY");if(!AUTHORITY_PATH)throw new Error("LIMINA_BUILDING_FIRE_REVIEW_AUTHORITY is required");
-const decoder=new TextDecoder("utf-8",{fatal:true}),authorityBytes=ops.op_read_asset(AUTHORITY_PATH),authority=validateBuildingFireReviewAuthority(JSON.parse(decoder.decode(authorityBytes)));verifyBuildingFireReviewClosure(authority,path=>ops.op_read_asset(path));
-const sourcePaths=["js/src/assets/building-fire-runtime-v2.mjs","js/src/render/building-fire-review-authority.ts","js/src/render/building-composition-review-scene.ts","js/src/render/building-fire-runtime.ts","js/src/render/building-fire-render-binding.ts","js/src/render/building-fire-volumetric.ts","js/src/render/building-fire-review-scene.ts","js/src/render/telemetry.ts","js/src/skills/asset.ts","js/src/skills/entity-teardown.ts","js/src/demos/building_fire_capture_window.ts","tools/preview/run-native-building-fire-capture.mjs"] as const;
-const source=Object.freeze(sourcePaths.map(path=>{const bytes=ops.op_read_asset(path);return Object.freeze({path,sha256:`sha256:${sha256(bytes)}`,contentHash:portableAssetContentHash(bytes)});})),[width,height]=authority.presentation.minimumResolution;
-const toBase64=(bytes:Uint8Array)=>{let value="";for(let offset=0;offset<bytes.length;offset+=32768)value+=String.fromCharCode(...bytes.subarray(offset,Math.min(offset+32768,bytes.length)));return btoa(value);};
+const TRACE_NAME = "building-fire-native-capture.json",
+  AUTHORITY_PATH = ops.op_read_env("LIMINA_BUILDING_FIRE_REVIEW_AUTHORITY");
+if (!AUTHORITY_PATH) throw new Error("LIMINA_BUILDING_FIRE_REVIEW_AUTHORITY is required");
+const decoder = new TextDecoder("utf-8", { fatal: true }),
+  authorityBytes = ops.op_read_asset(AUTHORITY_PATH),
+  authority = validateBuildingFireReviewAuthority(JSON.parse(decoder.decode(authorityBytes)));
+verifyBuildingFireReviewClosure(authority, (path) => ops.op_read_asset(path));
+const sourcePaths = [
+  "js/src/assets/building-fire-runtime-v2.mjs",
+  "js/src/render/building-fire-review-authority.ts",
+  "js/src/render/building-composition-review-scene.ts",
+  "js/src/render/building-fire-runtime.ts",
+  "js/src/render/building-fire-render-binding.ts",
+  "js/src/render/building-fire-volumetric.ts",
+  "js/src/render/building-fire-review-scene.ts",
+  "js/src/render/telemetry.ts",
+  "js/src/skills/asset.ts",
+  "js/src/skills/entity-teardown.ts",
+  "js/src/demos/building_fire_capture_window.ts",
+  "tools/preview/run-native-building-fire-capture.mjs",
+] as const;
+const source = Object.freeze(
+    sourcePaths.map((path) => {
+      const bytes = ops.op_read_asset(path);
+      return Object.freeze({ path, sha256: `sha256:${sha256(bytes)}`, contentHash: portableAssetContentHash(bytes) });
+    }),
+  ),
+  [width, height] = authority.presentation.minimumResolution;
+const toBase64 = (bytes: Uint8Array) => {
+  let value = "";
+  for (let offset = 0; offset < bytes.length; offset += 32768)
+    value += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + 32768, bytes.length)));
+  return btoa(value);
+};
 
-const engine=await createEngine({width,height,gpuTimestampMode:"disabled",gpuTextureCompression:"bc-required",renderBaseline:false}),renderer=engine.renderer as unknown as THREE.WebGPURenderer;renderer.info.autoReset=false;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=.9;
-const gltfCache=new GltfSceneCache({ktx2TranscoderPath:"/runtime/basis/",ktx2TranscoderBytes:{js:ops.op_read_asset("runtime/basis/basis_transcoder.js"),wasm:ops.op_read_asset("runtime/basis/basis_transcoder.wasm")}});gltfCache.configureKtx2(renderer);
-const world={ecs:engine.world,entities:engine.entities,tags:engine.tags,transforms:engine.transforms,spatial:engine.spatial,scene:engine.scene,camera:engine.camera,renderer:engine.renderer,gltfCache,ops:engine.ops,width:engine.width,height:engine.height,mode:engine.mode} as WorldContext,scene=engine.scene as THREE.Scene;
-scene.background=new THREE.Color(0x6f7880);const ambient=new THREE.HemisphereLight(0xfff0d8,0x20262d,.58),key=new THREE.DirectionalLight(0xffdfb5,1.25),fill=new THREE.DirectionalLight(0xb9d7ff,.3);key.position.set(-3,8,-4);key.castShadow=true;key.shadow.mapSize.set(2048,2048);fill.position.set(5,4,3);scene.add(ambient,key,fill);
+const engine = await createEngine({
+    width,
+    height,
+    gpuTimestampMode: "disabled",
+    gpuTextureCompression: "bc-required",
+    renderBaseline: false,
+  }),
+  renderer = engine.renderer as unknown as THREE.WebGPURenderer;
+renderer.info.autoReset = false;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.9;
+const gltfCache = new GltfSceneCache({
+  ktx2TranscoderPath: "/runtime/basis/",
+  ktx2TranscoderBytes: {
+    js: ops.op_read_asset("runtime/basis/basis_transcoder.js"),
+    wasm: ops.op_read_asset("runtime/basis/basis_transcoder.wasm"),
+  },
+});
+gltfCache.configureKtx2(renderer);
+const world = {
+    ecs: engine.world,
+    entities: engine.entities,
+    tags: engine.tags,
+    transforms: engine.transforms,
+    spatial: engine.spatial,
+    scene: engine.scene,
+    camera: engine.camera,
+    renderer: engine.renderer,
+    gltfCache,
+    ops: engine.ops,
+    width: engine.width,
+    height: engine.height,
+    mode: engine.mode,
+  } as WorldContext,
+  scene = engine.scene as THREE.Scene;
+scene.background = new THREE.Color(0x6f7880);
+const ambient = new THREE.HemisphereLight(0xfff0d8, 0x20262d, 0.58),
+  key = new THREE.DirectionalLight(0xffdfb5, 1.25),
+  fill = new THREE.DirectionalLight(0xb9d7ff, 0.3);
+key.position.set(-3, 8, -4);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+fill.position.set(5, 4, 3);
+scene.add(ambient, key, fill);
 
-let mounted:Awaited<ReturnType<typeof mountBuildingFireReview>>|undefined,failure:unknown;
-try{
-  if(isSoftwareAdapter(engine.gpuAdapter))throw new Error(`V1 production review resolved a software adapter: ${JSON.stringify(engine.gpuAdapter)}`);ops.op_physics_create_world(0);
-  const baselineEntities=world.entities.ids().length,camera=engine.camera as THREE.PerspectiveCamera;
-  const render=async(beginFrame:()=>void)=>{await withPresentedNativeSurfaceFrame(()=>ops.op_surface_present(engine.context),()=>{beginFrame();renderer.render(scene,camera);});};
-  const output=await withFrozenRendererTime(renderer,0,async beginFrame=>{
-    camera.fov=50;camera.near=.05;camera.far=120;camera.position.set(0,2,5);camera.lookAt(0,1,0);camera.updateProjectionMatrix();camera.updateMatrixWorld(true);renderer.info.reset();await render(beginFrame);
-    const baselineResources=captureRenderResourceTelemetry(renderer.info as unknown as RendererInfoLike);
-    mounted=await mountBuildingFireReview(world,authority);renderSyncSystem(world.ecs);const mountedEntities=world.entities.ids().length;
-    const flameVolume=mounted.binding.root.getObjectByName("limina:flame/volume-main");if(authority.metrics.volumeProof&&!flameVolume)throw new Error("V1 volumetric authority lacks the mounted flame volume");
-    const mountedEvidence={inventory:mounted.inventory,trace:mounted.trace,compositionInventory:mounted.composition.inventory,fuelEntity:mounted.fuelEntity};
-    const canonicalOff=mounted.snapshot(),snapshots=new Map<string,ReturnType<typeof mounted.snapshot>>([["off-initial",canonicalOff]]);
-    mounted.start();mounted.advanceTicks(45);snapshots.set("ignition",mounted.snapshot());mounted.advanceTicks(75);snapshots.set("burn-a",mounted.snapshot());mounted.advanceTicks(30);snapshots.set("burn-b",mounted.snapshot());mounted.advanceTicks(30);snapshots.set("burn-c",mounted.snapshot());mounted.advanceTicks(30);snapshots.set("burn-d",mounted.snapshot());mounted.extinguish();mounted.advanceTicks(60);snapshots.set("extinguish",mounted.snapshot());mounted.advanceTicks(150);snapshots.set("off-final",mounted.snapshot());
-    for(const frame of authority.evidenceFrames){const snapshot=snapshots.get(frame.sampleId);if(!snapshot)throw new Error(`V1 capture lacks runtime snapshot ${frame.sampleId}`);if(snapshot.state.tick!==frame.tick||snapshot.state.phase!==frame.phase)throw new Error(`V1 runtime state drifted at ${frame.id}: expected ${frame.phase}@${frame.tick}, got ${snapshot.state.phase}@${snapshot.state.tick}`);}
-    mounted.restore(canonicalOff);renderer.info.reset();await render(beginFrame);const mountedResources=captureRenderResourceTelemetry(renderer.info as unknown as RendererInfoLike);
-    const captures=[];
-    for(const [index,frame] of authority.evidenceFrames.entries()){
-      const snapshot=snapshots.get(frame.sampleId)!;mounted.restore(snapshot);mounted.setDynamicFireVisible(true);
-      camera.fov=frame.camera.fovDeg;camera.near=.05;camera.far=120;camera.position.set(...frame.camera.position);camera.lookAt(...frame.camera.target);camera.updateProjectionMatrix();camera.updateMatrixWorld(true);
-      for(let warm=0;warm<(index===0?authority.presentation.warmupFrames:2);warm++)await render(beginFrame);
-      mounted.setDynamicFireVisible(false);let baseline;
-      try{baseline=await withPresentedNativeSurfaceFrame(()=>ops.op_surface_present(engine.context),async()=>{renderer.info.reset();beginFrame();renderer.render(scene,camera);const submission=requireWholeFrameRenderSubmissionTelemetry(captureRenderSubmissionTelemetry(renderer.info as unknown as RendererInfoLike)),pixels=await readNativeSurfaceRgba({device:engine.device as never,context:engine.context as never,expectedWidth:width,expectedHeight:height,minimumWidth:width,minimumHeight:height});return{submission,pixels};});}finally{mounted.setDynamicFireVisible(true);}
-      const captured=await withPresentedNativeSurfaceFrame(()=>ops.op_surface_present(engine.context),async()=>{renderer.info.reset();beginFrame();const started=performance.now();renderer.render(scene,camera);const cpuEncodeMs=Number((performance.now()-started).toFixed(3)),submission=requireWholeFrameRenderSubmissionTelemetry(captureRenderSubmissionTelemetry(renderer.info as unknown as RendererInfoLike)),paired=requireSubjectPairedRenderSubmissionTelemetry(baseline.submission,submission),resources=captureRenderResourceTelemetry(renderer.info as unknown as RendererInfoLike),pixels=await readNativeSurfaceRgba({device:engine.device as never,context:engine.context as never,expectedWidth:width,expectedHeight:height,minimumWidth:width,minimumHeight:height});return{cpuEncodeMs,submission,paired,resources,pixels};});
-      let volumeBaseline=baseline.pixels;if(flameVolume){flameVolume.visible=false;try{volumeBaseline=await withPresentedNativeSurfaceFrame(()=>ops.op_surface_present(engine.context),async()=>{beginFrame();renderer.render(scene,camera);return readNativeSurfaceRgba({device:engine.device as never,context:engine.context as never,expectedWidth:width,expectedHeight:height,minimumWidth:width,minimumHeight:height});});}finally{flameVolume.visible=true;}}
-      captures.push({id:frame.id,ordinal:frame.ordinal,viewId:frame.viewId,sampleId:frame.sampleId,tick:frame.tick,phase:frame.phase,purpose:frame.purpose,camera:frame.camera,width:captured.pixels.width,height:captured.pixels.height,surfaceFormat:captured.pixels.format,rgbaByteLength:captured.pixels.rgba.byteLength,rgbaContentHash:portableAssetContentHash(captured.pixels.rgba),rgbaBase64:toBase64(captured.pixels.rgba),pairedBaselineRgbaByteLength:baseline.pixels.rgba.byteLength,pairedBaselineRgbaContentHash:portableAssetContentHash(baseline.pixels.rgba),pairedBaselineRgbaBase64:toBase64(baseline.pixels.rgba),volumeBaselineRgbaByteLength:volumeBaseline.rgba.byteLength,volumeBaselineRgbaContentHash:portableAssetContentHash(volumeBaseline.rgba),volumeBaselineRgbaBase64:toBase64(volumeBaseline.rgba),runtimeSnapshot:snapshot,renderSubmission:{...captured.submission,cpuEncodeMs:captured.cpuEncodeMs},pairedRenderSubmission:captured.paired,rendererResources:captured.resources});
+let mounted: Awaited<ReturnType<typeof mountBuildingFireReview>> | undefined, failure: unknown;
+try {
+  if (isSoftwareAdapter(engine.gpuAdapter))
+    throw new Error(`V1 production review resolved a software adapter: ${JSON.stringify(engine.gpuAdapter)}`);
+  ops.op_physics_create_world(0);
+  const baselineEntities = world.entities.ids().length,
+    camera = engine.camera as THREE.PerspectiveCamera;
+  const render = async (beginFrame: () => void) => {
+    await withPresentedNativeSurfaceFrame(
+      () => ops.op_surface_present(engine.context),
+      () => {
+        beginFrame();
+        renderer.render(scene, camera);
+      },
+    );
+  };
+  const output = await withFrozenRendererTime(renderer, 0, async (beginFrame) => {
+    camera.fov = 50;
+    camera.near = 0.05;
+    camera.far = 120;
+    camera.position.set(0, 2, 5);
+    camera.lookAt(0, 1, 0);
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld(true);
+    renderer.info.reset();
+    await render(beginFrame);
+    const baselineResources = captureRenderResourceTelemetry(renderer.info as unknown as RendererInfoLike);
+    mounted = await mountBuildingFireReview(world, authority);
+    renderSyncSystem(world.ecs);
+    const mountedEntities = world.entities.ids().length;
+    const flameVolume = mounted.binding.root.getObjectByName("limina:flame/volume-main");
+    if (authority.metrics.volumeProof && !flameVolume)
+      throw new Error("V1 volumetric authority lacks the mounted flame volume");
+    const mountedEvidence = {
+      inventory: mounted.inventory,
+      trace: mounted.trace,
+      compositionInventory: mounted.composition.inventory,
+      fuelEntity: mounted.fuelEntity,
+    };
+    const canonicalOff = mounted.snapshot(),
+      snapshots = new Map<string, ReturnType<typeof mounted.snapshot>>([["off-initial", canonicalOff]]);
+    mounted.start();
+    mounted.advanceTicks(45);
+    snapshots.set("ignition", mounted.snapshot());
+    mounted.advanceTicks(75);
+    snapshots.set("burn-a", mounted.snapshot());
+    mounted.advanceTicks(30);
+    snapshots.set("burn-b", mounted.snapshot());
+    mounted.advanceTicks(30);
+    snapshots.set("burn-c", mounted.snapshot());
+    mounted.advanceTicks(30);
+    snapshots.set("burn-d", mounted.snapshot());
+    mounted.extinguish();
+    mounted.advanceTicks(60);
+    snapshots.set("extinguish", mounted.snapshot());
+    mounted.advanceTicks(150);
+    snapshots.set("off-final", mounted.snapshot());
+    for (const frame of authority.evidenceFrames) {
+      const snapshot = snapshots.get(frame.sampleId);
+      if (!snapshot) throw new Error(`V1 capture lacks runtime snapshot ${frame.sampleId}`);
+      if (snapshot.state.tick !== frame.tick || snapshot.state.phase !== frame.phase)
+        throw new Error(
+          `V1 runtime state drifted at ${frame.id}: expected ${frame.phase}@${frame.tick}, got ${snapshot.state.phase}@${snapshot.state.tick}`,
+        );
     }
-    await mounted.dispose();mounted=undefined;renderSyncSystem(world.ecs);renderer.info.reset();await render(beginFrame);const afterDisposeResources=captureRenderResourceTelemetry(renderer.info as unknown as RendererInfoLike),afterDisposeEntities=world.entities.ids().length;
-    if(afterDisposeEntities!==baselineEntities)throw new Error(`V1 review lifecycle leaked entities: ${baselineEntities} -> ${afterDisposeEntities}`);
-    return{captures,mountedEvidence,lifecycle:{baselineEntities,mountedEntities,afterDisposeEntities,baselineResources,mountedResources,afterDisposeResources}};
+    mounted.restore(canonicalOff);
+    renderer.info.reset();
+    await render(beginFrame);
+    const mountedResources = captureRenderResourceTelemetry(renderer.info as unknown as RendererInfoLike);
+    const captures = [];
+    for (const [index, frame] of authority.evidenceFrames.entries()) {
+      const snapshot = snapshots.get(frame.sampleId)!;
+      mounted.restore(snapshot);
+      mounted.setDynamicFireVisible(true);
+      camera.fov = frame.camera.fovDeg;
+      camera.near = 0.05;
+      camera.far = 120;
+      camera.position.set(...frame.camera.position);
+      camera.lookAt(...frame.camera.target);
+      camera.updateProjectionMatrix();
+      camera.updateMatrixWorld(true);
+      for (let warm = 0; warm < (index === 0 ? authority.presentation.warmupFrames : 2); warm++)
+        await render(beginFrame);
+      mounted.setDynamicFireVisible(false);
+      let baseline;
+      try {
+        baseline = await withPresentedNativeSurfaceFrame(
+          () => ops.op_surface_present(engine.context),
+          async () => {
+            renderer.info.reset();
+            beginFrame();
+            renderer.render(scene, camera);
+            const submission = requireWholeFrameRenderSubmissionTelemetry(
+                captureRenderSubmissionTelemetry(renderer.info as unknown as RendererInfoLike),
+              ),
+              pixels = await readNativeSurfaceRgba({
+                device: engine.device as never,
+                context: engine.context as never,
+                expectedWidth: width,
+                expectedHeight: height,
+                minimumWidth: width,
+                minimumHeight: height,
+              });
+            return { submission, pixels };
+          },
+        );
+      } finally {
+        mounted.setDynamicFireVisible(true);
+      }
+      const captured = await withPresentedNativeSurfaceFrame(
+        () => ops.op_surface_present(engine.context),
+        async () => {
+          renderer.info.reset();
+          beginFrame();
+          const started = performance.now();
+          renderer.render(scene, camera);
+          const cpuEncodeMs = Number((performance.now() - started).toFixed(3)),
+            submission = requireWholeFrameRenderSubmissionTelemetry(
+              captureRenderSubmissionTelemetry(renderer.info as unknown as RendererInfoLike),
+            ),
+            paired = requireSubjectPairedRenderSubmissionTelemetry(baseline.submission, submission),
+            resources = captureRenderResourceTelemetry(renderer.info as unknown as RendererInfoLike),
+            pixels = await readNativeSurfaceRgba({
+              device: engine.device as never,
+              context: engine.context as never,
+              expectedWidth: width,
+              expectedHeight: height,
+              minimumWidth: width,
+              minimumHeight: height,
+            });
+          return { cpuEncodeMs, submission, paired, resources, pixels };
+        },
+      );
+      let volumeBaseline = baseline.pixels;
+      if (flameVolume) {
+        flameVolume.visible = false;
+        try {
+          volumeBaseline = await withPresentedNativeSurfaceFrame(
+            () => ops.op_surface_present(engine.context),
+            async () => {
+              beginFrame();
+              renderer.render(scene, camera);
+              return readNativeSurfaceRgba({
+                device: engine.device as never,
+                context: engine.context as never,
+                expectedWidth: width,
+                expectedHeight: height,
+                minimumWidth: width,
+                minimumHeight: height,
+              });
+            },
+          );
+        } finally {
+          flameVolume.visible = true;
+        }
+      }
+      captures.push({
+        id: frame.id,
+        ordinal: frame.ordinal,
+        viewId: frame.viewId,
+        sampleId: frame.sampleId,
+        tick: frame.tick,
+        phase: frame.phase,
+        purpose: frame.purpose,
+        camera: frame.camera,
+        width: captured.pixels.width,
+        height: captured.pixels.height,
+        surfaceFormat: captured.pixels.format,
+        rgbaByteLength: captured.pixels.rgba.byteLength,
+        rgbaContentHash: portableAssetContentHash(captured.pixels.rgba),
+        rgbaBase64: toBase64(captured.pixels.rgba),
+        pairedBaselineRgbaByteLength: baseline.pixels.rgba.byteLength,
+        pairedBaselineRgbaContentHash: portableAssetContentHash(baseline.pixels.rgba),
+        pairedBaselineRgbaBase64: toBase64(baseline.pixels.rgba),
+        volumeBaselineRgbaByteLength: volumeBaseline.rgba.byteLength,
+        volumeBaselineRgbaContentHash: portableAssetContentHash(volumeBaseline.rgba),
+        volumeBaselineRgbaBase64: toBase64(volumeBaseline.rgba),
+        runtimeSnapshot: snapshot,
+        renderSubmission: { ...captured.submission, cpuEncodeMs: captured.cpuEncodeMs },
+        pairedRenderSubmission: captured.paired,
+        rendererResources: captured.resources,
+      });
+    }
+    await mounted.dispose();
+    mounted = undefined;
+    renderSyncSystem(world.ecs);
+    renderer.info.reset();
+    await render(beginFrame);
+    const afterDisposeResources = captureRenderResourceTelemetry(renderer.info as unknown as RendererInfoLike),
+      afterDisposeEntities = world.entities.ids().length;
+    if (afterDisposeEntities !== baselineEntities)
+      throw new Error(`V1 review lifecycle leaked entities: ${baselineEntities} -> ${afterDisposeEntities}`);
+    return {
+      captures,
+      mountedEvidence,
+      lifecycle: {
+        baselineEntities,
+        mountedEntities,
+        afterDisposeEntities,
+        baselineResources,
+        mountedResources,
+        afterDisposeResources,
+      },
+    };
   });
-  ops.op_write_trace(TRACE_NAME,`${JSON.stringify({schema:"limina.building-fire-native-review-set/v1",backend:"native-webgpu",captureClass:"production-engine",surfaceFormat:output.captures[0].surfaceFormat,pixelFormat:authority.presentation.pixelFormat,rowOrigin:authority.presentation.rowOrigin,timingPolicy:{gpuTimestampMode:"disabled",timestampQueriesEnabled:false},adapter:engine.gpuAdapter,authority:{path:AUTHORITY_PATH,sha256:`sha256:${sha256(authorityBytes)}`,contentHash:portableAssetContentHash(authorityBytes)},source,mounted:output.mountedEvidence,lifecycle:output.lifecycle,captures:output.captures})}\n`);
-}catch(error){failure=error;}finally{const failures:unknown[]=[];try{await mounted?.dispose();}catch(error){failures.push(error);}scene.remove(ambient,key,fill);try{await gltfCache.dispose();}catch(error){failures.push(error);}try{engine.disposeRenderBaseline();}catch(error){failures.push(error);}try{await renderer.dispose();}catch(error){failures.push(error);}if(failures.length)failure=new AggregateError(failure===undefined?failures:[failure,...failures],"V1 capture teardown failed");}if(failure!==undefined)throw failure;
+  ops.op_write_trace(
+    TRACE_NAME,
+    JSON.stringify({
+      schema: "limina.building-fire-native-review-set/v1",
+      backend: "native-webgpu",
+      captureClass: "production-engine",
+      surfaceFormat: output.captures[0].surfaceFormat,
+      pixelFormat: authority.presentation.pixelFormat,
+      rowOrigin: authority.presentation.rowOrigin,
+      timingPolicy: { gpuTimestampMode: "disabled", timestampQueriesEnabled: false },
+      adapter: engine.gpuAdapter,
+      authority: {
+        path: AUTHORITY_PATH,
+        sha256: `sha256:${sha256(authorityBytes)}`,
+        contentHash: portableAssetContentHash(authorityBytes),
+      },
+      source,
+      mounted: output.mountedEvidence,
+      lifecycle: output.lifecycle,
+      captures: output.captures,
+    }) + "\n",
+  );
+} catch (error) {
+  failure = error;
+} finally {
+  const failures: unknown[] = [];
+  try {
+    await mounted?.dispose();
+  } catch (error) {
+    failures.push(error);
+  }
+  scene.remove(ambient, key, fill);
+  try {
+    await gltfCache.dispose();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    engine.disposeRenderBaseline();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await renderer.dispose();
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length)
+    failure = new AggregateError(
+      failure === undefined ? failures : [failure, ...failures],
+      "V1 capture teardown failed",
+    );
+}
+if (failure !== undefined) throw failure;

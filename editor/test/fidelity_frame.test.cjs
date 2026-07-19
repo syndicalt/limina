@@ -24,7 +24,7 @@ function fail(m) { console.error("FAIL: " + m); process.exit(1); }
   requireChromeBinary(CHROME);
   let browser;
   try {
-    browser = await chromium.launch({ executablePath: CHROME, args: ["--no-sandbox", "--disable-dev-shm-usage", "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
+    browser = await chromium.launch({ executablePath: CHROME, args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
   } catch (e) { console.log("SKIP: could not launch chromium (" + e.message + ")"); process.exit(2); }
 
   const page = await (await browser.newContext()).newPage();

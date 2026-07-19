@@ -16,7 +16,7 @@ through the **editor bridge** (a stdio MCP server) so everything you and your bu
 do shows up live:
 
 - Register the bridge as an MCP server: `node tools/bridge/limina-bridge.mjs`, with
-  `LIMINA_EDITOR_TOKEN` (printed when `editor_host` boots) in its env.
+  `LIMINA_EDITOR_TOKEN` (read from the private capability file reported by the editor launcher) in its env.
 - Each **builder subagent runs its OWN bridge instance** with a distinct
   `LIMINA_AGENT_ID` — the recorder tracks each as an independent chain, so concurrent
   builders never corrupt the one world log.

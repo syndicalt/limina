@@ -53,6 +53,13 @@ const MAX_TTS_WORKERS: usize = 4;
 const MAX_TTS_DECODED_SAMPLES: usize = SAMPLE_RATE as usize * 2 * 30;
 const MAX_GAIN: f32 = 4.0;
 const AUDIO_SHUTDOWN_POLL: Duration = Duration::from_millis(25);
+/// Drop waits briefly for an ordinary audio thread to acknowledge shutdown, then
+/// detaches rather than letting a wedged backend freeze engine teardown.
+const AUDIO_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
+/// Maximum time the V8 thread waits for host audio discovery. A backend call
+/// can wedge below cpal; after this bound the engine degrades to Null and
+/// detaches the pre-signalled discovery thread instead of blocking on join.
+const AUDIO_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const TTS_PROCESS_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Commands sent from the JS-thread ops (and TTS workers) to the audio thread.
@@ -127,9 +134,9 @@ enum AudioCmd {
         volume: f32,
     },
     /// Clean-shutdown signal: the audio thread returns, dropping the sink (so the OS
-    /// output closes) and letting the thread be joined. Sent from `AudioHandle`'s
-    /// `Drop`; delivery is best-effort (dropped if the channel is full), with
-    /// sender-drop as the guaranteed fallback that also ends the receive loop.
+    /// output closes) and acknowledging bounded teardown. Sent from `AudioHandle`'s
+    /// `Drop`; delivery is best-effort (dropped if the channel is full), with the
+    /// independent shutdown flag as the guaranteed receive-loop escape.
     Shutdown,
 }
 
@@ -141,6 +148,7 @@ enum AudioCmd {
 struct AudioHandle {
     tx: Option<Arc<SyncSender<AudioCmd>>>,
     join: Option<thread::JoinHandle<()>>,
+    done: Option<Receiver<()>>,
     shutdown: Option<Arc<AtomicBool>>,
     /// Count of commands dropped due to a full channel (backpressure); used only to
     /// throttle the warning log. Not world state (never affects determinism).
@@ -176,10 +184,27 @@ impl AudioHandle {
     }
 }
 
+fn finish_audio_thread(
+    join: thread::JoinHandle<()>,
+    done: Receiver<()>,
+    timeout: Duration,
+) -> bool {
+    if matches!(done.recv_timeout(timeout), Err(RecvTimeoutError::Timeout)) {
+        // Dropping a JoinHandle detaches it. Its independent shutdown flag is
+        // owned by the worker and was set before this helper is called.
+        drop(join);
+        false
+    } else {
+        let _ = join.join();
+        true
+    }
+}
+
 impl Drop for AudioHandle {
     /// Clean shutdown: signal the audio thread to return, drop our (sole strong)
     /// sender so the receive loop can still end if that signal was dropped (channel
-    /// full), then join. Null backend has no thread, so this is a no-op there.
+    /// full), then wait only a bounded interval for acknowledgement. A backend
+    /// wedged below rodio/cpal is detached rather than freezing engine teardown.
     fn drop(&mut self) {
         if let Some(shutdown) = self.shutdown.take() {
             shutdown.store(true, Ordering::Release);
@@ -189,7 +214,13 @@ impl Drop for AudioHandle {
             drop(tx);
         }
         if let Some(join) = self.join.take() {
-            let _ = join.join();
+            let exited = self
+                .done
+                .take()
+                .is_some_and(|done| finish_audio_thread(join, done, AUDIO_SHUTDOWN_TIMEOUT));
+            if !exited {
+                eprintln!("[audio] shutdown acknowledgement timed out; detaching audio thread");
+            }
         }
     }
 }
@@ -414,20 +445,27 @@ impl Drop for TmpWav {
 /// espeak-ng: instant formant TTS (`espeak-ng -w <file> <text>`). The dependable
 /// zero-install fallback voice.
 struct EspeakProvider;
+
+fn espeak_command(output: &std::path::Path, text: &str, pitch: u8) -> Command {
+    let mut cmd = Command::new("espeak-ng");
+    cmd.arg("-w").arg(output);
+    if pitch > 0 {
+        // Higher pitch + a slightly slower rate -> a cuter, sing-song voice.
+        cmd.arg("-p").arg(pitch.min(99).to_string());
+        cmd.arg("-s").arg("150");
+    }
+    // GNU getopt permutes options by default. The terminator is a security
+    // boundary: agent-controlled speech beginning with -w/-f remains text.
+    cmd.arg("--").arg(text);
+    cmd
+}
+
 impl VoiceProvider for EspeakProvider {
     fn synth(&self, text: &str, pitch: u8, cancelled: &AtomicBool) -> Result<Vec<u8>, String> {
         let tmp = TmpWav {
             path: tts_tmp_path(),
         };
-        let mut cmd = Command::new("espeak-ng");
-        cmd.arg("-w").arg(&tmp.path);
-        if pitch > 0 {
-            // Higher pitch + a slightly slower rate -> a cuter, sing-song voice.
-            cmd.arg("-p").arg(pitch.min(99).to_string());
-            cmd.arg("-s").arg("150");
-        }
-        let mut child = cmd
-            .arg(text)
+        let mut child = espeak_command(&tmp.path, text, pitch)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -841,17 +879,49 @@ fn run_audio(
     }
 }
 
-/// Spawn the audio thread, opening the default output on it. Returns the command
-/// sender (the sole strong `Arc`), whether a live device was acquired, and the
-/// join handle. The channel is BOUNDED (`AUDIO_CMD_CAPACITY`) so a stalled thread
-/// applies backpressure instead of growing memory. On no device the thread keeps
-/// draining commands (no-op), so the returned sender is always valid.
-fn spawn_audio() -> std::io::Result<(
+/// Spawn the audio thread, opening the default output on it. `Some` carries a
+/// live device; `None` is an honest Null fallback after prompt failure or the
+/// bounded discovery deadline. The channel is bounded so a stalled live thread
+/// applies backpressure instead of growing memory.
+type LiveAudioThread = (
     Arc<SyncSender<AudioCmd>>,
     Arc<AtomicBool>,
-    bool,
     thread::JoinHandle<()>,
-)> {
+    Receiver<()>,
+);
+
+fn await_audio_startup(
+    ready_rx: Receiver<bool>,
+    timeout: Duration,
+    tx: Arc<SyncSender<AudioCmd>>,
+    shutdown: Arc<AtomicBool>,
+    handle: thread::JoinHandle<()>,
+    done_rx: Receiver<()>,
+) -> Option<LiveAudioThread> {
+    match ready_rx.recv_timeout(timeout) {
+        Ok(true) => Some((tx, shutdown, handle, done_rx)),
+        Ok(false) | Err(RecvTimeoutError::Disconnected) => {
+            // Prompt failure enters a null-drain loop that polls this independent
+            // flag, so this join is bounded by AUDIO_SHUTDOWN_POLL.
+            shutdown.store(true, Ordering::Release);
+            drop(tx);
+            let _ = handle.join();
+            None
+        }
+        Err(RecvTimeoutError::Timeout) => {
+            // open_output may be wedged inside a host API. Retaining this handle
+            // would only move the hang to Drop/re-init. Detach after closing its
+            // channel and pre-signalling shutdown; if discovery returns later,
+            // the worker exits without entering its service loop.
+            shutdown.store(true, Ordering::Release);
+            drop(tx);
+            drop(handle);
+            None
+        }
+    }
+}
+
+fn spawn_audio() -> std::io::Result<Option<LiveAudioThread>> {
     let (raw_tx, rx) = mpsc::sync_channel::<AudioCmd>(AUDIO_CMD_CAPACITY);
     // The audio thread holds only a `Weak` (for the TTS-back path), so dropping
     // this strong sender is what lets the receive loop terminate.
@@ -860,28 +930,61 @@ fn spawn_audio() -> std::io::Result<(
     let shutdown = Arc::new(AtomicBool::new(false));
     let thread_shutdown = Arc::clone(&shutdown);
     let (ready_tx, ready_rx) = mpsc::channel::<bool>();
+    let (done_tx, done_rx) = mpsc::channel::<()>();
     let handle = thread::Builder::new()
         .name("limina-audio".into())
-        .spawn(move || match open_output() {
-            Ok(mut dev) => {
-                dev.log_on_drop(false);
-                let _ = ready_tx.send(true);
-                let voice = select_voice();
-                run_audio(dev, rx, back, voice, thread_shutdown);
-            }
-            Err(e) => {
-                eprintln!("[audio] no output device ({e}); running null");
-                let _ = ready_tx.send(false);
-                while !thread_shutdown.load(Ordering::Acquire) {
-                    match rx.recv_timeout(AUDIO_SHUTDOWN_POLL) {
-                        Ok(_) | Err(RecvTimeoutError::Timeout) => {}
-                        Err(RecvTimeoutError::Disconnected) => break,
+        .spawn(move || {
+            match open_output() {
+                Ok(mut dev) => {
+                    dev.log_on_drop(false);
+                    let _ = ready_tx.send(true);
+                    // A timed-out initializer pre-signals shutdown while this
+                    // thread is still inside open_output. Do not probe TTS or
+                    // enter the service loop after that late return.
+                    if !thread_shutdown.load(Ordering::Acquire) {
+                        let voice = select_voice();
+                        run_audio(dev, rx, back, voice, thread_shutdown);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[audio] no output device ({e}); running null");
+                    let _ = ready_tx.send(false);
+                    while !thread_shutdown.load(Ordering::Acquire) {
+                        match rx.recv_timeout(AUDIO_SHUTDOWN_POLL) {
+                            Ok(_) | Err(RecvTimeoutError::Timeout) => {}
+                            Err(RecvTimeoutError::Disconnected) => break,
+                        }
                     }
                 }
             }
+            let _ = done_tx.send(());
         })?;
-    let live = ready_rx.recv().unwrap_or(false);
-    Ok((tx, shutdown, live, handle))
+    let live = await_audio_startup(
+        ready_rx,
+        AUDIO_STARTUP_TIMEOUT,
+        tx,
+        shutdown,
+        handle,
+        done_rx,
+    );
+    if live.is_none() {
+        eprintln!(
+            "[audio] output unavailable after at most {}ms; running null",
+            AUDIO_STARTUP_TIMEOUT.as_millis()
+        );
+    }
+    Ok(live)
+}
+
+fn null_audio_handle() -> AudioHandle {
+    AudioHandle {
+        tx: None,
+        join: None,
+        done: None,
+        shutdown: None,
+        dropped: AtomicU64::new(0),
+        next_id: 0,
+    }
 }
 
 // ---- ops -------------------------------------------------------------------
@@ -890,50 +993,49 @@ fn spawn_audio() -> std::io::Result<(
 /// no device opened). Returns 1 if a live device is playing, 0 for Null.
 #[op2(fast)]
 pub fn op_audio_init(state: &mut OpState) -> u32 {
+    audio_init_impl(state)
+}
+
+fn audio_init_impl(state: &mut OpState) -> u32 {
+    // Idempotence preserves live sounds and prevents repeated calls from
+    // accumulating discovery threads on a hostile or wedged host backend.
+    if let Some(existing) = state.try_borrow::<AudioHandle>() {
+        return u32::from(existing.tx.is_some());
+    }
     let forced_null = std::env::var("LIMINA_AUDIO")
         .map(|v| v.eq_ignore_ascii_case("null"))
         .unwrap_or(false);
     if forced_null {
-        state.put(AudioHandle {
-            tx: None,
-            join: None,
-            shutdown: None,
-            dropped: AtomicU64::new(0),
-            next_id: 0,
-        });
+        state.put(null_audio_handle());
         // stderr: stdout is the JSON-RPC transport under --mcp-stdio.
         eprintln!("[audio] backend: null (LIMINA_AUDIO=null)");
         return 0;
     }
     // Thread-spawn failure degrades to the null backend (like a missing output
     // device); audio must never take the engine down.
-    let (tx, shutdown, live, join) = match spawn_audio() {
-        Ok(parts) => parts,
+    let (tx, shutdown, join, done) = match spawn_audio() {
+        Ok(Some(parts)) => parts,
+        Ok(None) => {
+            state.put(null_audio_handle());
+            return 0;
+        }
         Err(e) => {
             eprintln!("[audio] failed to spawn audio thread ({e}); running null");
-            state.put(AudioHandle {
-                tx: None,
-                join: None,
-                shutdown: None,
-                dropped: AtomicU64::new(0),
-                next_id: 0,
-            });
+            state.put(null_audio_handle());
             return 0;
         }
     };
     state.put(AudioHandle {
         tx: Some(tx),
         join: Some(join),
+        done: Some(done),
         shutdown: Some(shutdown),
         dropped: AtomicU64::new(0),
         next_id: 0,
     });
     // stderr: stdout is the JSON-RPC transport under --mcp-stdio.
-    eprintln!(
-        "[audio] backend: {}",
-        if live { "live" } else { "null (no device)" }
-    );
-    u32::from(live)
+    eprintln!("[audio] backend: live");
+    1
 }
 
 /// Play a one-shot synthesized SFX blip on `bus` at `volume`. Returns its handle.
@@ -1177,6 +1279,98 @@ extension!(
 mod tests {
     use super::*;
 
+    #[test]
+    fn espeak_text_is_after_an_option_terminator() {
+        let hostile = "-w /home/user/.bashrc";
+        let cmd = espeak_command(std::path::Path::new("/tmp/output.wav"), hostile, 42);
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args.last().map(String::as_str), Some(hostile));
+        assert_eq!(
+            args.get(args.len() - 2).map(String::as_str),
+            Some("--"),
+            "agent text must be separated from GNU getopt parsing: {args:?}"
+        );
+    }
+
+    #[test]
+    fn startup_timeout_degrades_without_joining_the_wedged_worker() {
+        let (raw_tx, rx) = mpsc::sync_channel::<AudioCmd>(1);
+        let tx = Arc::new(raw_tx);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker_shutdown = Arc::clone(&shutdown);
+        let (ready_tx, ready_rx) = mpsc::channel::<bool>();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        let (finished_tx, finished_rx) = mpsc::channel::<()>();
+        let handle = thread::spawn(move || {
+            // Model a backend discovery call that outlives the engine's wait.
+            thread::sleep(Duration::from_millis(250));
+            let _ = ready_tx.send(true);
+            assert!(worker_shutdown.load(Ordering::Acquire));
+            assert!(matches!(
+                rx.try_recv(),
+                Err(mpsc::TryRecvError::Disconnected)
+            ));
+            let _ = done_tx.send(());
+            let _ = finished_tx.send(());
+        });
+
+        let started = Instant::now();
+        let live = await_audio_startup(
+            ready_rx,
+            Duration::from_millis(10),
+            tx,
+            shutdown,
+            handle,
+            done_rx,
+        );
+        assert!(live.is_none());
+        assert!(
+            started.elapsed() < Duration::from_millis(150),
+            "timeout path joined the still-running discovery thread"
+        );
+        finished_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("detached discovery thread observed shutdown and exited");
+    }
+
+    #[test]
+    fn shutdown_ack_timeout_detaches_instead_of_joining() {
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        let (finished_tx, finished_rx) = mpsc::channel::<()>();
+        let join = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(250));
+            let _ = done_tx.send(());
+            let _ = finished_tx.send(());
+        });
+
+        let started = Instant::now();
+        assert!(!finish_audio_thread(
+            join,
+            done_rx,
+            Duration::from_millis(10)
+        ));
+        assert!(
+            started.elapsed() < Duration::from_millis(150),
+            "shutdown acknowledgement timeout joined the wedged worker"
+        );
+        finished_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("detached teardown fixture exited");
+    }
+
+    #[test]
+    fn audio_init_is_idempotent_for_an_existing_backend() {
+        let mut state = OpState::new(None);
+        let mut handle = null_audio_handle();
+        handle.next_id = 17;
+        state.put(handle);
+        assert_eq!(audio_init_impl(&mut state), 0);
+        assert_eq!(state.borrow::<AudioHandle>().next_id, 17);
+    }
+
     /// A full bounded channel must DROP further sends (not block the V8 thread, not
     /// grow memory), and draining must release the backpressure.
     #[test]
@@ -1185,6 +1379,7 @@ mod tests {
         let h = AudioHandle {
             tx: Some(Arc::new(tx)),
             join: None,
+            done: None,
             shutdown: None,
             dropped: AtomicU64::new(0),
             next_id: 0,
@@ -1242,6 +1437,7 @@ mod tests {
         let retained_worker_sender = Arc::clone(&tx);
         let shutdown = Arc::new(AtomicBool::new(false));
         let thread_shutdown = Arc::clone(&shutdown);
+        let (done_tx, done_rx) = mpsc::channel::<()>();
         let join = thread::spawn(move || {
             while !thread_shutdown.load(Ordering::Acquire) {
                 match rx.recv_timeout(AUDIO_SHUTDOWN_POLL) {
@@ -1249,11 +1445,13 @@ mod tests {
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
             }
+            let _ = done_tx.send(());
         });
         let started = Instant::now();
         drop(AudioHandle {
             tx: Some(tx),
             join: Some(join),
+            done: Some(done_rx),
             shutdown: Some(shutdown),
             dropped: AtomicU64::new(0),
             next_id: 0,

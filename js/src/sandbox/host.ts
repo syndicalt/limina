@@ -8,7 +8,9 @@
 // no Deno, no Deno.core.ops, no ECS TypedArrays, no WorldContext — an
 // eval/Function-ctor escape only reaches an empty global. CPU/memory/stack
 // budgets are enforced in-thread by the runtime (interrupt deadline, memory
-// limit, stack cap).
+// limit, stack cap). The interrupt is checked at QuickJS safepoints: it contains
+// ordinary runaway JS but is not hard wall-clock preemption, and this synchronous
+// op can overshoot while QuickJS is inside one long native regexp/JSON operation.
 //
 // Re-entry: a READ capability is served synchronously from the agent's injected
 // perception snapshot (its OWN view, never another agent's private state); a
@@ -48,7 +50,7 @@ export function parseUntrustedArgs(argsJson: string): { input: Record<string, un
 export interface SandboxBudgets {
   /** Per-agent memory budget; an OOM is a catchable error, the host survives. */
   memLimitBytes?: number;
-  /** Per-decision CPU budget; a runaway decision is interrupted at the deadline. */
+  /** Per-decision QuickJS interrupt budget (safepoint-coarse, not hard preemption). */
   cpuDeadlineMs?: number;
   /** Stack cap; deep recursion throws "stack size exceeded" instead of aborting. */
   maxStackBytes?: number;
@@ -63,16 +65,27 @@ const DEFAULT_BUDGETS: Required<SandboxBudgets> = {
   readCaps: ["perception", "agent.getPerception", "ecs.getSelfPosition"],
 };
 
-const LOAD_DEADLINE_MS = 1_000;
+/** Rust accepts the same ceiling. Loads get the full allowance; decisions keep
+ * the 50ms default. Both remain QuickJS safepoint-coarse interrupt budgets. */
+const MAX_EVAL_DEADLINE_MS = 1_000;
+const LOAD_DEADLINE_MS = MAX_EVAL_DEADLINE_MS;
 
 function finitePositive(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function normalizeDeadline(value: unknown): number {
+  const deadline = finitePositive(value, DEFAULT_BUDGETS.cpuDeadlineMs);
+  if (deadline > MAX_EVAL_DEADLINE_MS) {
+    throw new RangeError(`sandbox cpuDeadlineMs must be <= ${MAX_EVAL_DEADLINE_MS}`);
+  }
+  return deadline;
+}
+
 function normalizeBudgets(budgets: SandboxBudgets): Required<SandboxBudgets> {
   return {
     memLimitBytes: finitePositive(budgets.memLimitBytes, DEFAULT_BUDGETS.memLimitBytes),
-    cpuDeadlineMs: finitePositive(budgets.cpuDeadlineMs, DEFAULT_BUDGETS.cpuDeadlineMs),
+    cpuDeadlineMs: normalizeDeadline(budgets.cpuDeadlineMs),
     maxStackBytes: finitePositive(budgets.maxStackBytes, DEFAULT_BUDGETS.maxStackBytes),
     readCaps: Array.isArray(budgets.readCaps) ? budgets.readCaps : DEFAULT_BUDGETS.readCaps,
   };

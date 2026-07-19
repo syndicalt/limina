@@ -317,7 +317,20 @@ for index, entry in enumerate(manifest["dependencies"]["catalog"]):
     with open(paths["functionalEvidence"], "r", encoding="utf8") as handle:
         functional = json.load(handle)
     checks = functional.get("checks", [])
-    if contract.get("schema") != "limina.furniture-design-contract/v1" or contract.get("role") != entry["role"] or build.get("schema") != "limina.furniture-contract-build-evidence/v1" or build.get("sourceBlend", {}).get("sha256") != entry["sourceBlend"]["sha256"] or build.get("asset", {}).get("sha256") != entry["runtimeGlb"]["sha256"] or functional.get("schema") != "limina.furniture-functional-evidence/v1" or functional.get("verdict") != "pass" or not checks or any(check.get("passed") is not True or check.get("findings") not in (None, []) for check in checks):
+    if (
+        contract.get("schema") != "limina.furniture-design-contract/v1"
+        or contract.get("role") != entry["role"]
+        or build.get("schema") != "limina.furniture-contract-build-evidence/v1"
+        or build.get("sourceBlend", {}).get("sha256") != entry["sourceBlend"]["sha256"]
+        or build.get("asset", {}).get("sha256") != entry["runtimeGlb"]["sha256"]
+        or functional.get("schema") != "limina.furniture-functional-evidence/v1"
+        or functional.get("verdict") != "pass"
+        or not checks
+        or any(
+            check.get("passed") is not True or check.get("findings") not in (None, [])
+            for check in checks
+        )
+    ):
         raise RuntimeError(f"{label} design/build/functional provenance drifted")
     catalog_by_id[entry["artifact"]["artifactId"]] = entry
     catalog_paths[entry["artifact"]["artifactId"]] = paths

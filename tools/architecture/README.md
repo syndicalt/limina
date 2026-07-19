@@ -51,14 +51,73 @@ packaging, and publishes a new append-only candidate only if every step succeeds
 
 ```sh
 bun tools/architecture/build-fb4-multi-room-candidate.ts
-bun js/test/p_fb4_program_synthesis_candidate.ts
+bun js/test/p_fb4_v2_cpu_candidate.ts
 LIMINA_ASSET_ROOT=assets ./target/release/limina js/test/p_fb4_program_candidate_native_traversal.ts
 ```
 
-Candidate identity includes the program, decision/spec/IR, all production TypeScript/Python/packaging sources,
-and every material manifest and image consumed by the adapter. The current CPU-only candidate is
-`fb4-multi-room-candidate-d0ca1e327841`; these commands do not initialize a renderer or transfer visual
-approval.
+Candidate identity includes the program, decision/spec/IR, recursively resolved production modules, explicit
+Python/toolchain files, every pinned visual-reference byte, and every material manifest/image consumed by the
+adapter. The d0ca and 1b447 candidates are immutable central rejections; neither is a current visual candidate.
+These commands do not initialize a renderer or transfer visual approval. Proxy and site-review commands require
+explicit append-only candidate/output paths; there is no manually synchronized default candidate.
+
+The exact FB-4 V4 R1 candidate `functional-hall-house/fb4/1f375ec3abe1` is the approved multi-room
+authority. Its owner approval is append-only and candidate-specific; it does not authorize a later render.
+FB-5 publishes only after independently replaying that complete ledger:
+
+```sh
+bun tools/architecture/build-fb5-functional-building-publication.ts \
+  --candidate-manifest assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-1f375ec3abe1/candidate-manifest.json \
+  --review-outcome assets/buildings/authoring/functional-hall-house-v4/review-outcomes/fb4-1f375ec3abe1-v4-r1-central-passed.json \
+  --review-outcome assets/buildings/authoring/functional-hall-house-v4/review-outcomes/fb4-1f375ec3abe1-v4-r1-hitl-approved.json \
+  --approved-outcome assets/buildings/authoring/functional-hall-house-v4/review-outcomes/fb4-1f375ec3abe1-v4-r1-hitl-approved.json \
+  --publication-id publication/functional-hall-house/fb4-v3-r1 \
+  --catalog-id settlement/functional-buildings --catalog-revision 1 \
+  --entry-id building/functional-hall-house-fb4 \
+  --family-id house/functional-hall --variant-id fb4-v3-cross-gable \
+  --out assets/buildings/catalog/functional-hall-house-fb4-v3-r1.json
+```
+
+The settlement builder consumes only that independently verified publication and a bounded recipe. It emits
+one atomic directory containing canonical WorldMap, strict plan, per-placement site artifacts, and the
+terminal release record:
+
+```sh
+bun tools/architecture/build-fb5-functional-settlement.ts \
+  --recipe assets/buildings/authoring/functional-hall-house-v4/fb5-functional-hall-settlement-r1-recipe.json \
+  --out-root assets/settlements/functional-hall-r1
+bun js/test/p_fb5_functional_settlement_release.ts
+LIMINA_ASSET_ROOT=. LIMINA_AUDIO=null ./target/release/limina \
+  js/test/p_fb5_functional_settlement_release_native.ts
+```
+
+These commands are CPU-only and do not initialize a renderer. The native proof mounts the real approved LOD
+GLB through `building.placeFunctional`, checks exact large-coordinate Atlas/site transforms, enforces
+whole-building residency bounds, and unloads atomically. Normal `CoreSkills` exposes
+`functionalSettlements.releaseHost`; it independently loads the exact release, samples resident editable or
+generated terrain, drives the released residency manager, enrolls snapshot ownership, and unregisters it on
+atomic close. The exact live-host and restore/continuation proofs are:
+
+```sh
+LIMINA_ASSET_ROOT=. LIMINA_AUDIO=null ./target/release/limina \
+  js/test/p_functional_settlement_live_host_native.ts
+LIMINA_ASSET_ROOT=. LIMINA_AUDIO=null ./target/release/limina \
+  js/test/p_fb5_functional_settlement_snapshot_replay.ts
+```
+
+The separate furnishing-sidecar builder binds previously approved functional furniture to room-contained
+sockets without changing reviewed pixels:
+
+```sh
+bun tools/architecture/build-fb5-functional-settlement-furnishing.ts \
+  --recipe assets/settlements/functional-hall-r1/furnishing-recipe-r1.json \
+  --out assets/settlements/functional-hall-r1/furnishing-authority-r1.json
+bun js/test/p_fb5_functional_settlement_furnishing.ts
+```
+
+R1's sidecar is deliberately dormant: zero furniture meshes, colliders, or ECS entities. Its three variants
+are arrangement authorities, not plural building variants. Visible/physical furnishing or a distinct building
+GLB is new rendered content and still requires the guarded capture path plus explicit HITL.
 
 The staged migration additionally supports `architecture:build-shell`, which emits a functional shell GLB and
 editable source blend while excluding independently owned furniture, props, fire visuals, and practical

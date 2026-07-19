@@ -2,6 +2,7 @@
 // - untrusted top-level load code gets a finite deadline and tears down on failure
 // - object-ish eval results are serialized as JSON values, not type names
 // - non-finite memory budgets do not disable the sandbox memory limit
+// - JS load/decision budgets share the native 1000ms ceiling
 import { ops } from "../src/engine.ts";
 import { createHeadlessContext } from "../src/game/context.ts";
 import { AgentRegistry } from "../src/agents/agent.ts";
@@ -24,6 +25,22 @@ const ctx = createHeadlessContext({ session: "ses_sandbox_regressions", agentId:
 const host = new SandboxedSkillHost(ctx.registry, ctx.tracer);
 
 const startLive = host.liveCount();
+const deadlineErr = assertThrows(
+  () => host.create(
+    {
+      agentId: "agt_absurd_deadline",
+      sessionId: "ses_absurd_deadline",
+      profile: "system.readonly",
+      code: "globalThis.decide = function(){ return 'noop'; };",
+    },
+    { cpuDeadlineMs: 1_001 },
+  ),
+  "a decision budget above the native ceiling must fail before allocation",
+);
+assert(deadlineErr.message.includes("<= 1000"), "deadline ceiling should be explicit, got: " + deadlineErr.message);
+assert(!host.has("agt_absurd_deadline"), "rejected deadline must not create a host entry");
+assert(host.liveCount() === startLive, "rejected deadline must not allocate a QuickJS handle");
+
 const loadErr = assertThrows(
   () =>
     host.create({
@@ -73,4 +90,4 @@ assert(host.destroy("agt_json_result"), "destroy json sandbox");
 assert(host.destroy("agt_nan_mem"), "destroy NaN memory sandbox");
 assert(host.liveCount() === startLive, "all regression sandboxes must be freed, live=" + host.liveCount() + " start=" + startLive);
 
-ops.op_log("p4_sandbox_audit_regressions OK: load timeout/cleanup, object JSON result, and NaN memory budget containment");
+ops.op_log("p4_sandbox_audit_regressions OK: reconciled deadlines, load cleanup, JSON result, and NaN memory containment");

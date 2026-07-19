@@ -87,7 +87,9 @@ const builderWrites: string[][] = [];
 const builders = Array.from({ length: 3 }, () => {
   const writes: string[] = [];
   builderWrites.push(writes);
-  return new StdioMcpTransport(mcp, (line) => writes.push(line));
+  return new StdioMcpTransport(mcp, (line) => writes.push(line), {
+    allowedProfiles: new Set(["builder.readWrite"]), specProfile: "builder.readWrite",
+  });
 });
 async function builderCall(i: number, id: number, method: string, params: Record<string, unknown>): Promise<unknown> {
   const writes = builderWrites[i];

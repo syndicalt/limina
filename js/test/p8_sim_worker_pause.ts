@@ -1,4 +1,4 @@
-import { installSimWorker } from "../src/browser/sim-worker.ts";
+import { FixedStepAccumulator, installSimWorker } from "../src/browser/sim-worker.ts";
 import { shouldRenderLiveFrame } from "../src/browser/live-runtime.ts";
 
 function assert(condition: boolean, message: string): asserts condition {
@@ -10,7 +10,26 @@ const scope = {
   onmessage: null as ((event: { data: unknown }) => void) | null,
   postMessage(message: unknown): void { messages.push(message as Record<string, unknown>); },
 };
-installSimWorker(scope);
+let shellClockMs = 0;
+installSimWorker(scope, { nowMs: () => { shellClockMs += 100; return shellClockMs; } });
+
+// Deterministic scheduler contract: elapsed time is accumulated, catch-up is
+// bounded, excess debt is reported, and resume/reset carries no paused debt.
+const accumulator = new FixedStepAccumulator(10, 5, 250);
+accumulator.reset(0);
+let advance = accumulator.advance(50);
+assert(advance.steps === 0 && advance.droppedSteps === 0, "sub-step elapsed time was not retained");
+advance = accumulator.advance(350);
+assert(advance.steps === 2 && advance.droppedSteps === 1, "250ms clamp did not bound catch-up and account discarded debt");
+advance = accumulator.advance(2_350);
+assert(advance.steps === 2 && advance.droppedSteps === 18, "long stall debt was silently lost or over-stepped");
+accumulator.reset(5_000);
+advance = accumulator.advance(5_100);
+assert(advance.steps === 1 && advance.droppedSteps === 0, "reset carried paused elapsed debt into resume");
+advance = accumulator.advance(5_050);
+assert(advance.steps === 0 && advance.droppedSteps === 0, "regressing clock fabricated fixed-step debt");
+advance = accumulator.advance(5_200);
+assert(advance.steps === 1 && advance.droppedSteps === 0, "regressing clock made later elapsed time count twice");
 
 let renderSpy = 0;
 if (shouldRenderLiveFrame(true)) renderSpy++;
@@ -37,8 +56,9 @@ scope.onmessage?.({ data: {
 } });
 await waitFor(() => messages.some((message) => message.type === "ready"), "ready");
 const ready = messages.find((message) => message.type === "ready")!;
-const status = new Int32Array(ready.status as SharedArrayBuffer | ArrayBuffer, 0, 4);
+const status = new Int32Array(ready.status as SharedArrayBuffer | ArrayBuffer, 0, 5);
 await waitFor(() => Atomics.load(status, 0) >= 3, "initial ticks");
+assert(Atomics.load(status, 4) > 0, "worker shell did not publish dropped debt from its bounded catch-up loop");
 
 scope.onmessage?.({ data: { type: "pause", requestId: 11 } });
 await waitFor(() => messages.some((message) => message.type === "paused" && message.requestId === 11), "pause acknowledgement");

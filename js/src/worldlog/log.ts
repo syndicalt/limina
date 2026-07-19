@@ -59,6 +59,7 @@
 
 import type { EngineOps } from "../engine.ts";
 import { Position, Rotation, Scale, syncPhysicsBodyTransform } from "../ecs/world.ts";
+import type { TransformStorage } from "../ecs/facade.ts";
 import { resolveProfile } from "../skills/permissions.ts";
 import { z } from "../../build/zod.bundle.mjs";
 
@@ -87,6 +88,9 @@ export interface EntityTableLike {
 export interface WorldLike {
   entities: EntityTableLike;
   ops: EngineOps;
+  /** Versioned transform writer. Live worlds provide this so physics sync also
+   * invalidates transform-derived indexes; legacy replay fixtures may omit it. */
+  transforms?: TransformStorage;
   /** Gameplay tag map (eid -> tag set). Real WorldContexts carry it; a stub world
    *  without it simply captures no tags. */
   tags?: ReadonlyMap<number, ReadonlySet<string>>;
@@ -660,7 +664,13 @@ export function syncAllBodies(world: WorldLike): void {
   for (const id of world.entities.ids()) {
     const entry = world.entities.resolve(id);
     if (entry === undefined || entry.bodyId === undefined) continue;
-    syncPhysicsBodyTransform(entry.eid, entry.bodyId, world.ops, scratch);
+    if (world.transforms === undefined) {
+      syncPhysicsBodyTransform(entry.eid, entry.bodyId, world.ops, scratch);
+      continue;
+    }
+    world.ops.op_physics_body_transform(entry.bodyId, scratch);
+    world.transforms.writePosition(entry.eid, scratch[0], scratch[1], scratch[2]);
+    world.transforms.writeRotation(entry.eid, scratch[3], scratch[4], scratch[5], scratch[6]);
   }
 }
 

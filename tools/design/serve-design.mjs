@@ -24,6 +24,14 @@ import { dirname, isAbsolute, join, relative, resolve, basename, sep } from "nod
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync, spawn } from "node:child_process";
+import {
+  mkdtemp as mkdtempAsync,
+  readFile as readFileAsync,
+  readdir as readdirAsync,
+  rm as rmAsync,
+  stat as statAsync,
+  writeFile as writeFileAsync,
+} from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { buildPeekScene } from "./peek-scene.mjs";
 import { summarizePeekFailure } from "./peek-failure.mjs";
@@ -38,6 +46,9 @@ import {
   assertLoopbackEditorUrl,
   editorClientConfigFromEnvironment,
 } from "../bridge/editor-client.mjs";
+import { isAllowedLoopbackRequestHost } from "./loopback-request-host.mjs";
+import { AsyncRevisionCache } from "./async-revision-cache.mjs";
+import { DesignModelAdmission } from "./model-admission.mjs";
 
 // 3D-peek render jobs (Painter P5): bounded in-memory status retained for recent jobs.
 const peekJobs = new Map();
@@ -72,7 +83,8 @@ const MIME = {
 };
 
 const REQUESTED_VAULT_DIR = resolve(process.argv[2] || process.cwd());
-const REQUESTED_PROJECT_ROOT = basename(REQUESTED_VAULT_DIR) === "design" ? dirname(REQUESTED_VAULT_DIR) : REQUESTED_VAULT_DIR;
+const REQUESTED_PROJECT_ROOT =
+  basename(REQUESTED_VAULT_DIR) === "design" ? dirname(REQUESTED_VAULT_DIR) : REQUESTED_VAULT_DIR;
 const PROJECT_CONFIG = loadProjectConfig(REQUESTED_PROJECT_ROOT);
 const PROJECT_ROOT = PROJECT_CONFIG.projectRoot;
 const PROJECT_ID = PROJECT_CONFIG.projectId;
@@ -87,10 +99,14 @@ function ensureProjectDirectory(path, label) {
   let current = PROJECT_ROOT;
   for (const segment of relativePath.split(sep)) {
     current = join(current, segment);
-    try { mkdirSync(current, { mode: 0o755 }); }
-    catch (error) { if (error?.code !== "EEXIST") throw error; }
+    try {
+      mkdirSync(current, { mode: 0o755 });
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    }
     const stat = lstatSync(current);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`${label} contains a non-directory or symlink: ${current}`);
+    if (stat.isSymbolicLink() || !stat.isDirectory())
+      throw new Error(`${label} contains a non-directory or symlink: ${current}`);
     const real = realpathSync(current);
     const realRelative = relative(PROJECT_ROOT, real);
     if (realRelative === ".." || realRelative.startsWith(`..${sep}`) || isAbsolute(realRelative)) {
@@ -102,11 +118,7 @@ function ensureProjectDirectory(path, label) {
 }
 const ASSET_ROOT_REQUEST = process.env.LIMINA_ASSETS_ROOT || join(PROJECT_ROOT, CONFIGURED_ASSET_ROOT);
 ensureProjectDirectory(ASSET_ROOT_REQUEST, "asset root");
-const ASSETS_DIR = resolveProjectPath(
-  PROJECT_ROOT,
-  ASSET_ROOT_REQUEST,
-  "asset root",
-);
+const ASSETS_DIR = resolveProjectPath(PROJECT_ROOT, ASSET_ROOT_REQUEST, "asset root");
 const port = Number(process.argv[3]) || 4321;
 const HOST = "127.0.0.1";
 const DESIGN_SESSION_TOKEN = randomBytes(32).toString("hex");
@@ -116,6 +128,10 @@ const MAX_PEEK_JOBS = 256;
 const MAX_CONCURRENT_PEEKS = 2;
 const PEEK_JOB_TTL_MS = 30 * 60 * 1000;
 const PEEK_TIMEOUT_MS = 2 * 60 * 1000;
+const STATE_CHILD_TIMEOUT_MS = 30_000;
+const STATE_CHILD_OUTPUT_LIMIT = 64 * 1024 * 1024;
+const stateCache = new AsyncRevisionCache();
+const designModelAdmission = new DesignModelAdmission();
 
 let atlasAuthoringClient;
 try {
@@ -129,7 +145,9 @@ try {
 } catch (error) {
   const configurationError = error;
   atlasAuthoringClient = {
-    callTool() { return Promise.reject(configurationError); },
+    callTool() {
+      return Promise.reject(configurationError);
+    },
     close() {},
   };
   console.warn(`[atlas] authoritative saves disabled until editor connection is configured: ${error.message}`);
@@ -190,10 +208,17 @@ function newestMtimeUnder(dir) {
       if (e.name === "node_modules" || e.name.startsWith(".")) continue;
       const p = join(d, e.name);
       if (e.isDirectory()) walk(p);
-      else if (/\.(ts|mjs|js)$/.test(e.name)) { const m = statSync(p).mtimeMs; if (m > newest) newest = m; }
+      else if (/\.(ts|mjs|js)$/.test(e.name)) {
+        const m = statSync(p).mtimeMs;
+        if (m > newest) newest = m;
+      }
     }
   };
-  try { walk(dir); } catch { /* best-effort */ }
+  try {
+    walk(dir);
+  } catch {
+    /* best-effort */
+  }
   return newest;
 }
 function ensureFreshEditorBundle() {
@@ -215,7 +240,9 @@ function loadProjectEnv() {
       const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
       if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
     }
-  } catch { /* no project .env */ }
+  } catch {
+    /* no project .env */
+  }
 }
 loadProjectEnv();
 
@@ -226,7 +253,8 @@ function readDocs() {
     .map((f) => ({ name: f, content: readFileSync(join(vaultDir, f), "utf8") }));
 }
 
-const BEGIN = "===STATE_BEGIN===", END = "===STATE_END===";
+const BEGIN = "===STATE_BEGIN===",
+  END = "===STATE_END===";
 function computeState() {
   const docs = readDocs();
   const harness = `
@@ -276,8 +304,125 @@ ops.op_log("${BEGIN}" + JSON.stringify({ graph, build, world, places }) + "${END
   rmSync(tmp, { recursive: true, force: true });
   const out = (res.stdout || "") + (res.stderr || "");
   const m = out.match(new RegExp(BEGIN + "([\\s\\S]*?)" + END));
-  const extra = m ? JSON.parse(m[1]) : { graph: { nodes: [], edges: [] }, build: { ok: false, error: out.slice(-400) }, places: [] };
+  const extra = m
+    ? JSON.parse(m[1])
+    : { graph: { nodes: [], edges: [] }, build: { ok: false, error: out.slice(-400) }, places: [] };
   return { project: PROJECT_ID, docs, ...loadMaps(PROJECT_ID), ...extra };
+}
+
+async function vaultStateRevision() {
+  const names = (await readdirAsync(vaultDir)).filter((name) => name.endsWith(".md")).sort();
+  if (existsSync(join(vaultDir, "maps.json"))) names.push("maps.json");
+  const parts = [];
+  for (const name of names) {
+    const stat = await statAsync(join(vaultDir, name), { bigint: true });
+    parts.push(`${name}:${stat.size}:${stat.mtimeNs}`);
+  }
+  return createHash("sha256").update(parts.join("\n")).digest("hex");
+}
+
+async function readDocsAsync() {
+  const names = (await readdirAsync(vaultDir)).filter((name) => name.endsWith(".md")).sort();
+  return Promise.all(names.map(async (name) => ({ name, content: await readFileAsync(join(vaultDir, name), "utf8") })));
+}
+
+async function runStateHarness(harness) {
+  const temporary = await mkdtempAsync(join(tmpdir(), "limina-design-state-"));
+  const path = join(temporary, "state.ts");
+  try {
+    await writeFileAsync(path, harness, { encoding: "utf8", mode: 0o600 });
+    return await new Promise((resolveRun, rejectRun) => {
+      const child = spawn(LIMINA_BIN, [path], { stdio: ["ignore", "pipe", "pipe"] });
+      const chunks = [];
+      let bytes = 0;
+      let settled = false;
+      const finish = (error, result) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (error) rejectRun(error);
+        else resolveRun(result);
+      };
+      const capture = (chunk) => {
+        bytes += chunk.length;
+        if (bytes > STATE_CHILD_OUTPUT_LIMIT) {
+          child.kill("SIGKILL");
+          finish(new Error("design state compiler exceeded its 64 MiB output limit"));
+          return;
+        }
+        chunks.push(chunk);
+      };
+      child.stdout.on("data", capture);
+      child.stderr.on("data", capture);
+      child.once("error", (error) => finish(error));
+      child.once("exit", (code, signal) => {
+        const output = Buffer.concat(chunks).toString("utf8");
+        if (code !== 0)
+          finish(new Error(`design state compiler failed (${signal ?? `exit ${code}`}): ${output.slice(-400)}`));
+        else finish(undefined, output);
+      });
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        finish(new Error(`design state compiler exceeded ${STATE_CHILD_TIMEOUT_MS} ms`));
+      }, STATE_CHILD_TIMEOUT_MS);
+      timer.unref();
+    });
+  } finally {
+    await rmAsync(temporary, { recursive: true, force: true });
+  }
+}
+
+async function computeStateAsync() {
+  const revision = await vaultStateRevision();
+  return stateCache.get(revision, async () => {
+    const docs = await readDocsAsync();
+    const harness = `
+import { vaultToStore, vaultGraph, parseFrontmatter, parsePlaces } from "${LIMINA_HOME}/js/src/game/design-vault.ts";
+import { compileDesignToGds } from "${LIMINA_HOME}/js/src/game/design-compile.ts";
+import { ops } from "${LIMINA_HOME}/js/src/engine.ts";
+const docs = ${JSON.stringify(docs)};
+let graph = { nodes: [], edges: [] }, build = { ok: false, placements: [], links: [], issues: [] };
+try { graph = vaultGraph(docs); } catch (e) { graph = { nodes: [], edges: [], error: String(e) }; }
+try {
+  const { store, links } = vaultToStore(docs);
+  const { gds, issues } = compileDesignToGds(store);
+  const placements = (gds && gds.world && gds.world.placements) ? gds.world.placements : [];
+  const has = (id) => placements.some((p) => p.id === id);
+  const entIds = new Set((gds ? gds.entities : []).map((e) => e.id));
+  const resolved = links.map((l) => {
+    const loc = "location-" + l.entity, ent = "entity-" + l.entity;
+    return { ...l, buildId: has(loc) ? loc : has(ent) ? ent : entIds.has(l.entity) ? l.entity : null };
+  });
+  build = { ok: !!gds, issues, placements: placements.map((p) => ({ id: p.id, position: p.transform.position })), links: resolved };
+} catch (e) { build = { ok: false, placements: [], links: [], issues: [String(e)] }; }
+var world = { regions: [], locations: [] };
+try {
+  const wbDoc = docs.find((d) => /kind:\\s*world-bible/.test(d.content));
+  if (wbDoc) {
+    const fm = parseFrontmatter(wbDoc.content);
+    world.regions = (fm.regions || []).map((r) => ({ id: r.id, name: r.name, biome: r.biome }));
+    world.locations = (fm.locations || []).map((l) => ({
+      id: l.id, name: l.name, kind: l.kind, region: l.region, regionId: l.regionId,
+      x: (l.position||[0,0])[0], z: (l.position||[0,0])[1], tags: l.tags || [],
+      map: l.map || "", mapLink: l.mapLink || "", count: l.count, radiusM: l.radiusM,
+      assetId: l.assetId, note: l.note || l.description,
+    }));
+  }
+} catch (e) { world = { regions: [], locations: [] }; }
+var places = [];
+try {
+  const plDoc = docs.find((d) => /kind:\\s*places/.test(d.content));
+  if (plDoc) places = parsePlaces(parseFrontmatter(plDoc.content));
+} catch (e) { places = []; }
+ops.op_log("${BEGIN}" + JSON.stringify({ graph, build, world, places }) + "${END}");
+`;
+    const output = await runStateHarness(harness);
+    const match = output.match(new RegExp(BEGIN + "([\\s\\S]*?)" + END));
+    const extra = match
+      ? JSON.parse(match[1])
+      : { graph: { nodes: [], edges: [] }, build: { ok: false, error: output.slice(-400) }, places: [] };
+    return { project: PROJECT_ID, docs, ...loadMaps(PROJECT_ID), ...extra };
+  });
 }
 
 // Multiple hierarchical maps (world -> region -> city) + a cartographic feature layer (glyphs,
@@ -287,7 +432,11 @@ ops.op_log("${BEGIN}" + JSON.stringify({ graph, build, world, places }) + "${END
 // the mapstudio gate imports the same module, so server and gate can't drift apart.
 function loadMaps(project) {
   let data;
-  try { data = JSON.parse(readFileSync(join(vaultDir, "maps.json"), "utf8")); } catch { data = null; }
+  try {
+    data = JSON.parse(readFileSync(join(vaultDir, "maps.json"), "utf8"));
+  } catch {
+    data = null;
+  }
   const { doc, repairedIds } = migrateMapDoc(data, project);
   if (repairedIds > 0) console.warn(`maps.json: repaired ${repairedIds} colliding feature id(s) on read`);
   return { maps: doc.maps, activeMapId: doc.activeMapId, mapsRev: mapsRev() };
@@ -295,8 +444,14 @@ function loadMaps(project) {
 // Opaque revision token for maps.json — a hash of the current file bytes. Every /api/state
 // response carries it and every save must echo it back (compare-and-set below).
 function mapsRev() {
-  try { return createHash("sha1").update(readFileSync(join(vaultDir, "maps.json"))).digest("hex").slice(0, 16); }
-  catch { return "0"; }
+  try {
+    return createHash("sha1")
+      .update(readFileSync(join(vaultDir, "maps.json")))
+      .digest("hex")
+      .slice(0, 16);
+  } catch {
+    return "0";
+  }
 }
 function saveMaps(maps, activeMapId, baseRev) {
   return atlasMapDocBridge.save({ maps, activeMapId, baseRev });
@@ -306,7 +461,11 @@ function saveMaps(maps, activeMapId, baseRev) {
 // each kind's REQUIRED frontmatter (doc-templates.mjs) — world-bible's zone.size_m is
 // derived from the active map so the peek/compile scale contract holds out of the box.
 function createDoc(title, kind) {
-  const base = String(title || "note").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "note";
+  const base =
+    String(title || "note")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") || "note";
   const name = base + ".md";
   const fp = join(vaultDir, name);
   if (existsSync(fp)) throw new Error(`a document "${name}" already exists`);
@@ -325,7 +484,8 @@ function deleteDoc(name) {
 }
 
 // Assemble the FULL role context for an agent (persona + documents + screen) via the engine.
-const ABEGIN = "===AGENT_BEGIN===", AEND = "===AGENT_END===";
+const ABEGIN = "===AGENT_BEGIN===",
+  AEND = "===AGENT_END===";
 function assembleContext(agentId, screen) {
   const docs = readDocs();
   const harness = `
@@ -351,14 +511,20 @@ ops.op_log("${ABEGIN}" + JSON.stringify({ role: ctx.role, title: ctx.title, syst
 async function callModel(system, history, message) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) {
-    return { ok: false, reply:
-      "This expert is driven by YOUR coding-agent session (Claude Code / Codex) through the limina-design " +
-      "MCP bridge — no API key needed. Register tools/design/design-bridge.mjs (with LIMINA_DESIGN_VAULT set " +
-      "to this project's design/ folder) and ask your session to speak as this expert; it pulls this exact " +
-      "role context via design_context and can read/edit the docs + surface cascades. " +
-      "(Optional: set ANTHROPIC_API_KEY in the project .env to also get a built-in reply in this box.)" };
+    return {
+      ok: false,
+      reply:
+        "This expert is driven by YOUR coding-agent session (Claude Code / Codex) through the limina-design " +
+        "MCP bridge — no API key needed. Register tools/design/design-bridge.mjs (with LIMINA_DESIGN_VAULT set " +
+        "to this project's design/ folder) and ask your session to speak as this expert; it pulls this exact " +
+        "role context via design_context and can read/edit the docs + surface cascades. " +
+        "(Optional: set ANTHROPIC_API_KEY in the project .env to also get a built-in reply in this box.)",
+    };
   }
-  const messages = [...(history || []).map((h) => ({ role: h.role, content: h.content })), { role: "user", content: message }];
+  const messages = [
+    ...(history || []).map((h) => ({ role: h.role, content: h.content })),
+    { role: "user", content: message },
+  ];
   try {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -367,18 +533,32 @@ async function callModel(system, history, message) {
     });
     if (!r.ok) return { ok: false, reply: `⚠ model error ${r.status}: ${(await r.text()).slice(0, 300)}` };
     const j = await r.json();
-    return { ok: true, reply: (j.content || []).map((c) => c.text || "").join("").trim() || "(no reply)" };
-  } catch (e) { return { ok: false, reply: "⚠ request failed: " + String(e) }; }
+    return {
+      ok: true,
+      reply:
+        (j.content || [])
+          .map((c) => c.text || "")
+          .join("")
+          .trim() || "(no reply)",
+    };
+  } catch (e) {
+    return { ok: false, reply: "⚠ request failed: " + String(e) };
+  }
 }
 
 // Save an edited doc, then compute the cascade impact of what changed (save -> surface).
-const SBEGIN = "===SAVE_BEGIN===", SEND = "===SAVE_END===";
+const SBEGIN = "===SAVE_BEGIN===",
+  SEND = "===SAVE_END===";
 function saveDoc(name, content) {
   const safe = String(name).replace(/[^a-zA-Z0-9._-]/g, "");
   if (!safe.endsWith(".md") || safe.includes("..")) throw new Error("invalid doc name");
   const fp = join(vaultDir, safe);
   let old = "";
-  try { old = readFileSync(fp, "utf8"); } catch { /* new file */ }
+  try {
+    old = readFileSync(fp, "utf8");
+  } catch {
+    /* new file */
+  }
   writeFileSync(fp, content);
   const docs = readDocs();
   const harness = `
@@ -402,7 +582,8 @@ ops.op_log("${SBEGIN}" + JSON.stringify({ changes, impacts }) + "${SEND}");
 
 // Structured location authoring: add / update / delete / move a marker in the world-bible
 // via a real parse -> modify -> serialize (not regex), then save -> cascade.
-const ELB = "===EL_BEGIN===", ELE = "===EL_END===";
+const ELB = "===EL_BEGIN===",
+  ELE = "===EL_END===";
 function editLocation(op, a) {
   const doc = readDocs().find((d) => /kind:\s*world-bible/.test(d.content));
   if (!doc) throw new Error("no world-bible document");
@@ -415,7 +596,20 @@ let locs = Array.isArray(fm.locations) ? fm.locations : [];
 const op = ${JSON.stringify(op)}, a = ${JSON.stringify(a)};
 const defRegion = (fm.regions && fm.regions[0] && fm.regions[0].id) || "";
 if (op === "add") locs.push({ id: a.id, name: a.name, kind: a.kind || "landmark", region: a.region || defRegion, position: [Math.round(a.x), Math.round(a.z)], ...(a.tags && a.tags.length ? { tags: a.tags } : {}), ...(a.map ? { map: a.map } : {}), ...(a.mapLink ? { mapLink: a.mapLink } : {}), note: a.note || a.name });
-else if (op === "update") locs = locs.map((l) => l.id === a.id ? { ...l, ...(a.name !== undefined ? { name: a.name } : {}), ...(a.kind !== undefined ? { kind: a.kind } : {}), ...(a.region !== undefined ? { region: a.region } : {}), ...(a.note !== undefined ? { note: a.note } : {}), ...(a.tags !== undefined ? (a.tags.length ? { tags: a.tags } : { tags: undefined }) : {}), ...(a.map !== undefined ? (a.map ? { map: a.map } : { map: undefined }) : {}), ...(a.mapLink !== undefined ? (a.mapLink ? { mapLink: a.mapLink } : { mapLink: undefined }) : {}) } : l);
+else if (op === "update") locs = locs.map((l) =>
+  l.id === a.id
+    ? {
+        ...l,
+        ...(a.name !== undefined ? { name: a.name } : {}),
+        ...(a.kind !== undefined ? { kind: a.kind } : {}),
+        ...(a.region !== undefined ? { region: a.region } : {}),
+        ...(a.note !== undefined ? { note: a.note } : {}),
+        ...(a.tags !== undefined ? (a.tags.length ? { tags: a.tags } : { tags: undefined }) : {}),
+        ...(a.map !== undefined ? (a.map ? { map: a.map } : { map: undefined }) : {}),
+        ...(a.mapLink !== undefined ? (a.mapLink ? { mapLink: a.mapLink } : { mapLink: undefined }) : {}),
+      }
+    : l,
+);
 else if (op === "delete") locs = locs.filter((l) => l.id !== a.id);
 else if (op === "move") locs = locs.map((l) => l.id === a.id ? { ...l, position: [Math.round(a.x), Math.round(a.z)] } : l);
 else if (op === "unlink") { const ids = new Set(a.ids || []); locs = locs.map((l) => ids.has(l.id) ? { ...l, map: "__off__", mapLink: undefined } : l); }
@@ -431,7 +625,10 @@ ops.op_log("${ELB}" + JSON.stringify({ content: replaceFrontmatter(content, fm) 
   const m = out.match(new RegExp(ELB + "([\\s\\S]*?)" + ELE));
   if (!m) throw new Error("edit failed: " + out.slice(-300));
   // "unlink" is a cartography op: remove the markers from the map without cascading.
-  if (op === "unlink") { writeFileSync(join(vaultDir, doc.name), JSON.parse(m[1]).content); return { saved: true, unlinked: (a.ids || []).length, impacts: [] }; }
+  if (op === "unlink") {
+    writeFileSync(join(vaultDir, doc.name), JSON.parse(m[1]).content);
+    return { saved: true, unlinked: (a.ids || []).length, impacts: [] };
+  }
   return saveDoc(doc.name, JSON.parse(m[1]).content);
 }
 
@@ -451,7 +648,8 @@ function moveLocation(id, x, z) {
 // the `kind: places` doc's `places:` array via a real parse -> modify -> serialize (not regex),
 // then save -> cascade — the exact shape editLocation uses for world-bible locations. The place
 // tree stays connected: reparent refuses a cycle, delete re-parents the victim's children.
-const ELP_B = "===ELP_BEGIN===", ELP_E = "===ELP_END===";
+const ELP_B = "===ELP_BEGIN===",
+  ELP_E = "===ELP_END===";
 // One-time convergence: MOVE world-bible locations: into places.md — Places is now the single
 // named-point model. Idempotent (a location whose id is already a place is skipped); migrated
 // locations are REMOVED from the world-bible (a true move, no data loss). Each becomes a place
@@ -465,10 +663,17 @@ function migrateLocationsToPlaces() {
   let migrated = 0;
   for (const loc of Array.isArray(locations) ? locations : []) {
     if (!loc || !loc.id || existing.has(loc.id)) continue;
-    const pos = (typeof loc.x === "number" && typeof loc.z === "number") ? [Number(loc.x), Number(loc.z)]
-      : (Array.isArray(loc.position) && loc.position.length >= 2 ? [Number(loc.position[0]), Number(loc.position[1])] : null);
+    const pos =
+      typeof loc.x === "number" && typeof loc.z === "number"
+        ? [Number(loc.x), Number(loc.z)]
+        : Array.isArray(loc.position) && loc.position.length >= 2
+          ? [Number(loc.position[0]), Number(loc.position[1])]
+          : null;
     const place = {
-      id: loc.id, name: loc.name || loc.id, kind: loc.kind || "landmark", binding: "point",
+      id: loc.id,
+      name: loc.name || loc.id,
+      kind: loc.kind || "landmark",
+      binding: "point",
       ...(pos ? { position: pos } : {}),
       ...(loc.region || loc.regionId ? { regionId: loc.region || loc.regionId } : {}),
       ...(loc.map && loc.map !== "__off__" ? { map: loc.map } : {}), // "__off__" = unlinked; default to primary
@@ -477,12 +682,12 @@ function migrateLocationsToPlaces() {
       ...(loc.mapLink ? { mapLink: loc.mapLink } : {}),
       ...(loc.assetId ? { assetId: loc.assetId } : {}),
     };
-    editPlace("add", place);                // preserves the id; carries assetId/mapLink
+    editPlace("add", place); // preserves the id; carries assetId/mapLink
     existing.add(loc.id);
     editLocation("delete", { id: loc.id }); // remove from world-bible — a true MOVE
     migrated++;
   }
-  const places = (computeState().places) || [];
+  const places = computeState().places || [];
   return { ok: true, migrated, places };
 }
 function editPlace(op, place) {
@@ -558,8 +763,39 @@ else { fm.places = places; const nextContent = replaceFrontmatter(content, fm); 
 }
 
 createServer((req, res) => {
-  if (req.method === "POST" && ["/api/agent", "/api/save", "/api/move-location", "/api/edit-location", "/api/edit-place", "/api/migrate-locations-to-places", "/api/map-save", "/api/compile-map", "/api/peek", "/api/doc-create", "/api/doc-delete", "/api/pack-import"].includes(req.url)) {
-    if (!String(req.headers["content-type"] || "").toLowerCase().startsWith("application/json")) {
+  // This check precedes every route, including the otherwise unauthenticated
+  // session bootstrap. Binding to 127.0.0.1 alone does not stop DNS rebinding.
+  if (!isAllowedLoopbackRequestHost(req.headers.host, port)) {
+    res.writeHead(403, {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+    });
+    res.end(JSON.stringify({ ok: false, error: "request host is not allowed" }));
+    return;
+  }
+  if (
+    req.method === "POST" &&
+    [
+      "/api/agent",
+      "/api/save",
+      "/api/move-location",
+      "/api/edit-location",
+      "/api/edit-place",
+      "/api/migrate-locations-to-places",
+      "/api/map-save",
+      "/api/compile-map",
+      "/api/peek",
+      "/api/doc-create",
+      "/api/doc-delete",
+      "/api/pack-import",
+    ].includes(req.url)
+  ) {
+    if (
+      !String(req.headers["content-type"] || "")
+        .toLowerCase()
+        .startsWith("application/json")
+    ) {
       res.writeHead(415, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: false, error: "application/json is required" }));
       return;
@@ -623,14 +859,19 @@ createServer((req, res) => {
           // Places (Stage 4): the compiled peek carries the gazetteer + place-marker anchors, so the
           // author sees placed places in the render (and NPC nav has its index). Absent doc = undefined.
           const placesTextPeek = readDocs().find((d) => /kind:\s*places/.test(d.content))?.content;
-          const { worldMap } = compileDesignMap({ mapsJsonText, worldBibleText, mapId: p.mapId, placesText: placesTextPeek });
+          const { worldMap } = compileDesignMap({
+            mapsJsonText,
+            worldBibleText,
+            mapId: p.mapId,
+            placesText: placesTextPeek,
+          });
           const mapAssetId = writeWorldMap(worldMap);
           // Scene assembly lives in peek-scene.mjs (pure, gate-proven) — everything the
           // author painted, including stamped asset-anchors, must appear in the peek.
           // An optional `camera` of shape { mode:'vantage', pos:[x,z], yaw, eyeHeight } swaps the
           // overview turntable for a positioned camera looking FROM a point on the map (Places
           // Stage 2). Default (no camera / non-vantage mode) = the overview turntable.
-          const vantage = (p.camera && p.camera.mode === "vantage") ? p.camera : undefined;
+          const vantage = p.camera && p.camera.mode === "vantage" ? p.camera : undefined;
           const { scene, sceneName, clampedToTileCap } = buildPeekScene(worldMap, { project, mapAssetId, vantage });
           const outDir = join(LIMINA_HOME, "tools", "preview", "out");
           mkdirSync(outDir, { recursive: true });
@@ -640,10 +881,20 @@ createServer((req, res) => {
           // the loop always closes). The Atlas lightbox scrubs them as a turntable. A vantage is a
           // single fixed-pose shot — one frame, no turntable.
           const FRAMES = vantage ? 1 : 8;
-          const child = spawn("node", [join(LIMINA_HOME, "tools/preview/engine-shots.mjs"), String(FRAMES), "400", "/tools/preview/out/" + sceneName + ".json", sceneName], {
-            stdio: ["ignore", "pipe", "pipe"],
-            env: { ...process.env, LIMINA_PREVIEW_ASSETS_DIR: ASSETS_DIR },
-          });
+          const child = spawn(
+            process.execPath,
+            [
+              join(LIMINA_HOME, "tools/preview/engine-shots.mjs"),
+              String(FRAMES),
+              "400",
+              "/tools/preview/out/" + sceneName + ".json",
+              sceneName,
+            ],
+            {
+              stdio: ["ignore", "pipe", "pipe"],
+              env: { ...process.env, LIMINA_PREVIEW_ASSETS_DIR: ASSETS_DIR },
+            },
+          );
           let diagnosticTail = "";
           let timedOut = false;
           const killTimer = setTimeout(() => {
@@ -651,26 +902,44 @@ createServer((req, res) => {
             child.kill("SIGKILL");
           }, PEEK_TIMEOUT_MS);
           killTimer.unref();
-          const captureDiagnostic = (chunk) => { diagnosticTail = (diagnosticTail + chunk).slice(-8 * 1024); };
+          const captureDiagnostic = (chunk) => {
+            diagnosticTail = (diagnosticTail + chunk).slice(-8 * 1024);
+          };
           child.stderr.on("data", captureDiagnostic);
           child.stdout.on("data", captureDiagnostic);
           child.on("exit", (code) => {
             clearTimeout(killTimer);
             const frames = [];
-            for (let i = 1; i <= FRAMES; i++) if (existsSync(join(outDir, `${sceneName}-${i}.png`))) frames.push(`${sceneName}-${i}.png`);
+            for (let i = 1; i <= FRAMES; i++)
+              if (existsSync(join(outDir, `${sceneName}-${i}.png`))) frames.push(`${sceneName}-${i}.png`);
             const createdAt = Date.now();
             if (timedOut || code !== 0 || frames.length === 0) {
-              console.error(`[peek:${jobId}] renderer failed${timedOut ? " (timeout)" : ` (exit ${code})`}:\n${diagnosticTail}`);
+              console.error(
+                `[peek:${jobId}] renderer failed${timedOut ? " (timeout)" : ` (exit ${code})`}:\n${diagnosticTail}`,
+              );
             }
-            peekJobs.set(jobId, !timedOut && code === 0 && frames.length > 0
-              ? { status: "done", png: frames[0], frames, createdAt }
-              : { status: "error", error: summarizePeekFailure({ timedOut, code, output: diagnosticTail }), createdAt });
+            peekJobs.set(
+              jobId,
+              !timedOut && code === 0 && frames.length > 0
+                ? { status: "done", png: frames[0], frames, createdAt }
+                : {
+                    status: "error",
+                    error: summarizePeekFailure({ timedOut, code, output: diagnosticTail }),
+                    createdAt,
+                  },
+            );
           });
           peekJobs.set(jobId, { status: "running", createdAt: Date.now() });
           const editorHostUp = await new Promise((resolveUp) => {
-            const s = netConnect({ port: 8787, host: "127.0.0.1" }, () => { s.destroy(); resolveUp(true); });
+            const s = netConnect({ port: 8787, host: "127.0.0.1" }, () => {
+              s.destroy();
+              resolveUp(true);
+            });
             s.on("error", () => resolveUp(false));
-            s.setTimeout(400, () => { s.destroy(); resolveUp(false); });
+            s.setTimeout(400, () => {
+              s.destroy();
+              resolveUp(false);
+            });
           });
           res.writeHead(200, { "content-type": "application/json" });
           // clampedToTileCap: the painted world is larger than the single-tile peek can show
@@ -687,7 +956,12 @@ createServer((req, res) => {
           const worldBibleText = readFileSync(join(vaultDir, "world-bible.md"), "utf8");
           // Places (Stage 4): the built map asset embeds the gazetteer + place-marker anchors.
           const placesTextCompile = readDocs().find((d) => /kind:\s*places/.test(d.content))?.content;
-          const { worldMap, warnings } = compileDesignMap({ mapsJsonText, worldBibleText, mapId: p.mapId, placesText: placesTextCompile });
+          const { worldMap, warnings } = compileDesignMap({
+            mapsJsonText,
+            worldBibleText,
+            mapId: p.mapId,
+            placesText: placesTextCompile,
+          });
           const file = writeWorldMap(worldMap);
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify({ file, contentHash: worldMap.provenance.contentHash, warnings }));
@@ -719,9 +993,15 @@ createServer((req, res) => {
         }
         if (req.url === "/api/edit-location") {
           if (p.op === "add" && !p.id) {
-            const base = String(p.name || "marker").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "marker";
+            const base =
+              String(p.name || "marker")
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, "-")
+                .replace(/^-|-$/g, "") || "marker";
             const existing = new Set((computeState().world.locations || []).map((l) => l.id));
-            let id = base, n = 2; while (existing.has(id)) id = `${base}-${n++}`;
+            let id = base,
+              n = 2;
+            while (existing.has(id)) id = `${base}-${n++}`;
             p.id = id;
           }
           res.writeHead(200, { "content-type": "application/json" });
@@ -733,9 +1013,15 @@ createServer((req, res) => {
           // slugify the name (uniqued against the current tree) so the client can add by name.
           const place = p.place || {};
           if (p.op === "add" && !place.id) {
-            const base = String(place.name || "place").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "place";
+            const base =
+              String(place.name || "place")
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, "-")
+                .replace(/^-|-$/g, "") || "place";
             const existing = new Set((computeState().places || []).map((pl) => pl.id));
-            let id = base, n = 2; while (existing.has(id)) id = `${base}-${n++}`;
+            let id = base,
+              n = 2;
+            while (existing.has(id)) id = `${base}-${n++}`;
             place.id = id;
           }
           res.writeHead(200, { "content-type": "application/json" });
@@ -756,10 +1042,25 @@ createServer((req, res) => {
           }
           return;
         }
-        const ctx = assembleContext(p.agentId, p.screen || {});
-        const out = await callModel(ctx.systemPrompt, p.history || [], String(p.message || ""));
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ role: ctx.role, title: ctx.title, model: MODEL, ...out }));
+        const admission = designModelAdmission.acquire(p.message, p.history);
+        if (!admission.ok) {
+          res.writeHead(admission.status, {
+            "content-type": "application/json",
+            ...(admission.retryAfterMs === undefined
+              ? {}
+              : { "retry-after": String(Math.ceil(admission.retryAfterMs / 1000)) }),
+          });
+          res.end(JSON.stringify({ ok: false, error: admission.message, code: admission.code }));
+          return;
+        }
+        try {
+          const ctx = assembleContext(p.agentId, p.screen || {});
+          const out = await callModel(ctx.systemPrompt, p.history || [], String(p.message || ""));
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ role: ctx.role, title: ctx.title, model: MODEL, ...out }));
+        } finally {
+          admission.release();
+        }
       } catch (e) {
         if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
         res.end(JSON.stringify({ ok: false, error: String(e), reply: "⚠ " + String(e) }));
@@ -783,7 +1084,8 @@ createServer((req, res) => {
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
       res.end(JSON.stringify({ packs: listPacks({ packsDir: PACKS_DIR, assetsDir: ASSETS_DIR }) }));
     } catch (e) {
-      res.writeHead(500); res.end(JSON.stringify({ packs: [], error: String(e) }));
+      res.writeHead(500);
+      res.end(JSON.stringify({ packs: [], error: String(e) }));
     }
     return;
   }
@@ -794,27 +1096,41 @@ createServer((req, res) => {
       const catalog = join(ASSETS_DIR, "catalog.json");
       res.end(existsSync(catalog) ? readFileSync(catalog, "utf8") : "[]");
     } catch (e) {
-      res.writeHead(500); res.end(String(e));
+      res.writeHead(500);
+      res.end(String(e));
     }
     return;
   }
   if (req.method === "GET" && req.url.startsWith("/api/peek/")) {
     const job = peekJobs.get(basename(req.url.split("?")[0]));
     res.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
-    res.end(JSON.stringify(job ? {
-      ...job,
-      url: job.png ? "/api/peek-image/" + job.png : undefined,
-      frameUrls: job.frames ? job.frames.map((f) => "/api/peek-image/" + f) : undefined,
-    } : { status: "unknown" }));
+    res.end(
+      JSON.stringify(
+        job
+          ? {
+              ...job,
+              url: job.png ? "/api/peek-image/" + job.png : undefined,
+              frameUrls: job.frames ? job.frames.map((f) => "/api/peek-image/" + f) : undefined,
+            }
+          : { status: "unknown" },
+      ),
+    );
     return;
   }
   if (req.method === "GET" && req.url.startsWith("/api/peek-image/")) {
     try {
       const name = basename(req.url.split("?")[0]);
-      if (!/^[\w.-]+\.png$/.test(name)) { res.writeHead(404); res.end(); return; }
+      if (!/^[\w.-]+\.png$/.test(name)) {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
       res.writeHead(200, { "content-type": "image/png", "cache-control": "no-cache" });
       res.end(readFileSync(join(LIMINA_HOME, "tools", "preview", "out", name)));
-    } catch { res.writeHead(404); res.end(); }
+    } catch {
+      res.writeHead(404);
+      res.end();
+    }
     return;
   }
   if (req.method === "GET" && req.url.split("?")[0] === "/api/worldmaps") {
@@ -823,31 +1139,53 @@ createServer((req, res) => {
       const files = listWorldMaps();
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-cache" });
       res.end(JSON.stringify(files));
-    } catch { res.writeHead(200, { "content-type": "application/json" }); res.end("[]"); }
+    } catch {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("[]");
+    }
     return;
   }
   if (req.method === "GET" && req.url.startsWith("/api/worldmaps/")) {
     try {
       const relativePath = decodeURIComponent(req.url.split("?")[0].slice("/api/worldmaps/".length));
-      if (!relativePath.endsWith(".worldmap.json") || relativePath.split(/[\\/]/).some((part) => part === ".." || part === "")) {
-        res.writeHead(404); res.end(); return;
+      if (
+        !relativePath.endsWith(".worldmap.json") ||
+        relativePath.split(/[\\/]/).some((part) => part === ".." || part === "")
+      ) {
+        res.writeHead(404);
+        res.end();
+        return;
       }
       const root = resolve(ASSETS_DIR, "maps");
       const file = resolve(root, relativePath);
-      if (file !== root && !file.startsWith(root + "/")) { res.writeHead(404); res.end(); return; }
+      if (file !== root && !file.startsWith(root + "/")) {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
       const body = readFileSync(file, "utf8");
       res.writeHead(200, { "content-type": "application/json" });
       res.end(body);
-    } catch { if (!res.headersSent) res.writeHead(404); res.end(); }
+    } catch {
+      if (!res.headersSent) res.writeHead(404);
+      res.end();
+    }
     return;
   }
   if (req.method === "GET" && req.url.startsWith("/assets/qc/")) {
     // QC-render thumbnails for the stamp tool — basename-only (traversal-safe), read-only.
     try {
       const name = basename(req.url.split("?")[0]);
-      if (!/^[\w.-]+\.(png|jpg|jpeg)$/i.test(name)) { res.writeHead(404); res.end(); return; }
+      if (!/^[\w.-]+\.(png|jpg|jpeg)$/i.test(name)) {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
       const bytes = readFileSync(join(ASSETS_DIR, "qc", name));
-      res.writeHead(200, { "content-type": name.endsWith(".png") ? "image/png" : "image/jpeg", "cache-control": "max-age=300" });
+      res.writeHead(200, {
+        "content-type": name.endsWith(".png") ? "image/png" : "image/jpeg",
+        "cache-control": "max-age=300",
+      });
       res.end(bytes);
     } catch {
       if (!res.headersSent) res.writeHead(404);
@@ -857,8 +1195,16 @@ createServer((req, res) => {
   }
   if (req.url === "/api/state") {
     try {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify(computeState()));
+      void computeStateAsync().then(
+        (state) => {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(state));
+        },
+        (error) => {
+          res.writeHead(500, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: String(error) }));
+        },
+      );
     } catch (e) {
       if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: String(e) }));
@@ -887,11 +1233,15 @@ createServer((req, res) => {
         res.writeHead(200, { "content-type": MIME[ext] || "application/octet-stream", "cache-control": "no-cache" });
         res.end(body);
         return;
-      } catch { /* fall through to 404 */ }
+      } catch {
+        /* fall through to 404 */
+      }
     }
-    res.writeHead(404); res.end("not found");
+    res.writeHead(404);
+    res.end("not found");
   } else {
-    res.writeHead(404); res.end("not found");
+    res.writeHead(404);
+    res.end("not found");
   }
 }).listen(port, HOST, () => {
   console.log(`\n  Design Space — ${vaultDir}`);

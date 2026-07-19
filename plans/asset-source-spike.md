@@ -1,5 +1,11 @@
 # AssetSource — pluggable 3D asset generation (engine = Option A)
 
+> Strategy boundary (2026-07-17): this remains valid for props, characters, vegetation, experiments,
+> and cached user-supplied models. It is superseded for production building architecture. A generated
+> whole-building GLB may be reference/blockout evidence only and cannot enter ArchitectureSpec,
+> functional-building packaging, capture, or approval authority. Production buildings must use the
+> BuildingProgram → rulebook → compiler → engine/HITL path.
+
 ## Decision (locked)
 
 - **limina the engine stays an engine** (Option A): it gains ONE abstraction — a pluggable
@@ -61,8 +67,9 @@ pipeline). So a generated asset is replay-safe and a one-time cost even though t
 
 - **`asset.place` / `asset.scatter`** already load glTF — they consume `AssetResult.bytes`. Minimal
   rewire: resolve the request → glb → existing loader.
-- **The reference library** (`art-direction/`) becomes the *input*: a card's image → `referenceImage`
-  → image-to-3D. The library you built is the generation prompt set, not a hand-match target.
+- **For non-building asset lanes**, the reference library may supply a `referenceImage`. Production
+  building architecture instead extracts source-neutral measurable cues and never imports generated
+  whole-building geometry.
 - **The modeling loop** stays — its *author* step changes from "hand-write a recipe" to
   "`generateAsset(req)`"; critique/refine tunes prompt/params/seed; the structural gate still validates
   the consumed mesh (bounds, collision, no degenerate geometry).

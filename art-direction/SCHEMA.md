@@ -1,4 +1,9 @@
-# Reference Library — schema (spike)
+# Reference Library — historical schema (superseded for production buildings)
+
+This recipe-card spike remains for replay and non-building inspiration. Historical `buildings.*` leaves are
+read-only and the scaffold helper rejects new ones. Production building architecture
+uses source-neutral measurable cues, BuildingProgram, compiler constraints, engine evidence, and HITL as
+documented in `plans/architecture-program-synthesis.md`. Images are not geometry or fidelity-judge authority.
 
 The library is the **art-knowledge layer**: it turns an agent's intent ("a medieval monastery", "a
 willow by the river") into limina skill calls **at the OOB-quality bar**, and surfaces what the engine
@@ -14,8 +19,8 @@ not just inspiration.
 - **Tags** (multi-axis, on every card): `era`, `biome`, `material`, `scale`, `mood`, **`condition`**
   (pristine / weathered / ruined / **blighted**), `style`. These answer queries the tree can't —
   "all stone things", "everything for a temperate forest", "the blighted variant of X".
-- **Leaf = a folder** holding `card.md` + the reference images. The agent reads the images (visual
-  target + fidelity judge) and the card (how to build it + what's missing).
+- **Leaf = a folder** holding `card.md` + the reference images. The agent may use historical images as
+  cited inspiration and reads the card for buildability context; neither is production authority.
 
 ```
 art-direction/library/
@@ -54,8 +59,8 @@ Body (prose, for the agent to reason from):
 
 ## Why this shape (agent's view)
 
-- I need the **image** to set the target and to judge "is my capture close?" — but I can't *act* on an
-  image alone.
+- Historical images can help name measurable cues, but production captures are judged against the locked
+  release contract and exact HITL evidence—not by pixel imitation of a library image.
 - I need the **buildability recipe** to translate the look into `architecture.building` / `world.*` /
   `scene.*` / material calls — this is the part neither "just images" nor "asset links" gives me.
 - I need **engine_gaps** so the library doubles as the content-capability backlog: cards I can't yet
@@ -63,4 +68,10 @@ Body (prose, for the agent to reason from):
 - I need **tags** because scenes are multi-axis (a *blighted temperate ruined* monastery is a real
   query the tree can't express).
 
-A card is **`verified`** only when a native-window capture of the built scene reads like its reference.
+A historical card's `verified` flag does not approve a production building. Only the staged engine/HITL
+workflow may do that.
+
+Owner: architecture program migration. The building compatibility reader may be removed only after every
+pre-2026-07-17 manifest/replay fixture has an archived exact board and repository search proves that no
+production or retained test imports it. Until then it is read-only debt with an explicit sunset condition,
+not an alternative authoring strategy.

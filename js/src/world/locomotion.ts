@@ -129,8 +129,9 @@ export class Locomotion {
   /** Advance every actor one fixed step: face the target, translate up to
    *  speed*dt toward it (clamped at talkDistance so it stops cleanly), set
    *  arrival, and tick the humanoid walk animation. */
-  step(world: WorldContext, dtMs: number): void {
+  step(world: WorldContext, dtMs: number): boolean {
     const dt = dtMs / 1000;
+    let positionsChanged = false;
     for (const actor of this.actors.values()) {
       if (actor.target === undefined) {
         actor.humanoid.update(dtMs, false);
@@ -163,12 +164,14 @@ export class Locomotion {
         Position.x[actor.eid] = px + dx * inv * advance;
         Position.z[actor.eid] = pz + dz * inv * advance;
         moving = advance > EPS;
+        positionsChanged ||= moving;
         const ndx = tgt[0] - Position.x[actor.eid];
         const ndz = tgt[2] - Position.z[actor.eid];
         actor.arrived = Math.sqrt(ndx * ndx + ndz * ndz) <= actor.talkDistance + EPS;
       }
       actor.humanoid.update(dtMs, moving);
     }
+    return positionsChanged;
   }
 
   private resolveTarget(world: WorldContext, target: MoveTarget): Vec3 | undefined {

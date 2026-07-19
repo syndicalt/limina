@@ -1,5 +1,7 @@
 **MVP Spec: Skill/Hook System + MCP-Style Interface + Observability Layer + Agent Ecosystem**
 
+> HISTORICAL: pre-roadmap MVP spec. The phase numbering in this document diverges from the shipped roadmap and is superseded by `plans/ROADMAP.md`.
+
 This document defines a focused, high-leverage MVP that makes **Agent Builders** (creation agents) and **Agent Players** (in-world autonomous entities) first-class citizens from the start.
 
 The design prioritizes:
@@ -292,7 +294,3 @@ interface AgentComponent {
 - Permission model is profile-based rather than fully dynamic policy engine.
 
 This spec gives us a concrete, buildable MVP that makes agent builders genuinely powerful while also supporting agent players, all while staying aligned with the broader goal of a high-performance engine that underpins Three.js.
-
----
-
-Would you like me to expand any section with more detailed TypeScript interfaces, example skill implementations, security model details, or a sample builder agent workflow? Or shall we move to initial project structure / repo layout next?

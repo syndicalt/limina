@@ -9,7 +9,7 @@ const spec:ArchitectureSpec={schema:"limina.architecture-spec/v1",id:"hall-house
     {id:"south-slope",origin:[0,3,0],normal:[-.7071067811865476,.7071067811865476,0],boundary:[[-2,1,-3],[2,5,-3],[2,5,3],[-2,1,3]],thickness:.14},
     {id:"cross-slope",origin:[0,3,0],normal:[.7071067811865476,.7071067811865476,0],boundary:[[2,1,-3],[-2,5,-3],[-2,5,3],[2,1,3]],thickness:.14}],
   roofSeams:[{id:"joined-valley",kind:"valley",planeIds:["south-slope","cross-slope"],from:[0,3,-2],to:[0,3,2],flashingWidth:.22}],
-  fireplaces:[{id:"hall-hearth",center:[2.8,1.05,2.5],apertureHalfExtents:[.7,.72,.6],chimneyTopY:7.2,roofPlaneId:"south-slope"}]};
+  fireplaces:[{id:"hall-hearth",center:[2.8,1.05,2.5],apertureHalfExtents:[.7,.72,.6],chimneyTopY:7.2,roofPlaneId:"south-slope",fireboxPolicy:"rear-soot-lining"}]};
 
 const first=compileArchitecture(spec),second=compileArchitecture(structuredClone(spec));
 assert(first.specHash===second.specHash&&first.irHash===second.irHash,"compile is not deterministic");

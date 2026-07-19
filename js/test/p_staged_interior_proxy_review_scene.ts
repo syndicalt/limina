@@ -1,65 +1,531 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BUILDING_INTERIOR_PLAN_V2_POLICY_FLOORS, buildingInteriorPlanV2Hash } from "../src/assets/building-interior-plan-v2.mjs";
-import { buildStagedInteriorProxyGeometry, interiorLocalNegativeZForward, validateStagedInteriorProxyReviewAuthority, verifyStagedInteriorProxyReviewClosure } from "../src/render/staged-interior-proxy-review-scene.ts";
+import {
+  BUILDING_INTERIOR_PLAN_V2_POLICY_FLOORS,
+  buildingInteriorPlanV2Hash,
+} from "../src/assets/building-interior-plan-v2.mjs";
+import {
+  buildStagedInteriorProxyGeometry,
+  interiorLocalNegativeZForward,
+  validateStagedInteriorProxyReviewAuthority,
+  verifyStagedInteriorProxyReviewClosure,
+} from "../src/render/staged-interior-proxy-review-scene.ts";
 import { buildInteriorPlanStage } from "../../tools/architecture/build-interior-plan-stage.mjs";
 import { portableAssetContentHash } from "../src/world/asset-content-hash.mjs";
 import { sha256 } from "../src/world/sha256.mjs";
 
-const H=(digit:string)=>`sha256:${digit.repeat(64)}`;
-const bytes=(value:string|object)=>new TextEncoder().encode(typeof value==="string"?value:JSON.stringify(value));
-const identity=(path:string,value:Uint8Array)=>({path,sha256:`sha256:${sha256(value)}`,contentHash:portableAssetContentHash(value)});
-const facets=(scopes:string[],offset:number)=>scopes.map((scope,index)=>({scope,hash:H(String((offset+index)%10))}));
+const H = (digit: string) => `sha256:${digit.repeat(64)}`;
+const bytes = (value: string | object) =>
+  new TextEncoder().encode(typeof value === "string" ? value : JSON.stringify(value));
+const identity = (path: string, value: Uint8Array) => ({
+  path,
+  sha256: `sha256:${sha256(value)}`,
+  contentHash: portableAssetContentHash(value),
+});
+const facets = (scopes: string[], offset: number) =>
+  scopes.map((scope, index) => ({ scope, hash: H(String((offset + index) % 10)) }));
 
-function planFixture(shellContentHash=H("2"),materialContentHash=H("5")){
-  const shell={artifactId:"shell/functional-hall-house-v4/r4",kind:"shell",revision:4,status:"approved",contractHash:H("1"),contentHash:shellContentHash,approvalDecisionId:"shell/functional-hall-house-v4/r4/approve-user-r4",approvalDecisionHash:H("3"),facets:facets(["interior-envelope","support-sockets","portal-articulation","hearth-flue-sockets","collision-traversal"],1)};
-  const materials={artifactId:"materials/functional-hall-house-v4/r2",kind:"material-palette",revision:2,status:"approved",contractHash:H("4"),contentHash:materialContentHash,approvalDecisionId:"materials/functional-hall-house-v4/r2/approve-user-r2",approvalDecisionHash:H("6"),facets:facets(["role-contract","surface-parameters","runtime-textures"],6)};
-  return {schema:"limina.building-interior-plan/v2",planId:"interior/functional-hall-house-v4/r1",revision:1,supersedes:null,units:"meter",dependencies:{shell,materials},policy:{...BUILDING_INTERIOR_PLAN_V2_POLICY_FLOORS},
-    rooms:[{id:"room/main",bounds:{center:[0,1.5,0],halfExtents:[5,1.5,4]},finishedFloorY:0,ceilingY:3,floorRegions:[{id:"floor/main",center:[0,0],halfExtents:[5,4]}]}],
-    zones:[{id:"zone/entry",kind:"entry",roomId:"room/main",bounds:{center:[-1,1.5,-2.5],halfExtents:[1.5,1.5,1.2]},minimumOccupants:1},{id:"zone/hearth",kind:"hearth-seating",roomId:"room/main",bounds:{center:[2,1.5,0],halfExtents:[1.5,1.5,1.5]},minimumOccupants:2}],
-    surfaceSockets:[{id:"socket/floor-settle",kind:"floor",roomId:"room/main",surfaceId:"surface/main-floor",position:[2,0,0],normal:[0,1,0],capacityKg:400},{id:"socket/wall-hearth",kind:"wall",roomId:"room/main",surfaceId:"surface/north-wall",position:[2,1.2,3.9],normal:[0,0,-1],capacityKg:80},{id:"socket/ceiling-light",kind:"ceiling",roomId:"room/main",surfaceId:"surface/main-ceiling",position:[0,3,0],normal:[0,-1,0],capacityKg:20}],
-    facingTargets:[{id:"facing/hearth",roomId:"room/main",position:[2,1,2.7]}],anchors:[{id:"anchor/camera-review",kind:"camera",roomId:"room/main",position:[2,1.6,-3],direction:[0,0,1],socketId:null},{id:"anchor/vfx-hearth",kind:"vfx",roomId:"room/main",position:[2,1,2.7],direction:[0,0,-1],socketId:"socket/wall-hearth"},{id:"anchor/light-main",kind:"lighting",roomId:"room/main",position:[0,3,0],direction:[0,-1,0],socketId:"socket/ceiling-light"}],
-    sightlines:[{id:"sightline/entry-hearth",roomId:"room/main",cameraAnchorId:"anchor/camera-review",targetAnchorId:"anchor/vfx-hearth"}],occlusionConstraints:[{id:"occlusion/hearth",sightlineId:"sightline/entry-hearth",clearRadiusM:.1,maximumOccluderHeightM:2}],
-    proxyArchetypes:[{id:"proxy/settle",kind:"settle",dimensions:[2,1.2,.8],supportKind:"floor",requiresApproach:true,requiresOccupancy:true}],placements:[{id:"placement/settle",archetypeId:"proxy/settle",roomId:"room/main",zoneId:"zone/hearth",position:[2,0,0],yawRadians:Math.PI,supportSocketId:"socket/floor-settle",facingTargetId:"facing/hearth",footprint:{localCenter:[0,0],halfExtents:[1,.4]}}],
-    interactionClearances:[{id:"clearance/approach",kind:"approach",placementId:"placement/settle",roomId:"room/main",center:[2,0,-.9],radiusM:.35,heightM:1.9},{id:"clearance/occupancy",kind:"occupancy",placementId:"placement/settle",roomId:"room/main",center:[2,0,0],radiusM:.3,heightM:1.5}],
-    navigation:{entryNodeId:"nav/entry",nodes:[{id:"nav/entry",roomId:"room/main",zoneId:"zone/entry",position:[-1,0,-3]},{id:"nav/hearth",roomId:"room/main",zoneId:"zone/hearth",position:[.6,0,-1.5]}],edges:[{id:"nav-edge/entry-hearth",fromNodeId:"nav/entry",toNodeId:"nav/hearth",halfWidthM:.5,clearHeightM:2}]},
-    doorSweeps:[{id:"door-sweep/front",roomId:"room/main",doorId:"door/front",hinge:[-1,0,-3.5],radiusM:1.2,leafThicknessM:.08,heightM:2.4,closedYawRadians:0,openYawRadians:Math.PI/2}],hearthExclusions:[{id:"hearth-exclusion/main",roomId:"room/main",hearthId:"hearth/main",center:[2,0,2.7],halfExtents:[.7,.35],yawRadians:0,minimumClearanceM:.8,heightM:2}],requiredZoneIds:["zone/entry","zone/hearth"]};
+function planFixture(shellContentHash = H("2"), materialContentHash = H("5")) {
+  const shell = {
+    artifactId: "shell/functional-hall-house-v4/r4",
+    kind: "shell",
+    revision: 4,
+    status: "approved",
+    contractHash: H("1"),
+    contentHash: shellContentHash,
+    approvalDecisionId: "shell/functional-hall-house-v4/r4/approve-user-r4",
+    approvalDecisionHash: H("3"),
+    facets: facets(
+      ["interior-envelope", "support-sockets", "portal-articulation", "hearth-flue-sockets", "collision-traversal"],
+      1,
+    ),
+  };
+  const materials = {
+    artifactId: "materials/functional-hall-house-v4/r2",
+    kind: "material-palette",
+    revision: 2,
+    status: "approved",
+    contractHash: H("4"),
+    contentHash: materialContentHash,
+    approvalDecisionId: "materials/functional-hall-house-v4/r2/approve-user-r2",
+    approvalDecisionHash: H("6"),
+    facets: facets(["role-contract", "surface-parameters", "runtime-textures"], 6),
+  };
+  return {
+    schema: "limina.building-interior-plan/v2",
+    planId: "interior/functional-hall-house-v4/r1",
+    revision: 1,
+    supersedes: null,
+    units: "meter",
+    dependencies: { shell, materials },
+    policy: { ...BUILDING_INTERIOR_PLAN_V2_POLICY_FLOORS },
+    rooms: [
+      {
+        id: "room/main",
+        bounds: { center: [0, 1.5, 0], halfExtents: [5, 1.5, 4] },
+        finishedFloorY: 0,
+        ceilingY: 3,
+        floorRegions: [{ id: "floor/main", center: [0, 0], halfExtents: [5, 4] }],
+      },
+    ],
+    zones: [
+      {
+        id: "zone/entry",
+        kind: "entry",
+        roomId: "room/main",
+        bounds: { center: [-1, 1.5, -2.5], halfExtents: [1.5, 1.5, 1.2] },
+        minimumOccupants: 1,
+      },
+      {
+        id: "zone/hearth",
+        kind: "hearth-seating",
+        roomId: "room/main",
+        bounds: { center: [2, 1.5, 0], halfExtents: [1.5, 1.5, 1.5] },
+        minimumOccupants: 2,
+      },
+    ],
+    surfaceSockets: [
+      {
+        id: "socket/floor-settle",
+        kind: "floor",
+        roomId: "room/main",
+        surfaceId: "surface/main-floor",
+        position: [2, 0, 0],
+        normal: [0, 1, 0],
+        capacityKg: 400,
+      },
+      {
+        id: "socket/wall-hearth",
+        kind: "wall",
+        roomId: "room/main",
+        surfaceId: "surface/north-wall",
+        position: [2, 1.2, 3.9],
+        normal: [0, 0, -1],
+        capacityKg: 80,
+      },
+      {
+        id: "socket/ceiling-light",
+        kind: "ceiling",
+        roomId: "room/main",
+        surfaceId: "surface/main-ceiling",
+        position: [0, 3, 0],
+        normal: [0, -1, 0],
+        capacityKg: 20,
+      },
+    ],
+    facingTargets: [{ id: "facing/hearth", roomId: "room/main", position: [2, 1, 2.7] }],
+    anchors: [
+      {
+        id: "anchor/camera-review",
+        kind: "camera",
+        roomId: "room/main",
+        position: [2, 1.6, -3],
+        direction: [0, 0, 1],
+        socketId: null,
+      },
+      {
+        id: "anchor/vfx-hearth",
+        kind: "vfx",
+        roomId: "room/main",
+        position: [2, 1, 2.7],
+        direction: [0, 0, -1],
+        socketId: "socket/wall-hearth",
+      },
+      {
+        id: "anchor/light-main",
+        kind: "lighting",
+        roomId: "room/main",
+        position: [0, 3, 0],
+        direction: [0, -1, 0],
+        socketId: "socket/ceiling-light",
+      },
+    ],
+    sightlines: [
+      {
+        id: "sightline/entry-hearth",
+        roomId: "room/main",
+        cameraAnchorId: "anchor/camera-review",
+        targetAnchorId: "anchor/vfx-hearth",
+      },
+    ],
+    occlusionConstraints: [
+      { id: "occlusion/hearth", sightlineId: "sightline/entry-hearth", clearRadiusM: 0.1, maximumOccluderHeightM: 2 },
+    ],
+    proxyArchetypes: [
+      {
+        id: "proxy/settle",
+        kind: "settle",
+        dimensions: [2, 1.2, 0.8],
+        supportKind: "floor",
+        requiresApproach: true,
+        requiresOccupancy: true,
+      },
+    ],
+    placements: [
+      {
+        id: "placement/settle",
+        archetypeId: "proxy/settle",
+        roomId: "room/main",
+        zoneId: "zone/hearth",
+        position: [2, 0, 0],
+        yawRadians: Math.PI,
+        supportSocketId: "socket/floor-settle",
+        facingTargetId: "facing/hearth",
+        footprint: { localCenter: [0, 0], halfExtents: [1, 0.4] },
+      },
+    ],
+    interactionClearances: [
+      {
+        id: "clearance/approach",
+        kind: "approach",
+        placementId: "placement/settle",
+        roomId: "room/main",
+        center: [2, 0, -0.9],
+        radiusM: 0.35,
+        heightM: 1.9,
+      },
+      {
+        id: "clearance/occupancy",
+        kind: "occupancy",
+        placementId: "placement/settle",
+        roomId: "room/main",
+        center: [2, 0, 0],
+        radiusM: 0.3,
+        heightM: 1.5,
+      },
+    ],
+    navigation: {
+      entryNodeId: "nav/entry",
+      nodes: [
+        { id: "nav/entry", roomId: "room/main", zoneId: "zone/entry", position: [-1, 0, -3] },
+        { id: "nav/hearth", roomId: "room/main", zoneId: "zone/hearth", position: [0.6, 0, -1.5] },
+      ],
+      edges: [
+        {
+          id: "nav-edge/entry-hearth",
+          fromNodeId: "nav/entry",
+          toNodeId: "nav/hearth",
+          halfWidthM: 0.5,
+          clearHeightM: 2,
+        },
+      ],
+    },
+    doorSweeps: [
+      {
+        id: "door-sweep/front",
+        roomId: "room/main",
+        doorId: "door/front",
+        hinge: [-1, 0, -3.5],
+        radiusM: 1.2,
+        leafThicknessM: 0.08,
+        heightM: 2.4,
+        closedYawRadians: 0,
+        openYawRadians: Math.PI / 2,
+      },
+    ],
+    hearthExclusions: [
+      {
+        id: "hearth-exclusion/main",
+        roomId: "room/main",
+        hearthId: "hearth/main",
+        center: [2, 0, 2.7],
+        halfExtents: [0.7, 0.35],
+        yawRadians: 0,
+        minimumClearanceM: 0.8,
+        heightM: 2,
+      },
+    ],
+    requiredZoneIds: ["zone/entry", "zone/hearth"],
+  };
 }
 
-function closureFixture(){
-  const derivedBytes=bytes("canonical-glb-placeholder"),derivedSha=`sha256:${sha256(derivedBytes)}`,derivedHash=portableAssetContentHash(derivedBytes),plan=planFixture();
-  const decision=(decisionId:string,gate:string,artifactId:string,contractHash:string,contentHash:string)=>bytes({schema:"limina.building-hitl-decision/v1",decisionId,gate,artifactId,contractHash,contentHash,reviewer:"user",timestamp:"2026-07-15T12:00:00.000Z",decision:"approve",evidenceHashes:[H("7")],blockingFindings:[],observations:[],markedRegions:[]});
-  const shellDecisionBytes=decision(plan.dependencies.shell.approvalDecisionId,"A1-shell",plan.dependencies.shell.artifactId,plan.dependencies.shell.contractHash,plan.dependencies.shell.contentHash),materialDecisionBytes=decision(plan.dependencies.materials.approvalDecisionId,"M1-materials",plan.dependencies.materials.artifactId,plan.dependencies.materials.contractHash,plan.dependencies.materials.contentHash);
-  plan.dependencies.shell.approvalDecisionHash=`sha256:${sha256(shellDecisionBytes)}`;plan.dependencies.materials.approvalDecisionHash=`sha256:${sha256(materialDecisionBytes)}`;
-  const planBytes=bytes(plan),stageFacets=facets(["activity-zones","placements","circulation","sightlines","support-bindings","vfx-intent"],1);
-  const shellBytes=bytes({schema:"limina.building-stage-artifact/v1",artifactId:plan.dependencies.shell.artifactId,kind:"shell",revision:4,status:"approved",contractHash:plan.dependencies.shell.contractHash,contentHash:plan.dependencies.shell.contentHash,facets:plan.dependencies.shell.facets,inputs:[],evidence:[{evidenceId:"evidence/shell",kind:"image/png",contentHash:H("8")}],metadata:{approval:{decisionId:plan.dependencies.shell.approvalDecisionId,sha256:plan.dependencies.shell.approvalDecisionHash}}});
-  const materialBytes=bytes({schema:"limina.building-stage-artifact/v1",artifactId:plan.dependencies.materials.artifactId,kind:"material-palette",revision:2,status:"approved",contractHash:plan.dependencies.materials.contractHash,contentHash:plan.dependencies.materials.contentHash,facets:plan.dependencies.materials.facets,inputs:[],evidence:[{evidenceId:"evidence/material",kind:"image/png",contentHash:H("9")}],metadata:{approvedShell:{artifactId:plan.dependencies.shell.artifactId,contractHash:plan.dependencies.shell.contractHash},derivedRuntime:{path:"assets/buildings/authoring/functional-hall-house-v4/material-r2/runtime/shell-m1-production.glb",sha256:derivedSha,assetHash:derivedHash},approval:{decisionId:plan.dependencies.materials.approvalDecisionId,sha256:plan.dependencies.materials.approvalDecisionHash}}});
-  const stageBytes=bytes({schema:"limina.building-stage-artifact/v1",artifactId:plan.planId,kind:"interior-plan",revision:1,status:"draft",contractHash:buildingInteriorPlanV2Hash(plan),contentHash:`sha256:${sha256(planBytes)}`,facets:stageFacets,inputs:[],evidence:[],metadata:{gate:"I1-layout",humanDecision:"not-reviewed"}});
-  const approvedShell={...identity("assets/buildings/authoring/functional-hall-house-v4/shell-r4/approved-artifact.json",shellBytes),artifactId:plan.dependencies.shell.artifactId,kind:"shell",revision:4,status:"approved",contractHash:plan.dependencies.shell.contractHash,assetContentHash:plan.dependencies.shell.contentHash,approvalDecisionPath:"assets/buildings/authoring/functional-hall-house-v4/shell-r4/decision.json",approvalDecisionId:plan.dependencies.shell.approvalDecisionId,approvalDecisionHash:plan.dependencies.shell.approvalDecisionHash};
-  const approvedMaterials={...identity("assets/buildings/authoring/functional-hall-house-v4/material-r2/approved-artifact.json",materialBytes),artifactId:plan.dependencies.materials.artifactId,kind:"material-palette",revision:2,status:"approved",contractHash:plan.dependencies.materials.contractHash,assetContentHash:plan.dependencies.materials.contentHash,approvalDecisionPath:"assets/buildings/authoring/functional-hall-house-v4/material-r2/decision.json",approvalDecisionId:plan.dependencies.materials.approvalDecisionId,approvalDecisionHash:plan.dependencies.materials.approvalDecisionHash};
-  const authority={schema:"limina.staged-interior-proxy-review-scene/v1",approvalPolicy:{renderer:"limina-production-native-engine",blenderApprovalProhibited:true,nonEngineApprovalProhibited:true,humanDecisionRequired:true,proxyOnly:true},approvedShell,approvedMaterials,derived:{assetId:"buildings/authoring/functional-hall-house-v4/material-r2/runtime/shell-m1-production.glb",runtimeGlbPath:"assets/buildings/authoring/functional-hall-house-v4/material-r2/runtime/shell-m1-production.glb",sha256:derivedSha,assetHash:derivedHash,sourceShellArtifactId:approvedShell.artifactId,sourceMaterialArtifactId:approvedMaterials.artifactId},plan:{...identity("assets/buildings/authoring/functional-hall-house-v4/interior-r1/interior-plan.json",planBytes),planId:plan.planId,revision:1,canonicalHash:buildingInteriorPlanV2Hash(plan)},stageArtifact:{...identity("assets/buildings/authoring/functional-hall-house-v4/interior-r1/interior-plan-artifact-draft.json",stageBytes),artifactId:plan.planId,kind:"interior-plan",revision:1,status:"draft"},placement:{position:[0,0,0],yawRadians:0},presentation:{minimumResolution:[1920,1080],fixedTimeSeconds:12,warmupFrames:8,neutralStudio:true},evidenceViews:[{id:"layout-top-down",role:"unoccluded activity, clearance, and circulation plan",shellVisible:false,proxiesVisible:true,camera:{position:[0,14,0],target:[0,0,0],fovDeg:42,near:.03,far:100}},{id:"entry-walkthrough",role:"shell-registered entry-to-hearth walkthrough",shellVisible:true,proxiesVisible:true,camera:{position:[-1,1.6,-3.5],target:[1,1.1,1],fovDeg:55,near:.03,far:100}}]};
-  const files=new Map([[approvedShell.path,shellBytes],[approvedShell.approvalDecisionPath,shellDecisionBytes],[approvedMaterials.path,materialBytes],[approvedMaterials.approvalDecisionPath,materialDecisionBytes],[authority.plan.path,planBytes],[authority.stageArtifact.path,stageBytes],[authority.derived.runtimeGlbPath,derivedBytes]]);return {authority,files,plan};
+function closureFixture() {
+  const derivedBytes = bytes("canonical-glb-placeholder"),
+    derivedSha = `sha256:${sha256(derivedBytes)}`,
+    derivedHash = portableAssetContentHash(derivedBytes),
+    plan = planFixture();
+  const decision = (decisionId: string, gate: string, artifactId: string, contractHash: string, contentHash: string) =>
+    bytes({
+      schema: "limina.building-hitl-decision/v1",
+      decisionId,
+      gate,
+      artifactId,
+      contractHash,
+      contentHash,
+      reviewer: "user",
+      timestamp: "2026-07-15T12:00:00.000Z",
+      decision: "approve",
+      evidenceHashes: [H("7")],
+      blockingFindings: [],
+      observations: [],
+      markedRegions: [],
+    });
+  const shellDecisionBytes = decision(
+      plan.dependencies.shell.approvalDecisionId,
+      "A1-shell",
+      plan.dependencies.shell.artifactId,
+      plan.dependencies.shell.contractHash,
+      plan.dependencies.shell.contentHash,
+    ),
+    materialDecisionBytes = decision(
+      plan.dependencies.materials.approvalDecisionId,
+      "M1-materials",
+      plan.dependencies.materials.artifactId,
+      plan.dependencies.materials.contractHash,
+      plan.dependencies.materials.contentHash,
+    );
+  plan.dependencies.shell.approvalDecisionHash = `sha256:${sha256(shellDecisionBytes)}`;
+  plan.dependencies.materials.approvalDecisionHash = `sha256:${sha256(materialDecisionBytes)}`;
+  const planBytes = bytes(plan),
+    stageFacets = facets(
+      ["activity-zones", "placements", "circulation", "sightlines", "support-bindings", "vfx-intent"],
+      1,
+    );
+  const shellBytes = bytes({
+    schema: "limina.building-stage-artifact/v1",
+    artifactId: plan.dependencies.shell.artifactId,
+    kind: "shell",
+    revision: 4,
+    status: "approved",
+    contractHash: plan.dependencies.shell.contractHash,
+    contentHash: plan.dependencies.shell.contentHash,
+    facets: plan.dependencies.shell.facets,
+    inputs: [],
+    evidence: [{ evidenceId: "evidence/shell", kind: "image/png", contentHash: H("8") }],
+    metadata: {
+      approval: {
+        decisionId: plan.dependencies.shell.approvalDecisionId,
+        sha256: plan.dependencies.shell.approvalDecisionHash,
+      },
+    },
+  });
+  const materialBytes = bytes({
+    schema: "limina.building-stage-artifact/v1",
+    artifactId: plan.dependencies.materials.artifactId,
+    kind: "material-palette",
+    revision: 2,
+    status: "approved",
+    contractHash: plan.dependencies.materials.contractHash,
+    contentHash: plan.dependencies.materials.contentHash,
+    facets: plan.dependencies.materials.facets,
+    inputs: [],
+    evidence: [{ evidenceId: "evidence/material", kind: "image/png", contentHash: H("9") }],
+    metadata: {
+      approvedShell: {
+        artifactId: plan.dependencies.shell.artifactId,
+        contractHash: plan.dependencies.shell.contractHash,
+      },
+      derivedRuntime: {
+        path: "assets/buildings/authoring/functional-hall-house-v4/material-r2/runtime/shell-m1-production.glb",
+        sha256: derivedSha,
+        assetHash: derivedHash,
+      },
+      approval: {
+        decisionId: plan.dependencies.materials.approvalDecisionId,
+        sha256: plan.dependencies.materials.approvalDecisionHash,
+      },
+    },
+  });
+  const stageBytes = bytes({
+    schema: "limina.building-stage-artifact/v1",
+    artifactId: plan.planId,
+    kind: "interior-plan",
+    revision: 1,
+    status: "draft",
+    contractHash: buildingInteriorPlanV2Hash(plan),
+    contentHash: `sha256:${sha256(planBytes)}`,
+    facets: stageFacets,
+    inputs: [],
+    evidence: [],
+    metadata: { gate: "I1-layout", humanDecision: "not-reviewed" },
+  });
+  const approvedShell = {
+    ...identity("assets/buildings/authoring/functional-hall-house-v4/shell-r4/approved-artifact.json", shellBytes),
+    artifactId: plan.dependencies.shell.artifactId,
+    kind: "shell",
+    revision: 4,
+    status: "approved",
+    contractHash: plan.dependencies.shell.contractHash,
+    assetContentHash: plan.dependencies.shell.contentHash,
+    approvalDecisionPath: "assets/buildings/authoring/functional-hall-house-v4/shell-r4/decision.json",
+    approvalDecisionId: plan.dependencies.shell.approvalDecisionId,
+    approvalDecisionHash: plan.dependencies.shell.approvalDecisionHash,
+  };
+  const approvedMaterials = {
+    ...identity(
+      "assets/buildings/authoring/functional-hall-house-v4/material-r2/approved-artifact.json",
+      materialBytes,
+    ),
+    artifactId: plan.dependencies.materials.artifactId,
+    kind: "material-palette",
+    revision: 2,
+    status: "approved",
+    contractHash: plan.dependencies.materials.contractHash,
+    assetContentHash: plan.dependencies.materials.contentHash,
+    approvalDecisionPath: "assets/buildings/authoring/functional-hall-house-v4/material-r2/decision.json",
+    approvalDecisionId: plan.dependencies.materials.approvalDecisionId,
+    approvalDecisionHash: plan.dependencies.materials.approvalDecisionHash,
+  };
+  const authority = {
+    schema: "limina.staged-interior-proxy-review-scene/v1",
+    approvalPolicy: {
+      renderer: "limina-production-native-engine",
+      blenderApprovalProhibited: true,
+      nonEngineApprovalProhibited: true,
+      humanDecisionRequired: true,
+      proxyOnly: true,
+    },
+    approvedShell,
+    approvedMaterials,
+    derived: {
+      assetId: "buildings/authoring/functional-hall-house-v4/material-r2/runtime/shell-m1-production.glb",
+      runtimeGlbPath: "assets/buildings/authoring/functional-hall-house-v4/material-r2/runtime/shell-m1-production.glb",
+      sha256: derivedSha,
+      assetHash: derivedHash,
+      sourceShellArtifactId: approvedShell.artifactId,
+      sourceMaterialArtifactId: approvedMaterials.artifactId,
+    },
+    plan: {
+      ...identity("assets/buildings/authoring/functional-hall-house-v4/interior-r1/interior-plan.json", planBytes),
+      planId: plan.planId,
+      revision: 1,
+      canonicalHash: buildingInteriorPlanV2Hash(plan),
+    },
+    stageArtifact: {
+      ...identity(
+        "assets/buildings/authoring/functional-hall-house-v4/interior-r1/interior-plan-artifact-draft.json",
+        stageBytes,
+      ),
+      artifactId: plan.planId,
+      kind: "interior-plan",
+      revision: 1,
+      status: "draft",
+    },
+    placement: { position: [0, 0, 0], yawRadians: 0 },
+    presentation: { minimumResolution: [1920, 1080], fixedTimeSeconds: 12, warmupFrames: 8, neutralStudio: true },
+    evidenceViews: [
+      {
+        id: "layout-top-down",
+        role: "unoccluded activity, clearance, and circulation plan",
+        shellVisible: false,
+        proxiesVisible: true,
+        camera: { position: [0, 14, 0], target: [0, 0, 0], fovDeg: 42, near: 0.03, far: 100 },
+      },
+      {
+        id: "entry-walkthrough",
+        role: "shell-registered entry-to-hearth walkthrough",
+        shellVisible: true,
+        proxiesVisible: true,
+        camera: { position: [-1, 1.6, -3.5], target: [1, 1.1, 1], fovDeg: 55, near: 0.03, far: 100 },
+      },
+    ],
+  };
+  const files = new Map([
+    [approvedShell.path, shellBytes],
+    [approvedShell.approvalDecisionPath, shellDecisionBytes],
+    [approvedMaterials.path, materialBytes],
+    [approvedMaterials.approvalDecisionPath, materialDecisionBytes],
+    [authority.plan.path, planBytes],
+    [authority.stageArtifact.path, stageBytes],
+    [authority.derived.runtimeGlbPath, derivedBytes],
+  ]);
+  return { authority, files, plan };
 }
 
-test("I1 authority is strict, proxy-only, and requires exactly the two canonical engine views",()=>{
-  const {authority}=closureFixture();assert.equal(validateStagedInteriorProxyReviewAuthority(authority).evidenceViews.length,2);
-  for(const mutate of [(value:any)=>value.approvalPolicy.proxyOnly=false,(value:any)=>value.evidenceViews.reverse(),(value:any)=>value.evidenceViews[0].shellVisible=true,(value:any)=>value.catalogs=[]]){const copy=structuredClone(authority);mutate(copy);assert.throws(()=>validateStagedInteriorProxyReviewAuthority(copy));}
+test("I1 authority is strict, proxy-only, and requires exactly the two canonical engine views", () => {
+  const { authority } = closureFixture();
+  assert.equal(validateStagedInteriorProxyReviewAuthority(authority).evidenceViews.length, 2);
+  for (const mutate of [
+    (value: any) => (value.approvalPolicy.proxyOnly = false),
+    (value: any) => value.evidenceViews.reverse(),
+    (value: any) => (value.evidenceViews[0].shellVisible = true),
+    (value: any) => (value.catalogs = []),
+  ]) {
+    const copy = structuredClone(authority);
+    mutate(copy);
+    assert.throws(() => validateStagedInteriorProxyReviewAuthority(copy));
+  }
 });
 
-test("I1 closure binds exact A1/M1 identities, canonical plan, draft artifact, and production M1-derived shell bytes",()=>{
-  const {authority,files,plan}=closureFixture(),read=(path:string)=>files.get(path)!;const closure=verifyStagedInteriorProxyReviewClosure(authority as any,read);assert.equal(closure.plan.planId,plan.planId);
-  const drifted=new Map(files);drifted.set(authority.derived.runtimeGlbPath,bytes("drift"));assert.throws(()=>verifyStagedInteriorProxyReviewClosure(authority as any,path=>drifted.get(path)!),/shell bytes drifted/);
-  const dependencyDrift=structuredClone(plan);dependencyDrift.dependencies.materials.contractHash=H("f");const altered=bytes(dependencyDrift),mutated:any=structuredClone(authority);mutated.plan={...mutated.plan,sha256:`sha256:${sha256(altered)}`,contentHash:portableAssetContentHash(altered),canonicalHash:buildingInteriorPlanV2Hash(dependencyDrift)};const planFiles=new Map(files).set(mutated.plan.path,altered);assert.throws(()=>verifyStagedInteriorProxyReviewClosure(mutated,(path:string)=>planFiles.get(path)!),/dependency contractHash drifted/);
+test("I1 closure binds exact A1/M1 identities, canonical plan, draft artifact, and production M1-derived shell bytes", () => {
+  const { authority, files, plan } = closureFixture(),
+    read = (path: string) => files.get(path)!;
+  const closure = verifyStagedInteriorProxyReviewClosure(authority as any, read);
+  assert.equal(closure.plan.planId, plan.planId);
+  const drifted = new Map(files);
+  drifted.set(authority.derived.runtimeGlbPath, bytes("drift"));
+  assert.throws(
+    () => verifyStagedInteriorProxyReviewClosure(authority as any, (path) => drifted.get(path)!),
+    /shell bytes drifted/,
+  );
+  const dependencyDrift = structuredClone(plan);
+  dependencyDrift.dependencies.materials.contractHash = H("f");
+  const altered = bytes(dependencyDrift),
+    mutated: any = structuredClone(authority);
+  mutated.plan = {
+    ...mutated.plan,
+    sha256: `sha256:${sha256(altered)}`,
+    contentHash: portableAssetContentHash(altered),
+    canonicalHash: buildingInteriorPlanV2Hash(dependencyDrift),
+  };
+  const planFiles = new Map(files).set(mutated.plan.path, altered);
+  assert.throws(
+    () => verifyStagedInteriorProxyReviewClosure(mutated, (path: string) => planFiles.get(path)!),
+    /dependency contractHash drifted/,
+  );
 });
 
-test("proxy geometry covers zones, OBBs, facing markers, clearances, navigation, derived door arc, and hearth exclusion without furniture assets",()=>{
-  const {plan}=closureFixture(),subject=buildStagedInteriorProxyGeometry(plan),names=subject.group.children.map(child=>child.name);assert.deepEqual(subject.inventory,{zones:2,placements:1,facingMarkers:1,clearances:2,navigationNodes:2,navigationEdges:1,doorSweeps:1,hearthExclusions:1});
-  for(const prefix of ["zone/","placement/","footprint/","facing/","clearance/","navigation-node/","navigation-edge/","door-sweep/","hearth-exclusion/"])assert.ok(names.some(name=>name.startsWith(prefix)),`missing ${prefix}`);assert.ok(names.every(name=>!name.includes("furniture")));
-  subject.dispose();assert.equal(subject.group.children.length,0);subject.dispose();
+test("proxy geometry covers zones, OBBs, facing markers, clearances, navigation, derived door arc, and hearth exclusion without furniture assets", () => {
+  const { plan } = closureFixture(),
+    subject = buildStagedInteriorProxyGeometry(plan),
+    names = subject.group.children.map((child) => child.name);
+  assert.deepEqual(subject.inventory, {
+    zones: 2,
+    placements: 1,
+    facingMarkers: 1,
+    clearances: 2,
+    navigationNodes: 2,
+    navigationEdges: 1,
+    doorSweeps: 1,
+    hearthExclusions: 1,
+  });
+  for (const prefix of [
+    "zone/",
+    "placement/",
+    "footprint/",
+    "facing/",
+    "clearance/",
+    "navigation-node/",
+    "navigation-edge/",
+    "door-sweep/",
+    "hearth-exclusion/",
+  ])
+    assert.ok(
+      names.some((name) => name.startsWith(prefix)),
+      `missing ${prefix}`,
+    );
+  assert.ok(names.every((name) => !name.includes("furniture")));
+  subject.dispose();
+  assert.equal(subject.group.children.length, 0);
+  subject.dispose();
 });
 
-test("r2 west and east chair arrows expose engine local -Z yaw and point toward the dining table",async()=>{
-  const {plan}=await buildInteriorPlanStage({revision:2,write:false}),subject=buildStagedInteriorProxyGeometry(plan),table=plan.facingTargets.find(({id})=>id==="facing/dining-table")!;
-  for(const id of ["placement/dining-chair-west","placement/dining-chair-east"]){const placement=plan.placements.find((entry)=>entry.id===id)!,marker=subject.group.children.find(child=>child.name===`facing/${id}`)! as any,forward=interiorLocalNegativeZForward(placement.yawRadians),toTable=[table.position[0]-placement.position[0],table.position[2]-placement.position[2]],dot=forward[0]*toTable[0]+forward[1]*toTable[1];assert.deepEqual(marker.userData.forwardXZ,forward);assert.ok(dot>0,`${id} arrow must point toward table`);}
-  assert.equal(subject.inventory.facingMarkers,plan.placements.filter(({facingTargetId})=>facingTargetId!==null).length);subject.dispose();
+test("r2 west and east chair arrows expose engine local -Z yaw and point toward the dining table", async () => {
+  const { plan } = await buildInteriorPlanStage({ revision: 2, write: false }),
+    subject = buildStagedInteriorProxyGeometry(plan),
+    table = plan.facingTargets.find(({ id }) => id === "facing/dining-table")!;
+  for (const id of ["placement/dining-chair-west", "placement/dining-chair-east"]) {
+    const placement = plan.placements.find((entry) => entry.id === id)!,
+      marker = subject.group.children.find((child) => child.name === `facing/${id}`)! as any,
+      forward = interiorLocalNegativeZForward(placement.yawRadians),
+      toTable = [table.position[0] - placement.position[0], table.position[2] - placement.position[2]],
+      dot = forward[0] * toTable[0] + forward[1] * toTable[1];
+    assert.deepEqual(marker.userData.forwardXZ, forward);
+    assert.ok(dot > 0, `${id} arrow must point toward table`);
+  }
+  assert.equal(
+    subject.inventory.facingMarkers,
+    plan.placements.filter(({ facingTargetId }) => facingTargetId !== null).length,
+  );
+  subject.dispose();
 });

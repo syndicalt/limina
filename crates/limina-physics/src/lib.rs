@@ -18,6 +18,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 const MAX_HEIGHTFIELD_SAMPLES: usize = 1_048_576;
+/// Maximum number of stable body ids a world may mint over its lifetime.
+///
+/// This caps the slotmap itself, including tombstones: ids are authoritative,
+/// monotonic, and deliberately never reused, so reusing removed slots would fork
+/// replay and snapshot semantics. A world that reaches the cap must be replaced
+/// or compacted through a future versioned id scheme rather than silently
+/// wrapping or recycling an id.
+const MAX_BODY_IDS_PER_WORLD: usize = 65_536;
 const MAX_PENDING_COLLISION_EVENTS: usize = 4_096;
 /// Hard ceiling for one scene-overlap result. Callers may provide a smaller output
 /// buffer, but can never make the native query allocate or return an unbounded set.
@@ -153,14 +161,21 @@ impl PhysicsWorld {
         self.handles.get(id as usize).copied().flatten()
     }
 
-    fn insert_body(&mut self, body: RigidBody, collider: Collider) -> u32 {
+    fn insert_body(&mut self, body: RigidBody, collider: Collider) -> Result<u32, JsErrorBox> {
+        if self.handles.len() >= MAX_BODY_IDS_PER_WORLD {
+            return Err(JsErrorBox::generic(format!(
+                "physics body id capacity exhausted ({MAX_BODY_IDS_PER_WORLD}); ids are stable and are not reused"
+            )));
+        }
+        let id = u32::try_from(self.handles.len())
+            .map_err(|_| JsErrorBox::generic("physics body id overflow"))?;
+        // Only mutate Rapier after every fallible capacity/id check has passed.
         let handle = self.bodies.insert(body);
         self.colliders
             .insert_with_parent(collider, handle, &mut self.bodies);
-        let id = self.handles.len() as u32;
         self.handles.push(Some(handle));
         self.body_ids_by_handle.insert(handle, id);
-        id
+        Ok(id)
     }
 
     fn body_id_for_handle(&self, handle: RigidBodyHandle) -> Option<u32> {
@@ -285,6 +300,16 @@ fn validate_finite(label: &str, values: &[f32]) -> Result<(), JsErrorBox> {
     }
 }
 
+fn require_output_len(label: &str, actual: usize, required: usize) -> Result<(), JsErrorBox> {
+    if actual < required {
+        Err(JsErrorBox::generic(format!(
+            "{label} output buffer requires at least {required} elements, got {actual}"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_positive(label: &str, values: &[f32]) -> Result<(), JsErrorBox> {
     validate_finite(label, values)?;
     if values.iter().all(|v| *v > 0.0) {
@@ -402,6 +427,12 @@ fn snapshot_options() -> impl Options {
 }
 
 fn validate_snapshot(snapshot: &PhysicsSnapshot) -> Result<(), JsErrorBox> {
+    if snapshot.handles.len() > MAX_BODY_IDS_PER_WORLD {
+        return Err(JsErrorBox::generic(format!(
+            "physics snapshot body id count {} exceeds cap {MAX_BODY_IDS_PER_WORLD}",
+            snapshot.handles.len()
+        )));
+    }
     validate_finite("physics snapshot gravity", &snapshot.gravity)?;
     if !snapshot.integration_parameters.dt.is_finite() || snapshot.integration_parameters.dt <= 0.0
     {
@@ -497,6 +528,10 @@ fn decode_snapshot(bytes: &[u8]) -> Result<PhysicsSnapshot, JsErrorBox> {
 /// (Re)create the physics world with the given gravity (replaces any existing).
 #[op2(fast)]
 pub fn op_physics_create_world(state: &mut OpState, gravity_y: f32) -> Result<(), JsErrorBox> {
+    physics_create_world_impl(state, gravity_y)
+}
+
+fn physics_create_world_impl(state: &mut OpState, gravity_y: f32) -> Result<(), JsErrorBox> {
     validate_finite("physics gravity", &[gravity_y])?;
     state.put(PhysicsWorld::new(gravity_y));
     Ok(())
@@ -539,7 +574,7 @@ pub fn op_physics_add_box(
     let collider = ColliderBuilder::cuboid(half, half, half)
         .active_events(ActiveEvents::COLLISION_EVENTS)
         .build();
-    Ok(world.insert_body(body, collider))
+    world.insert_body(body, collider)
 }
 
 /// Add a dynamic cube with material parameters. Keeps `op_physics_add_box` arity stable.
@@ -567,7 +602,7 @@ pub fn op_physics_add_box_material(
         restitution,
     )
     .build();
-    Ok(world.insert_body(body, collider))
+    world.insert_body(body, collider)
 }
 
 /// Add a dynamic sphere with material parameters. Returns its stable body id.
@@ -589,7 +624,7 @@ pub fn op_physics_add_sphere(
         .translation(Vector::new(x, y, z))
         .build();
     let collider = material(ColliderBuilder::ball(radius), friction, restitution).build();
-    Ok(world.insert_body(body, collider))
+    world.insert_body(body, collider)
 }
 
 /// Add a dynamic Y-axis capsule. `half_height` is the cylindrical half-height.
@@ -618,7 +653,7 @@ pub fn op_physics_add_capsule(
         restitution,
     )
     .build();
-    Ok(world.insert_body(body, collider))
+    world.insert_body(body, collider)
 }
 
 /// Add a fixed cuboid rigid body with material parameters. Returns its stable body id.
@@ -643,7 +678,7 @@ pub fn op_physics_add_static_box(
         .translation(Vector::new(x, y, z))
         .build();
     let collider = material(ColliderBuilder::cuboid(hx, hy, hz), friction, restitution).build();
-    Ok(world.insert_body(body, collider))
+    world.insert_body(body, collider)
 }
 
 /// Add a fixed sphere rigid body with material parameters. Returns its stable body id.
@@ -665,7 +700,7 @@ pub fn op_physics_add_static_sphere(
         .translation(Vector::new(x, y, z))
         .build();
     let collider = material(ColliderBuilder::ball(radius), friction, restitution).build();
-    Ok(world.insert_body(body, collider))
+    world.insert_body(body, collider)
 }
 
 /// Add a fixed Y-axis capsule rigid body. `half_height` is the cylindrical half-height.
@@ -694,7 +729,7 @@ pub fn op_physics_add_static_capsule(
         restitution,
     )
     .build();
-    Ok(world.insert_body(body, collider))
+    world.insert_body(body, collider)
 }
 
 /// Add a fixed HEIGHTFIELD collider (Phase 9 terrain). `heights` is an
@@ -734,7 +769,7 @@ pub fn op_physics_add_heightfield(
         .build();
     let collider =
         ColliderBuilder::heightfield(mat, Vector::new(scale_x, scale_y, scale_z)).build();
-    Ok(world.insert_body(body, collider))
+    world.insert_body(body, collider)
 }
 
 /// Add a KINEMATIC position-based Y-axis capsule for use as a character controller
@@ -760,7 +795,7 @@ pub fn op_physics_add_character(
     let collider = ColliderBuilder::capsule_y(half_height, radius)
         .active_events(ActiveEvents::COLLISION_EVENTS)
         .build();
-    Ok(world.insert_body(body, collider))
+    world.insert_body(body, collider)
 }
 
 /// Move a character body (created by `op_physics_add_character`) by a desired
@@ -784,9 +819,7 @@ pub fn op_physics_move_character(
     dz: f32,
     #[buffer] out: &mut [f32],
 ) -> Result<(), JsErrorBox> {
-    if out.len() < 4 {
-        return Ok(());
-    }
+    require_output_len("physics character movement", out.len(), 4)?;
     validate_finite("character movement", &[dx, dy, dz])?;
     let world = state.borrow_mut::<PhysicsWorld>();
     let handle = match world.handle(id) {
@@ -962,10 +995,12 @@ fn physics_restore_impl(state: &mut OpState, bytes: &[u8]) -> Result<(), JsError
 /// browser physics mirrors implement the same contract and stale-id reads occur
 /// legitimately after `op_physics_remove_body`.
 #[op2(fast)]
-pub fn op_physics_body_pos(state: &mut OpState, id: u32, #[buffer] out: &mut [f32]) {
-    if out.len() < 3 {
-        return;
-    }
+pub fn op_physics_body_pos(
+    state: &mut OpState,
+    id: u32,
+    #[buffer] out: &mut [f32],
+) -> Result<(), JsErrorBox> {
+    require_output_len("physics body position", out.len(), 3)?;
     let world = state.borrow::<PhysicsWorld>();
     if let Some(handle) = world.handle(id) {
         if let Some(body) = world.bodies.get(handle) {
@@ -973,10 +1008,11 @@ pub fn op_physics_body_pos(state: &mut OpState, id: u32, #[buffer] out: &mut [f3
             out[0] = t.x;
             out[1] = t.y;
             out[2] = t.z;
-            return;
+            return Ok(());
         }
     }
     out[0..3].fill(0.0);
+    Ok(())
 }
 
 /// Write `out = [pos.x, pos.y, pos.z, quat.x, quat.y, quat.z, quat.w]`.
@@ -984,10 +1020,12 @@ pub fn op_physics_body_pos(state: &mut OpState, id: u32, #[buffer] out: &mut [f3
 /// quaternion is not a valid rotation, which distinguishes it from any live
 /// body); same stale-id contract as `op_physics_body_pos`.
 #[op2(fast)]
-pub fn op_physics_body_transform(state: &mut OpState, id: u32, #[buffer] out: &mut [f32]) {
-    if out.len() < 7 {
-        return;
-    }
+pub fn op_physics_body_transform(
+    state: &mut OpState,
+    id: u32,
+    #[buffer] out: &mut [f32],
+) -> Result<(), JsErrorBox> {
+    require_output_len("physics body transform", out.len(), 7)?;
     let world = state.borrow::<PhysicsWorld>();
     if let Some(handle) = world.handle(id) {
         if let Some(body) = world.bodies.get(handle) {
@@ -1000,10 +1038,11 @@ pub fn op_physics_body_transform(state: &mut OpState, id: u32, #[buffer] out: &m
             out[4] = r.y;
             out[5] = r.z;
             out[6] = r.w;
-            return;
+            return Ok(());
         }
     }
     out[0..7].fill(0.0);
+    Ok(())
 }
 
 /// Set a rigid body's world transform (translation + rotation) by stable id. Used to re-pose a
@@ -1146,9 +1185,7 @@ pub fn op_physics_raycast(
     max_toi: f32,
     #[buffer] out: &mut [f32],
 ) -> Result<(), JsErrorBox> {
-    if out.len() < 6 {
-        return Ok(());
-    }
+    require_output_len("physics raycast", out.len(), 6)?;
     validate_finite("raycast origin", &[ox, oy, oz])?;
     validate_finite("raycast direction", &[dx, dy, dz])?;
     validate_positive("raycast max_toi", &[max_toi])?;
@@ -1206,7 +1243,19 @@ pub fn op_physics_overlap_box(
     #[buffer] out: &mut [u32],
 ) -> Result<u32, JsErrorBox> {
     physics_overlap_box_impl(
-        state, x, y, z, hx, hy, hz, qx, qy, qz, qw, ignore_body_id, out,
+        state,
+        x,
+        y,
+        z,
+        hx,
+        hy,
+        hz,
+        qx,
+        qy,
+        qz,
+        qw,
+        ignore_body_id,
+        out,
     )
 }
 
@@ -1250,8 +1299,12 @@ fn physics_overlap_box_impl(
     let capacity = out.len().min(MAX_BOX_OVERLAP_HITS);
     let mut hits = BTreeSet::<u32>::new();
     for (collider, _) in query.intersect_shape(pose, &shape) {
-        let Some(id) = world.body_id_for_collider(collider) else { continue };
-        if Some(id) == ignored || hits.contains(&id) { continue; }
+        let Some(id) = world.body_id_for_collider(collider) else {
+            continue;
+        };
+        if Some(id) == ignored || hits.contains(&id) {
+            continue;
+        }
         if hits.len() < capacity {
             hits.insert(id);
         } else if let Some(current_max) = hits.last().copied() {
@@ -1262,7 +1315,9 @@ fn physics_overlap_box_impl(
         }
     }
     let count = hits.len();
-    for (slot, id) in out.iter_mut().zip(hits) { *slot = id; }
+    for (slot, id) in out.iter_mut().zip(hits) {
+        *slot = id;
+    }
     Ok(count as u32)
 }
 
@@ -1436,12 +1491,13 @@ extension!(
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_snapshot, init_physics_state, physics_overlap_box_impl, physics_restore_impl, physics_set_body_transform_impl,
-        physics_snapshot_impl, physics_take_collision_overflow_count_impl, registry_activate,
-        registry_drop, registry_new_world, registry_new_world_validated, snapshot_options,
-        validate_heightfield, BoundedCollisionEvents, PhysicsRegistry, PhysicsSnapshot,
-        PhysicsSnapshotRef, PhysicsWorld, DEFAULT_GRAVITY_Y, MAX_HEIGHTFIELD_SAMPLES,
-        MAX_PENDING_COLLISION_EVENTS, PHYSICS_SNAPSHOT_MAGIC,
+        decode_snapshot, init_physics_state, physics_create_world_impl, physics_overlap_box_impl,
+        physics_restore_impl, physics_set_body_transform_impl, physics_snapshot_impl,
+        physics_take_collision_overflow_count_impl, registry_activate, registry_drop,
+        registry_new_world, registry_new_world_validated, snapshot_options, validate_heightfield,
+        validate_snapshot, BoundedCollisionEvents, PhysicsRegistry, PhysicsSnapshot,
+        PhysicsSnapshotRef, PhysicsWorld, DEFAULT_GRAVITY_Y, MAX_BODY_IDS_PER_WORLD,
+        MAX_HEIGHTFIELD_SAMPLES, MAX_PENDING_COLLISION_EVENTS, PHYSICS_SNAPSHOT_MAGIC,
     };
     use bincode::Options;
     use deno_core::OpState;
@@ -1519,6 +1575,78 @@ mod tests {
         assert!(!registry_activate(&mut state, 0), "dropped world is gone");
     }
 
+    /// `create_world` and `restore` replace the CONTENTS of the current active binding; they do
+    /// not mint or destroy a registry identity. This is deliberate: replay resets/restores the
+    /// world selected by the caller. The registry must continue to name that replacement and a
+    /// later activation must not swap an obsolete pre-reset world back in.
+    #[test]
+    fn create_and_restore_replace_the_active_registry_binding() {
+        let mut state = OpState::new(None);
+        init_physics_state(&mut state);
+
+        let insert_stable_box = |state: &mut OpState| {
+            state
+                .borrow_mut::<PhysicsWorld>()
+                .insert_body(
+                    RigidBodyBuilder::dynamic()
+                        .translation(Vector::new(0.0, 10.0, 0.0))
+                        .build(),
+                    ColliderBuilder::cuboid(0.5, 0.5, 0.5).build(),
+                )
+                .expect("insert stable indexed body");
+        };
+
+        insert_stable_box(&mut state);
+        let default_snapshot = physics_snapshot_impl(&mut state).expect("snapshot default world");
+
+        let alternate = registry_new_world(&mut state, -4.0).expect("new alternate world");
+        assert!(registry_activate(&mut state, alternate));
+        insert_stable_box(&mut state);
+        assert_eq!(state.borrow::<PhysicsWorld>().bodies.len(), 1);
+
+        physics_create_world_impl(&mut state, -2.0).expect("reset active alternate world");
+        assert_eq!(state.borrow::<PhysicsRegistry>().active_id, alternate);
+        assert!(!state
+            .borrow::<PhysicsRegistry>()
+            .inactive
+            .contains_key(&alternate));
+        assert_eq!(state.borrow::<PhysicsWorld>().bodies.len(), 0);
+        assert!(registry_activate(&mut state, alternate));
+        assert_eq!(
+            state.borrow::<PhysicsWorld>().bodies.len(),
+            0,
+            "re-activating the already-active id resurrected its pre-reset contents"
+        );
+
+        physics_restore_impl(&mut state, &default_snapshot).expect("restore into active binding");
+        assert_eq!(state.borrow::<PhysicsRegistry>().active_id, alternate);
+        assert!(!state
+            .borrow::<PhysicsRegistry>()
+            .inactive
+            .contains_key(&alternate));
+        assert_eq!(state.borrow::<PhysicsWorld>().bodies.len(), 1);
+        assert!(registry_activate(&mut state, alternate));
+        assert_eq!(
+            state.borrow::<PhysicsWorld>().bodies.len(),
+            1,
+            "re-activating the already-active id lost its restored contents"
+        );
+
+        assert!(registry_activate(&mut state, 0));
+        assert_eq!(state.borrow::<PhysicsRegistry>().active_id, 0);
+        assert_eq!(
+            state.borrow::<PhysicsWorld>().bodies.len(),
+            1,
+            "replacing alternate contents corrupted the inactive default world"
+        );
+        assert!(registry_activate(&mut state, alternate));
+        assert_eq!(
+            state.borrow::<PhysicsWorld>().bodies.len(),
+            1,
+            "restored alternate contents were not preserved across a real swap"
+        );
+    }
+
     /// Every physics op begins with `state.borrow_mut::<PhysicsWorld>()`. Because
     /// the extension installs a default world at load (`init_physics_state`), that
     /// borrow succeeds — and stepping it — even before `op_physics_create_world`.
@@ -1560,7 +1688,7 @@ mod tests {
             .translation(Vector::new(0.0, 10.0, 0.0))
             .build();
         let collider = ColliderBuilder::cuboid(0.5, 0.5, 0.5).build();
-        let id = world.insert_body(body, collider);
+        let id = world.insert_body(body, collider).expect("insert body");
 
         for _ in 0..30 {
             world.step();
@@ -1577,6 +1705,56 @@ mod tests {
     }
 
     #[test]
+    fn body_id_cap_rejects_before_mutating_rapier_and_never_reuses_tombstones() {
+        let mut world = PhysicsWorld::new(DEFAULT_GRAVITY_Y);
+        world.handles.resize(MAX_BODY_IDS_PER_WORLD, None);
+        let bodies_before = world.bodies.len();
+        let colliders_before = world.colliders.len();
+
+        let err = world
+            .insert_body(
+                RigidBodyBuilder::dynamic().build(),
+                ColliderBuilder::ball(0.5).build(),
+            )
+            .expect_err("a full stable-id slotmap must reject another body");
+
+        assert!(err.to_string().contains("capacity exhausted"), "got: {err}");
+        assert_eq!(world.handles.len(), MAX_BODY_IDS_PER_WORLD);
+        assert_eq!(
+            world.bodies.len(),
+            bodies_before,
+            "rejection inserted a rigid body"
+        );
+        assert_eq!(
+            world.colliders.len(),
+            colliders_before,
+            "rejection inserted a collider"
+        );
+    }
+
+    #[test]
+    fn restore_rejects_slotmaps_over_the_lifetime_id_cap() {
+        let world = PhysicsWorld::new(DEFAULT_GRAVITY_Y);
+        let mut handles = vec![None; MAX_BODY_IDS_PER_WORLD];
+        handles.push(None);
+        let snapshot = PhysicsSnapshot {
+            gravity: [world.gravity.x, world.gravity.y, world.gravity.z],
+            integration_parameters: world.integration_parameters,
+            islands: world.islands,
+            broad_phase: world.broad_phase,
+            narrow_phase: world.narrow_phase,
+            bodies: world.bodies,
+            colliders: world.colliders,
+            impulse_joints: world.impulse_joints,
+            multibody_joints: world.multibody_joints,
+            handles,
+        };
+
+        let err = validate_snapshot(&snapshot).expect_err("oversized restored slotmap must fail");
+        assert!(err.to_string().contains("exceeds cap"), "got: {err}");
+    }
+
+    #[test]
     fn reverse_body_lookup_survives_tombstones_and_restore() {
         let mut world = PhysicsWorld::new(DEFAULT_GRAVITY_Y);
         let mut ids = Vec::new();
@@ -1585,7 +1763,7 @@ mod tests {
                 .translation(Vector::new(x as f32, 1.0, 0.0))
                 .build();
             let collider = ColliderBuilder::cuboid(0.5, 0.5, 0.5).build();
-            ids.push(world.insert_body(body, collider));
+            ids.push(world.insert_body(body, collider).expect("insert body"));
         }
 
         for &id in &ids {
@@ -1631,12 +1809,14 @@ mod tests {
         init_physics_state(&mut state);
         {
             let world = state.borrow_mut::<PhysicsWorld>();
-            world.insert_body(
-                RigidBodyBuilder::dynamic()
-                    .translation(Vector::new(1.0, 2.0, 3.0))
-                    .build(),
-                ColliderBuilder::ball(0.5).build(),
-            );
+            world
+                .insert_body(
+                    RigidBodyBuilder::dynamic()
+                        .translation(Vector::new(1.0, 2.0, 3.0))
+                        .build(),
+                    ColliderBuilder::ball(0.5).build(),
+                )
+                .expect("insert body");
         }
 
         let encoded = physics_snapshot_impl(&mut state).expect("encode versioned snapshot");
@@ -1675,7 +1855,7 @@ mod tests {
         let mut world = PhysicsWorld::new(DEFAULT_GRAVITY_Y);
         let body = RigidBodyBuilder::dynamic().build();
         let collider = ColliderBuilder::ball(0.5).build();
-        let id = world.insert_body(body, collider);
+        let id = world.insert_body(body, collider).expect("insert body");
         let live_handle = world.handle(id).unwrap();
         let invalid = PhysicsSnapshot {
             gravity: [world.gravity.x, world.gravity.y, world.gravity.z],
@@ -1699,12 +1879,14 @@ mod tests {
     #[test]
     fn snapshot_ref_encoding_matches_owned_encoding() {
         let mut world = PhysicsWorld::new(DEFAULT_GRAVITY_Y);
-        world.insert_body(
-            RigidBodyBuilder::dynamic()
-                .translation(Vector::new(1.0, 2.0, 3.0))
-                .build(),
-            ColliderBuilder::ball(0.5).build(),
-        );
+        world
+            .insert_body(
+                RigidBodyBuilder::dynamic()
+                    .translation(Vector::new(1.0, 2.0, 3.0))
+                    .build(),
+                ColliderBuilder::ball(0.5).build(),
+            )
+            .expect("insert body");
         for _ in 0..3 {
             world.step();
         }
@@ -1748,12 +1930,14 @@ mod tests {
         init_physics_state(&mut state);
         {
             let world = state.borrow_mut::<PhysicsWorld>();
-            let id = world.insert_body(
-                RigidBodyBuilder::dynamic()
-                    .translation(Vector::new(0.0, 1.0, 0.0))
-                    .build(),
-                ColliderBuilder::ball(0.5).build(),
-            );
+            let id = world
+                .insert_body(
+                    RigidBodyBuilder::dynamic()
+                        .translation(Vector::new(0.0, 1.0, 0.0))
+                        .build(),
+                    ColliderBuilder::ball(0.5).build(),
+                )
+                .expect("insert body");
             let handle = world.handle(id).expect("body id resolves");
             world.bodies[handle].set_translation(Vector::new(f32::NAN, 1.0, 0.0), false);
         }
@@ -1773,12 +1957,15 @@ mod tests {
     fn set_body_transform_rejects_zero_quaternion_without_mutation() {
         let mut state = OpState::new(None);
         init_physics_state(&mut state);
-        let id = state.borrow_mut::<PhysicsWorld>().insert_body(
-            RigidBodyBuilder::dynamic()
-                .translation(Vector::new(1.0, 2.0, 3.0))
-                .build(),
-            ColliderBuilder::ball(0.5).build(),
-        );
+        let id = state
+            .borrow_mut::<PhysicsWorld>()
+            .insert_body(
+                RigidBodyBuilder::dynamic()
+                    .translation(Vector::new(1.0, 2.0, 3.0))
+                    .build(),
+                ColliderBuilder::ball(0.5).build(),
+            )
+            .expect("insert body");
 
         let err =
             physics_set_body_transform_impl(&mut state, id, 9.0, 9.0, 9.0, 0.0, 0.0, 0.0, 0.0)
@@ -1823,51 +2010,78 @@ mod tests {
         init_physics_state(&mut state);
         let (id0, id1, id2) = {
             let world = state.borrow_mut::<PhysicsWorld>();
-            let id0 = world.insert_body(
-                RigidBodyBuilder::fixed().translation(Vector::new(-0.75, 0.0, 0.0)).build(),
-                ColliderBuilder::cuboid(0.2, 0.2, 0.2).build(),
-            );
-            let id1 = world.insert_body(
-                RigidBodyBuilder::fixed().translation(Vector::new(0.75, 0.0, 0.0)).build(),
-                ColliderBuilder::cuboid(0.2, 0.2, 0.2).build(),
-            );
-            let id2 = world.insert_body(
-                RigidBodyBuilder::fixed().translation(Vector::new(0.0, 0.0, 1.4)).build(),
-                ColliderBuilder::cuboid(0.2, 0.2, 0.2).build(),
-            );
+            let id0 = world
+                .insert_body(
+                    RigidBodyBuilder::fixed()
+                        .translation(Vector::new(-0.75, 0.0, 0.0))
+                        .build(),
+                    ColliderBuilder::cuboid(0.2, 0.2, 0.2).build(),
+                )
+                .expect("insert body");
+            let id1 = world
+                .insert_body(
+                    RigidBodyBuilder::fixed()
+                        .translation(Vector::new(0.75, 0.0, 0.0))
+                        .build(),
+                    ColliderBuilder::cuboid(0.2, 0.2, 0.2).build(),
+                )
+                .expect("insert body");
+            let id2 = world
+                .insert_body(
+                    RigidBodyBuilder::fixed()
+                        .translation(Vector::new(0.0, 0.0, 1.4))
+                        .build(),
+                    ColliderBuilder::cuboid(0.2, 0.2, 0.2).build(),
+                )
+                .expect("insert body");
             world.step();
             (id0, id1, id2)
         };
 
         let mut out = [u32::MAX; 8];
         let count = physics_overlap_box_impl(
-            &mut state, 0.0, 0.0, 0.0, 1.1, 0.5, 0.35,
-            0.0, 0.0, 0.0, 1.0, -1, &mut out,
-        ).unwrap();
+            &mut state, 0.0, 0.0, 0.0, 1.1, 0.5, 0.35, 0.0, 0.0, 0.0, 1.0, -1, &mut out,
+        )
+        .unwrap();
         assert_eq!(count, 2);
         assert_eq!(&out[..2], &[id0, id1], "results must be stable-id sorted");
 
         let count = physics_overlap_box_impl(
-            &mut state, 0.0, 0.0, 0.0, 1.1, 0.5, 0.35,
-            0.0, 0.0, 0.0, 1.0, id0 as i32, &mut out,
-        ).unwrap();
+            &mut state, 0.0, 0.0, 0.0, 1.1, 0.5, 0.35, 0.0, 0.0, 0.0, 1.0, id0 as i32, &mut out,
+        )
+        .unwrap();
         assert_eq!(&out[..count as usize], &[id1]);
 
         // Rotate the long axis from X to Z: the first pair leaves and id2 enters.
         let half = std::f32::consts::FRAC_PI_4;
         let count = physics_overlap_box_impl(
-            &mut state, 0.0, 0.0, 0.0, 1.8, 0.5, 0.35,
-            0.0, half.sin(), 0.0, half.cos(), -1, &mut out,
-        ).unwrap();
+            &mut state,
+            0.0,
+            0.0,
+            0.0,
+            1.8,
+            0.5,
+            0.35,
+            0.0,
+            half.sin(),
+            0.0,
+            half.cos(),
+            -1,
+            &mut out,
+        )
+        .unwrap();
         assert_eq!(&out[..count as usize], &[id2]);
 
         let mut one = [u32::MAX; 1];
         let count = physics_overlap_box_impl(
-            &mut state, 0.0, 0.0, 0.0, 1.1, 0.5, 0.35,
-            0.0, 0.0, 0.0, 1.0, -1, &mut one,
-        ).unwrap();
+            &mut state, 0.0, 0.0, 0.0, 1.1, 0.5, 0.35, 0.0, 0.0, 0.0, 1.0, -1, &mut one,
+        )
+        .unwrap();
         assert_eq!(count, 1, "caller buffer must bound the result");
-        assert_eq!(one[0], id0, "truncation must retain deterministic lowest ids");
+        assert_eq!(
+            one[0], id0,
+            "truncation must retain deterministic lowest ids"
+        );
     }
 
     #[test]
@@ -1876,17 +2090,29 @@ mod tests {
         init_physics_state(&mut state);
         let mut out = [0; 1];
         assert!(physics_overlap_box_impl(
-            &mut state, f32::NAN, 0.0, 0.0, 1.0, 1.0, 1.0,
-            0.0, 0.0, 0.0, 1.0, -1, &mut out,
-        ).is_err());
+            &mut state,
+            f32::NAN,
+            0.0,
+            0.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            -1,
+            &mut out,
+        )
+        .is_err());
         assert!(physics_overlap_box_impl(
-            &mut state, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0,
-            0.0, 0.0, 0.0, 1.0, -1, &mut out,
-        ).is_err());
+            &mut state, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1, &mut out,
+        )
+        .is_err());
         assert!(physics_overlap_box_impl(
-            &mut state, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0,
-            0.0, 0.0, 0.0, 0.0, -1, &mut out,
-        ).is_err());
+            &mut state, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1, &mut out,
+        )
+        .is_err());
     }
 
     #[test]

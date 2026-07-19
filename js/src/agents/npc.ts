@@ -276,8 +276,7 @@ export async function driveNpcTick(params: NpcTickParams): Promise<void> {
   const drain = params.drain ?? 8;
   for (let d = 0; d < drain; d++) await Promise.resolve();
   await actionSystem(agents, ctx.registry, ctx.world, tick, scheduler);
-  ctx.core.locomotion.step(ctx.world, dtMs);
-  ctx.world.spatial?.invalidate();
+  if (ctx.core.locomotion.step(ctx.world, dtMs)) ctx.world.spatial?.invalidate();
 }
 
 // ── A deterministic ambient-social policy (for the determinism gate) ──────────

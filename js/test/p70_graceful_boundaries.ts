@@ -41,7 +41,9 @@ function assert(cond: boolean, msg: string): asserts cond {
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     p,
-    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} did not settle within ${ms}ms (HANG)`)), ms)),
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} did not settle within ${ms}ms (HANG)`)), ms),
+    ),
   ]);
 }
 
@@ -93,11 +95,11 @@ const BUILDER = resolveProfile("builder.readWrite");
     input: { shape: "box", material: "stone", position: [x, 1, 0] },
   });
   const batch: AuthorCommand[] = [
-    mkBox(0),                                                          // 0 valid
+    mkBox(0), // 0 valid
     { kind: "skill", tool: "definitely.not.a.real.skill", input: {} }, // 1 BAD: unknown skill name
-    mkBox(2),                                                          // 2 valid
+    mkBox(2), // 2 valid
     { kind: "physics", op: "op_physics_does_not_exist" as keyof EngineOps, args: [] }, // 3 BAD: throws
-    mkBox(4),                                                          // 4 valid
+    mkBox(4), // 4 valid
   ];
 
   let outcome: Awaited<ReturnType<typeof applyAuthorCommandsIsolated>> | undefined;
@@ -126,11 +128,23 @@ const BUILDER = resolveProfile("builder.readWrite");
   assert(!outcome.results[3].success, "unknown-physics-op command #3 must be CONTAINED as a failure (it throws)");
   // Structured failures carry the offending indices + labels.
   assert(outcome.failures.length === 2, `expected exactly 2 structured failures, got ${outcome.failures.length}`);
-  assert(outcome.failures.map((f) => f.index).join(",") === "1,3", `failures must point at indices 1,3 (got ${outcome.failures.map((f) => f.index).join(",")})`);
-  assert(outcome.failures[0].command === "skill:definitely.not.a.real.skill", `failure #0 label wrong: ${outcome.failures[0].command}`);
-  assert(outcome.failures[1].command === "physics.op_physics_does_not_exist", `failure #1 label wrong: ${outcome.failures[1].command}`);
+  assert(
+    outcome.failures.map((f) => f.index).join(",") === "1,3",
+    `failures must point at indices 1,3 (got ${outcome.failures.map((f) => f.index).join(",")})`,
+  );
+  assert(
+    outcome.failures[0].command === "skill:definitely.not.a.real.skill",
+    `failure #0 label wrong: ${outcome.failures[0].command}`,
+  );
+  assert(
+    outcome.failures[1].command === "physics.op_physics_does_not_exist",
+    `failure #1 label wrong: ${outcome.failures[1].command}`,
+  );
   // The world actually gained the 3 valid entities (no valid command was skipped because of a bad one).
-  assert(world.entities.ids().length === 3, `expected 3 authored entities (the valid commands), got ${world.entities.ids().length}`);
+  assert(
+    world.entities.ids().length === 3,
+    `expected 3 authored entities (the valid commands), got ${world.entities.ids().length}`,
+  );
 }
 
 // ============================================================================
@@ -140,15 +154,24 @@ const BUILDER = resolveProfile("builder.readWrite");
 {
   const hs = createWorkerHandshake<{ type: string }>();
   assert(hs.offer({ type: "tick", tick: 1 }) === false, "a tick ack must NOT settle the handshake");
-  assert(hs.offer({ type: "error", phase: "init", message: "unknown asset id blight-gradient-99" }) === true, "an {type:error} message must settle the handshake");
+  assert(
+    hs.offer({ type: "error", phase: "init", message: "unknown asset id blight-gradient-99" }) === true,
+    "an {type:error} message must settle the handshake",
+  );
   const r = await withTimeout(hs.promise, 1000, "handshake on {type:error}");
   assert(r.ok === false, "handshake must resolve ok:false on a worker {type:error} (NOT hang)");
-  assert(!r.ok && r.error.includes("unknown asset id blight-gradient-99"), `handshake error must carry the worker message, got: ${!r.ok ? r.error : "<ok>"}`);
+  assert(
+    !r.ok && r.error.includes("unknown asset id blight-gradient-99"),
+    `handshake error must carry the worker message, got: ${!r.ok ? r.error : "<ok>"}`,
+  );
   assert(!r.ok && r.error.includes("init"), "handshake error must carry the phase");
 
   // Ready path still works.
   const hs2 = createWorkerHandshake<{ type: string; buffer: number }>();
-  assert(hs2.offer({ type: "ready", buffer: 1, inputBuffer: 2, status: 3 }) === true, "a {type:ready} message must settle the handshake");
+  assert(
+    hs2.offer({ type: "ready", buffer: 1, inputBuffer: 2, status: 3 }) === true,
+    "a {type:ready} message must settle the handshake",
+  );
   const r2 = await withTimeout(hs2.promise, 1000, "handshake on {type:ready}");
   assert(r2.ok === true, "handshake must resolve ok:true on {type:ready}");
   assert(r2.ok && r2.ready.buffer === 1, "handshake must carry the ready payload through");
@@ -172,9 +195,17 @@ const BUILDER = resolveProfile("builder.readWrite");
 //    (Unit-tests the SAME partitionQuarantined viewport.js imports from the runtime bundle.)
 // ============================================================================
 {
-  const good0: AuthorCommand = { kind: "skill", tool: "scene.createEntity", input: { shape: "box", position: [0, 1, 0] } };
+  const good0: AuthorCommand = {
+    kind: "skill",
+    tool: "scene.createEntity",
+    input: { shape: "box", position: [0, 1, 0] },
+  };
   const bad: AuthorCommand = { kind: "skill", tool: "asset.place", input: { assetId: "does-not-exist" } };
-  const good2: AuthorCommand = { kind: "skill", tool: "scene.createEntity", input: { shape: "box", position: [2, 1, 0] } };
+  const good2: AuthorCommand = {
+    kind: "skill",
+    tool: "scene.createEntity",
+    input: { shape: "box", position: [2, 1, 0] },
+  };
   const authorCmds: AuthorCommand[] = [good0, bad, good2];
 
   // First pass: nothing quarantined — everything is replayed.
@@ -192,9 +223,16 @@ const BUILDER = resolveProfile("builder.readWrite");
   assert(pass2.kept.length === 2, "second pass must skip the quarantined command");
   assert(!pass2.kept.includes(bad), "the known-bad command must NOT be replayed on the second pass");
   assert(pass2.kept[0] === good0 && pass2.kept[1] === good2, "the two good commands must remain, in order");
-  assert(pass2.keptIndex.join(",") === "0,2", "second-pass keptIndex must map the kept commands back to their original indices (0,2)");
+  assert(
+    pass2.keptIndex.join(",") === "0,2",
+    "second-pass keptIndex must map the kept commands back to their original indices (0,2)",
+  );
 }
 
 ops.op_log(
-  "[js] p70_graceful_boundaries OK: (1) the shared isolated applier used by sim-worker loadWorld + runLive applies every VALID command and CONTAINS both an unknown skill and a throwing physics op as structured failures (never throws; 3/3 entities authored); (2) createWorkerHandshake settles on {type:error} (no hang), on {type:ready}, and on fail() — idempotently; (3) partitionQuarantined skips a known-bad command on the second authoring pass, mapping kept commands back to their original indices.",
+  "[js] p70_graceful_boundaries OK: (1) the shared isolated applier used by sim-worker loadWorld + runLive " +
+    "applies every VALID command and CONTAINS both an unknown skill and a throwing physics op as structured " +
+    "failures (never throws; 3/3 entities authored); (2) createWorkerHandshake settles on {type:error} (no hang), " +
+    "on {type:ready}, and on fail() — idempotently; (3) partitionQuarantined skips a known-bad command on the " +
+    "second authoring pass, mapping kept commands back to their original indices.",
 );

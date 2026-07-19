@@ -200,6 +200,15 @@ export class NavmeshManager {
   /** Monotonic invalidation revision for base-grid rebuilds and effective portal changes. */
   getRevision(): number { return this.navRevision; }
 
+  /** Transaction-only seam used after a chain undo has restored portal contents.
+   *  SkillRegistry refuses allocator/manager rewind when head chains overlapped,
+   *  so this cannot erase a concurrent navigation mutation. */
+  restoreRevisionAfterRollback(revision: number): void {
+    if (!Number.isSafeInteger(revision) || revision < 0 || revision > this.navRevision)
+      throw new Error(`navmesh: invalid rollback revision ${revision}`);
+    this.navRevision = revision;
+  }
+
   registerPortal(id: string, bounds: AABB2D, open = true): boolean {
     if (id.trim().length === 0 || this.portals.has(id) || !this.validBounds(bounds)) return false;
     const portal: NavPortalRecord = { id, bounds: { ...bounds }, open, cells: this.portalCells(bounds) };

@@ -28,7 +28,7 @@
 //                         dist-alpha/ — the same relative shape as the repo.
 //   vault-template/       a starter design vault mirroring eastern-watch/design.
 //   start.sh              editor_host (LIMINA_EDITOR_PORT, default 8787; token
-//                         LIMINA_EDITOR_TOKEN, default random hex printed loudly)
+//                         LIMINA_EDITOR_TOKEN, default OS-random private handoff)
 //                         + the static editor server (LIMINA_STATIC_PORT, 5173).
 //   start-design.sh       the map tool on a vault (default vault-template/, port 4321).
 //   build-world.sh        compiles the drawn map + builds the world into the live editor.
@@ -224,17 +224,28 @@ writeFileSync(join(OUT, "start.sh"), `#!/usr/bin/env bash
 # static editor page. Ports are configurable:
 #   LIMINA_EDITOR_PORT   ws host port      (default 8787)
 #   LIMINA_STATIC_PORT   editor page port  (default 5173)
-#   LIMINA_EDITOR_TOKEN  auth token        (default: random hex, printed below)
+#   LIMINA_EDITOR_TOKEN  auth token        (default: OS-random private handoff)
 # NOTE: the host only accepts BROWSER connections from the http://localhost:5173
 # origin; on a non-default static port the page loads but the live viewport's
 # websocket is refused (native/tool clients with the token are unaffected).
 set -euo pipefail
 ROOT="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+umask 077
 export LIMINA_EDITOR_PORT="\${LIMINA_EDITOR_PORT:-8787}"
 STATIC_PORT="\${LIMINA_STATIC_PORT:-5173}"
 if [ -z "\${LIMINA_EDITOR_TOKEN:-}" ]; then
-  export LIMINA_EDITOR_TOKEN="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \\n')"
+  export LIMINA_EDITOR_TOKEN="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \\n')"
 fi
+if [[ ! "$LIMINA_EDITOR_TOKEN" =~ ^[A-Za-z0-9_-]{32,128}$ ]]; then
+  echo "LIMINA_EDITOR_TOKEN must be 32-128 URL-safe characters" >&2
+  exit 2
+fi
+CAPABILITY_DIR="$ROOT/.limina/editor-runtime"
+CAPABILITY_FILE="$CAPABILITY_DIR/editor-capability.json"
+mkdir -p "$CAPABILITY_DIR" "$ROOT/traces"
+chmod 700 "$ROOT/.limina" "$CAPABILITY_DIR" "$ROOT/traces"
+node -e 'const fs=require("node:fs"); const [path,url,token]=process.argv.slice(1); fs.writeFileSync(path,JSON.stringify({schema:"limina.editor-capability/v1",editorUrl:url,token},null,2)+"\\n",{mode:0o600}); fs.chmodSync(path,0o600)' \
+  "$CAPABILITY_FILE" "ws://localhost:$LIMINA_EDITOR_PORT/" "$LIMINA_EDITOR_TOKEN"
 
 echo ""
 echo "════════════════════════════════════════════════════════════"
@@ -242,8 +253,7 @@ echo "  limina editor"
 echo "    editor page   http://localhost:\${STATIC_PORT}/"
 echo "    host (ws)     ws://localhost:\${LIMINA_EDITOR_PORT}/"
 echo ""
-echo "    TOKEN: \${LIMINA_EDITOR_TOKEN}"
-echo "    (paste this into the editor page when it asks)"
+echo "    capability    \${CAPABILITY_FILE} (private, mode 0600)"
 echo "════════════════════════════════════════════════════════════"
 echo ""
 
@@ -291,7 +301,7 @@ writeFileSync(join(OUT, "QUICKSTART.md"), `# limina alpha — quickstart
 
 Needs: Node 22+, a WebGPU/WebGL browser. \`bin/limina\` is a **linux x86_64** build — other platforms must build the host from source.
 
-1. \`./start.sh\` — boots the world host + the editor page. **Copy the TOKEN it prints.**
+1. \`./start.sh\` — boots the world host + editor page and reports a private capability file.
 2. Open **http://localhost:5173/** and paste the token — the editor connects (empty world).
 3. \`./start-design.sh\` (second terminal) — opens your design vault's map tool at **http://localhost:4321/**.
 4. Draw your world on the map: an island **outline**, biome areas, and drag the location pins (vault-template starts you with a hall + homes).

@@ -108,6 +108,9 @@ export interface EngineOps {
   op_write_trace(name: string, content: string): void;
   op_append_trace(name: string, content: string): void;
   op_read_trace(name: string): string;
+  /** Native bounded durable-log suffix read. Optional so browser/player hosts
+   *  that do not offer append-backed authoring remain source-compatible. */
+  op_read_trace_delta?(name: string, offset: number, maxBytes: number): string;
   // untrusted-code isolation (limina-sandbox QuickJS host)
   op_sandbox_create(memLimitBytes: number, maxStackBytes: number, readCapsJson: string): number;
   op_sandbox_eval(handle: number, code: string, perceptionJson: string, deadlineMs: number): string;
@@ -135,6 +138,21 @@ export interface EngineOps {
 }
 declare const Deno: { core: { ops: EngineOps } } | undefined;
 
+/** Runtime capabilities that cannot be inferred from the shape of EngineOps.
+ * Browser realms deliberately install callable no-op placeholders for ops they
+ * cannot implement, so function presence is not an honest capability probe. */
+export interface EngineCapabilities {
+  readonly ecsSpatialQueryBatch: boolean;
+}
+
+const NO_ENGINE_CAPABILITIES: Readonly<EngineCapabilities> = Object.freeze({
+  ecsSpatialQueryBatch: false,
+});
+
+const NATIVE_ENGINE_CAPABILITIES: Readonly<EngineCapabilities> = Object.freeze({
+  ecsSpatialQueryBatch: true,
+});
+
 // ---- Host-capabilities boundary ------------------------------------------
 // The native host exposes its ops as `Deno.core.ops`; bind to them lazily and
 // ONLY when the global is present, so importing this module with no `Deno`
@@ -150,11 +168,24 @@ export let ops: EngineOps =
     ? Deno.core.ops
     : (undefined as unknown as EngineOps);
 
+/** Capabilities for the currently installed op host. Kept as a live binding for
+ * the same reason as `ops`: browser/test hosts may replace the host at runtime. */
+export let engineCapabilities: Readonly<EngineCapabilities> =
+  typeof Deno !== "undefined" && Deno?.core?.ops
+    ? NATIVE_ENGINE_CAPABILITIES
+    : NO_ENGINE_CAPABILITIES;
+
 /** Inject the host capability surface (a browser/wasm host, or a test harness).
  *  Native runs auto-bind to `Deno.core.ops` at import, so this is only needed
  *  off the native host. Call it before any op is used. */
-export function installOps(host: EngineOps): void {
+export function installOps(
+  host: EngineOps,
+  capabilities: Partial<EngineCapabilities> = NO_ENGINE_CAPABILITIES,
+): void {
   ops = host;
+  engineCapabilities = Object.freeze({
+    ecsSpatialQueryBatch: capabilities.ecsSpatialQueryBatch === true,
+  });
 }
 
 // Capability sub-surfaces a non-native host must implement — explicit subsets of

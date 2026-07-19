@@ -3,7 +3,7 @@
 // frame path and enqueues validated tool calls when it resolves.
 
 import { Position } from "../ecs/world.ts";
-import { ops } from "../engine.ts";
+import { engineCapabilities, ops } from "../engine.ts";
 import type { InvokeBase, SkillRegistry, WorldContext } from "../skills/registry.ts";
 import type { Tracer } from "../observability/event.ts";
 import { agentGrants } from "./agent.ts";
@@ -42,6 +42,47 @@ interface BatchedNearby {
   nearby: PerceivedEntity[];
 }
 
+/** Agent prompts and action policies consume nearest context, not an unbounded
+ * world dump. This bound keeps the native output at O(due agents) even when a
+ * huge radius covers the whole world. Both native and JS paths apply the same
+ * nearest-first truncation. */
+export const MAX_PERCEPTION_ENTITIES = 256;
+
+interface PerceptionBatchScratch {
+  entityVersion: number;
+  orderedCount: number;
+  orderedEids: Uint32Array;
+  reverseByEid: Array<string | undefined>;
+  queries: Float64Array;
+  out: Uint32Array;
+}
+
+const perceptionScratchByWorld = new WeakMap<WorldContext, PerceptionBatchScratch>();
+
+function capacityAtLeast(current: number, required: number): number {
+  let capacity = Math.max(16, current);
+  while (capacity < required) capacity *= 2;
+  return capacity;
+}
+
+function perceptionScratch(world: WorldContext, queryValues: number, outputValues: number): PerceptionBatchScratch {
+  let scratch = perceptionScratchByWorld.get(world);
+  if (scratch === undefined) {
+    scratch = {
+      entityVersion: -1,
+      orderedCount: 0,
+      orderedEids: new Uint32Array(16),
+      reverseByEid: [],
+      queries: new Float64Array(capacityAtLeast(0, queryValues)),
+      out: new Uint32Array(capacityAtLeast(0, outputValues)),
+    };
+    perceptionScratchByWorld.set(world, scratch);
+  }
+  if (scratch.queries.length < queryValues) scratch.queries = new Float64Array(capacityAtLeast(scratch.queries.length, queryValues));
+  if (scratch.out.length < outputValues) scratch.out = new Uint32Array(capacityAtLeast(scratch.out.length, outputValues));
+  return scratch;
+}
+
 /** Build one agent's perception. `batched` (when supplied by the native batch)
  *  carries the precomputed self position + nearby list; otherwise this falls back
  *  to the per-agent JS grid query (the determinism oracle / agents with no
@@ -66,7 +107,8 @@ function buildPerception(
       radius: selfPos === undefined ? undefined : agent.perceptionRadius,
       excludeEntity: agent.entityId,
       sortBy: "distance",
-    }).entities.map((entity) => ({ id: entity.entity, position: entity.position, distance: entity.distance }));
+    }).entities.slice(0, MAX_PERCEPTION_ENTITIES)
+      .map((entity) => ({ id: entity.entity, position: entity.position, distance: entity.distance }));
   }
   const recentEvents = tracer.trace(agent.id).slice(-5).map((e) => ({ type: e.type }));
   return { selfId: agent.id, selfEntity: agent.entityId, position: selfPos, nearby, recentEvents, tick };
@@ -85,7 +127,11 @@ function batchPerception(
   tick: number,
 ): Map<AgentRecord, BatchedNearby> | undefined {
   const spatial = world.spatial;
-  if (spatial === undefined) return undefined;
+  // Browser and worker hosts install a callable no-op for the native batch op so
+  // EngineOps remains structurally complete. Function presence therefore cannot
+  // distinguish "zero hits" from "unsupported". The explicit host capability
+  // makes the entire sweep fall back to the JS oracle on unsupported realms.
+  if (spatial === undefined || !engineCapabilities.ecsSpatialQueryBatch) return undefined;
   const targets: { agent: AgentRecord; eid: number; selfPos: [number, number, number] }[] = [];
   for (const agent of all) {
     if (!dueForDecision(agent, tick) || agent.inFlight) continue;
@@ -98,24 +144,28 @@ function batchPerception(
 
   // orderedEids[order] = eid + a reverse eid->ent_ map, built in world.entities.ids()
   // order so the op's `order` tiebreak matches the oracle's compareRecordOrder.
+  const entityVersion = world.entities.version;
   const ids = world.entities.ids();
-  const orderedEids = new Uint32Array(ids.length);
-  const reverse = new Map<number, string>();
-  let n = 0;
-  for (const id of ids) {
-    const entry = world.entities.resolve(id);
-    if (entry === undefined) continue;
-    orderedEids[n++] = entry.eid;
-    reverse.set(entry.eid, id);
-  }
-  const ordered = n === ids.length ? orderedEids : orderedEids.subarray(0, n);
-
-  // maxHits = active-entity count: a query can match at most every entity, so it
-  // can never truncate (count <= n). The per-query guard still drops any over-cap
-  // result to the JS fallback, keeping correctness if that invariant ever changes.
-  const maxHits = n;
+  const maxHits = Math.min(ids.length, MAX_PERCEPTION_ENTITIES);
   const stride = 1 + maxHits;
-  const queries = new Float64Array(targets.length * 5);
+  const scratch = perceptionScratch(world, targets.length * 5, targets.length * stride);
+  if (scratch.entityVersion !== entityVersion) {
+    if (scratch.orderedEids.length < ids.length) {
+      scratch.orderedEids = new Uint32Array(capacityAtLeast(scratch.orderedEids.length, ids.length));
+    }
+    scratch.reverseByEid.length = 0;
+    let n = 0;
+    for (const id of ids) {
+      const entry = world.entities.resolve(id);
+      if (entry === undefined) continue;
+      scratch.orderedEids[n++] = entry.eid;
+      scratch.reverseByEid[entry.eid] = id;
+    }
+    scratch.orderedCount = n;
+    scratch.entityVersion = entityVersion;
+  }
+  const ordered = scratch.orderedEids.subarray(0, scratch.orderedCount);
+  const queries = scratch.queries.subarray(0, targets.length * 5);
   for (let q = 0; q < targets.length; q++) {
     const t = targets[q];
     queries[q * 5] = t.selfPos[0];
@@ -124,14 +174,13 @@ function batchPerception(
     queries[q * 5 + 3] = t.agent.perceptionRadius;
     queries[q * 5 + 4] = t.eid; // exclude self
   }
-  const out = new Uint32Array(targets.length * stride);
+  const out = scratch.out.subarray(0, targets.length * stride);
   ops.op_ecs_spatial_query_batch(Position.x, Position.y, Position.z, ordered, spatial.cellSize, queries, maxHits, out);
 
   const result = new Map<AgentRecord, BatchedNearby>();
   for (let q = 0; q < targets.length; q++) {
     const base = q * stride;
-    const count = out[base];
-    if (count > maxHits) continue; // truncated -> leave this agent for the JS fallback
+    const count = Math.min(out[base], maxHits);
     const selfPos = targets[q].selfPos;
     const nearby: PerceivedEntity[] = [];
     for (let i = 0; i < count; i++) {
@@ -142,7 +191,8 @@ function batchPerception(
       const dx = hx - selfPos[0];
       const dy = hy - selfPos[1];
       const dz = hz - selfPos[2];
-      nearby.push({ id: reverse.get(eid)!, position: [hx, hy, hz], distance: Math.sqrt(dx * dx + dy * dy + dz * dz) });
+      const id = scratch.reverseByEid[eid];
+      if (id !== undefined) nearby.push({ id, position: [hx, hy, hz], distance: Math.sqrt(dx * dx + dy * dy + dz * dz) });
     }
     result.set(targets[q].agent, { selfPos, nearby });
   }

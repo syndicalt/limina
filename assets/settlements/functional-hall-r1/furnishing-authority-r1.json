@@ -1,0 +1,157 @@
+{
+  "schema": "limina.functional-settlement-furnishing-authority/v1",
+  "authorityId": "furnishing/settlement/functional-hall-r1",
+  "revision": 1,
+  "release": {
+    "path": "assets/settlements/functional-hall-r1/release.json",
+    "sha256": "sha256:6af4b3cf25a38a79af60d9516ed7b7eb1808ea7fa5277e12bb586a71f379c636",
+    "releaseId": "release/settlement/functional-hall-r1",
+    "settlementId": "settlement/functional-hall-r1",
+    "closureHash": "sha256:e6cb4277226c55b8ae66d70f4768ea06bc3eba22d3bcb3e16fc23a424fa8220a"
+  },
+  "building": {
+    "catalogEntryId": "building/functional-hall-house-fb4",
+    "contractHash": "sha256:4e486b2083ca4b3b374d3d5c4450f403297de30d18420e7bda8ef7a732d16614",
+    "semanticFingerprint": "sha256:0a5c4a000aede91a661f642570a3a42f7818309f953040a6dd9b95dac5bcf5ca"
+  },
+  "visualPolicy": {
+    "mode": "semantic-only-preserve-approved-building-pixels",
+    "activation": "dormant-authoring-sidecar",
+    "runtimeVisual": false,
+    "runtimeCollision": false,
+    "approvedBuildingAssetUnchanged": true,
+    "visualPromotionRequiresFreshEngineHitl": true
+  },
+  "library": [
+    {
+      "libraryId": "furniture/dining-chair-v1/r1",
+      "role": "dining-chair",
+      "furnitureId": "furniture/dining-chair/v1",
+      "contractHash": "sha256:97b5182631b29f1d5c85966c9656a8b96d00d26f98d5267f79ec4442fb2e4a13",
+      "asset": {
+        "path": "assets/buildings/authoring/furniture/dining-chair-v1-r4/dining-chair-v1-r4.glb",
+        "sha256": "sha256:586edc4ee2d8d088e81b015eb9412d142602e3c285e3df0b6662a5d9e0e5dfda",
+        "bytes": 2122356
+      },
+      "approvalArtifact": {
+        "path": "assets/buildings/authoring/furniture/dining-chair-v1-r4/approved-artifact.json",
+        "sha256": "sha256:7a658b4431f3560405248cd0508cbd125f3cd25a661b522fa1715f97179fd0d6"
+      },
+      "approvalDecision": {
+        "path": "assets/buildings/authoring/furniture/dining-chair-v1-r4/review-decision-approve.json",
+        "sha256": "sha256:3d6e55bd73473d82861148db56ffa3e529f3cd9cc7c9e12dd3409441f325bc7e"
+      }
+    },
+    {
+      "libraryId": "furniture/dining-table-v1/r1",
+      "role": "dining-table",
+      "furnitureId": "furniture/dining-table/v1",
+      "contractHash": "sha256:c15e5f2ae3ca30e3dd95447eddd7d986fb7b48fb0822be4e368567541bb2f6ec",
+      "asset": {
+        "path": "assets/buildings/authoring/furniture/dining-table-v1/dining-table-v1.glb",
+        "sha256": "sha256:f42fcdc3a5981e2d29e104ced8d47a4b9c417b59d8fec82efdce610b82913890",
+        "bytes": 2106832
+      },
+      "approvalArtifact": {
+        "path": "assets/buildings/authoring/furniture/dining-table-v1/approved-artifact.json",
+        "sha256": "sha256:2d616f2d70ab75fb3689317f6aa28756682e76c36242372387e53f3ac7ae80c7"
+      },
+      "approvalDecision": {
+        "path": "assets/buildings/authoring/furniture/dining-table-v1/review-decision-approve.json",
+        "sha256": "sha256:9cc7f8f3106aa376d6ee74702b47ca228483653c2e3695b293bc61d25090f5fb"
+      }
+    },
+    {
+      "libraryId": "furniture/hearth-settle-v3/r1",
+      "role": "hearth-settle",
+      "furnitureId": "furniture/hearth-settle/v3",
+      "contractHash": "sha256:bd5bb289eb618539dfe36008a448db07aa620ee4d3417968b7f25251d9d69466",
+      "asset": {
+        "path": "assets/buildings/authoring/furniture/hearth-settle-v3-r6/hearth-settle-v3-r6.glb",
+        "sha256": "sha256:474086ea4c86217a65e062241f7a0a5463898d4243a68f2c1a4f9b38f8b5e6ca",
+        "bytes": 2194300
+      },
+      "approvalArtifact": {
+        "path": "assets/buildings/authoring/furniture/hearth-settle-v3-r6/approved-artifact.json",
+        "sha256": "sha256:23cf8c2eb3d45edd99973facb03aeb559b1a3fdb89ecd9b1f8754b57da6f4fae"
+      },
+      "approvalDecision": {
+        "path": "assets/buildings/authoring/furniture/hearth-settle-v3-r6/review-decision-approve.json",
+        "sha256": "sha256:89c41cd864a4d8cb23129567969d3571fc49b880b1c15d08b8cacb64a50141db"
+      }
+    },
+    {
+      "libraryId": "furniture/service-storage-v1/r1",
+      "role": "service-storage",
+      "furnitureId": "furniture/service-storage/v1",
+      "contractHash": "sha256:ffbec5593d2b1c577a985504397682e4c2174972fa15b16a0ecac2a05da3629e",
+      "asset": {
+        "path": "assets/buildings/authoring/furniture/service-storage-v1-r1/service-storage-v1-r1.glb",
+        "sha256": "sha256:be8864000497891c19ef455e42734c946fdb7174a601f59714d0759ea7447a89",
+        "bytes": 2139068
+      },
+      "approvalArtifact": {
+        "path": "assets/buildings/authoring/furniture/service-storage-v1-r1/approved-artifact.json",
+        "sha256": "sha256:5b1e4ea1fc7e12f0c5cab52e43b7a9032c3b758109cea84ff894834e596e57f3"
+      },
+      "approvalDecision": {
+        "path": "assets/buildings/authoring/furniture/service-storage-v1-r1/review-decision-approve.json",
+        "sha256": "sha256:8d5040d306f42dbb8df859f2fd9d57e66935f943f13b12fb50918bbfbde1e6fa"
+      }
+    }
+  ],
+  "sockets": [
+    { "socketId": "socket/dining/chair-east", "roomId": "room/space/ground-hall", "position": [-0.45, 0, -1], "yawRadians": 1.5707963267948966, "allowedRoles": ["dining-chair"] },
+    { "socketId": "socket/dining/chair-north", "roomId": "room/space/ground-hall", "position": [-1.5, 0, 0], "yawRadians": 0, "allowedRoles": ["dining-chair"] },
+    { "socketId": "socket/dining/chair-south", "roomId": "room/space/ground-hall", "position": [-1.5, 0, -2], "yawRadians": 3.141592653589793, "allowedRoles": ["dining-chair"] },
+    { "socketId": "socket/dining/chair-west", "roomId": "room/space/ground-hall", "position": [-2.55, 0, -1], "yawRadians": -1.5707963267948966, "allowedRoles": ["dining-chair"] },
+    { "socketId": "socket/dining/table", "roomId": "room/space/ground-hall", "position": [-1.5, 0, -1], "yawRadians": 0, "allowedRoles": ["dining-table"] },
+    { "socketId": "socket/hearth/settle", "roomId": "room/space/ground-hall", "position": [0.581818181818182, 0, 1.5], "yawRadians": 3.141592653589793, "allowedRoles": ["hearth-settle"] },
+    { "socketId": "socket/service/storage", "roomId": "room/space/service-pantry", "position": [-2.55, 0, -5.9], "yawRadians": 0, "allowedRoles": ["service-storage"] }
+  ],
+  "variants": [
+    {
+      "variantId": "furnishing/balanced-hall",
+      "bindings": [
+        { "instanceId": "instance/chair-north", "socketId": "socket/dining/chair-north", "libraryId": "furniture/dining-chair-v1/r1" },
+        { "instanceId": "instance/chair-south", "socketId": "socket/dining/chair-south", "libraryId": "furniture/dining-chair-v1/r1" },
+        { "instanceId": "instance/hearth-settle", "socketId": "socket/hearth/settle", "libraryId": "furniture/hearth-settle-v3/r1" },
+        { "instanceId": "instance/service-storage", "socketId": "socket/service/storage", "libraryId": "furniture/service-storage-v1/r1" },
+        { "instanceId": "instance/table", "socketId": "socket/dining/table", "libraryId": "furniture/dining-table-v1/r1" }
+      ]
+    },
+    {
+      "variantId": "furnishing/dining-service",
+      "bindings": [
+        { "instanceId": "instance/chair-east", "socketId": "socket/dining/chair-east", "libraryId": "furniture/dining-chair-v1/r1" },
+        { "instanceId": "instance/chair-north", "socketId": "socket/dining/chair-north", "libraryId": "furniture/dining-chair-v1/r1" },
+        { "instanceId": "instance/chair-south", "socketId": "socket/dining/chair-south", "libraryId": "furniture/dining-chair-v1/r1" },
+        { "instanceId": "instance/chair-west", "socketId": "socket/dining/chair-west", "libraryId": "furniture/dining-chair-v1/r1" },
+        { "instanceId": "instance/service-storage", "socketId": "socket/service/storage", "libraryId": "furniture/service-storage-v1/r1" },
+        { "instanceId": "instance/table", "socketId": "socket/dining/table", "libraryId": "furniture/dining-table-v1/r1" }
+      ]
+    },
+    {
+      "variantId": "furnishing/hearth-social",
+      "bindings": [
+        { "instanceId": "instance/hearth-settle", "socketId": "socket/hearth/settle", "libraryId": "furniture/hearth-settle-v3/r1" },
+        { "instanceId": "instance/service-storage", "socketId": "socket/service/storage", "libraryId": "furniture/service-storage-v1/r1" }
+      ]
+    }
+  ],
+  "assignment": {
+    "algorithm": "sha256-canonical-modulo-v1",
+    "seed": "functional-hall-r1/8",
+    "placements": [
+      { "placementId": "placement/5a46b5499fc1207d8fd403592d265bba", "variantId": "furnishing/hearth-social" },
+      { "placementId": "placement/6ac96398468d8f592372790c7823c252", "variantId": "furnishing/balanced-hall" },
+      { "placementId": "placement/914945f4acc37c1446ce1ea437af8474", "variantId": "furnishing/dining-service" }
+    ]
+  },
+  "limits": {
+    "maximumInstancesPerBuilding": 6,
+    "maximumColliderEntitiesPerBuilding": 80,
+    "maximumSocketCountPerBuilding": 12
+  },
+  "closureHash": "sha256:4a7c2abac628db794ab4357871642107e59d72220f8ad1974db821bd9dd9c917"
+}

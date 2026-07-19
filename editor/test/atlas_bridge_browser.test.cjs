@@ -22,11 +22,10 @@ function fail(message) { console.error("FAIL: " + message); process.exit(1); }
     sessionId: "atlas-bridge-browser-uat",
     profile: "builder.readWrite",
   }));
-  const before = await authority.callTool("authoring.sourceSnapshot", {});
   // --enable-unsafe-swiftshader: chromium 1228+ dropped the automatic software-GL
   // fallback, and the Play leg below needs a (software) renderer in headless. This
   // gate judges DOM/layout state, never pixels — same contract as play_workflow.
-  const browser = await loaded.chromium.launch({ executablePath: CHROME, args: ["--no-sandbox", "--disable-dev-shm-usage", "--enable-unsafe-swiftshader"] });
+  const browser = await loaded.chromium.launch({ executablePath: CHROME, args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--enable-unsafe-swiftshader"] });
   const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
   const page = await context.newPage();
   const pageErrors = [];
@@ -38,6 +37,20 @@ function fail(message) { console.error("FAIL: " + message); process.exit(1); }
     failedRequests.push(`${request.method()} ${request.url()}: ${error}`);
   });
   try {
+    const fixture = await authority.callTool("scene.createEntity", {
+      shape: "box",
+      size: 2,
+      position: [0, 1, 0],
+      color: 0x37b26c,
+      dynamic: false,
+      static: false,
+      tags: ["atlas-bridge-uat-subject"],
+    });
+    if (typeof fixture.entity !== "string" || fixture.entity.length === 0) {
+      throw new Error(`scene.createEntity returned an invalid fixture: ${JSON.stringify(fixture)}`);
+    }
+    const fixtureEntity = fixture.entity;
+    const before = await authority.callTool("authoring.sourceSnapshot", {});
     const url = `${BASE_URL}/?server=${encodeURIComponent(EDITOR_URL)}`;
     const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 10_000 });
     if (!response?.ok()) fail(`editor HTTP load failed: ${response?.status()}`);
@@ -134,7 +147,18 @@ function fail(message) { console.error("FAIL: " + message); process.exit(1); }
     if (!restoredWidth || Math.abs(restoredWidth - dockWidth) > 2) fail(`Atlas restore lost dock width: ${restoredWidth} vs ${dockWidth}`);
 
     await page.locator("#viewport-play").click();
-    await page.locator("#viewport-play-state").filter({ hasText: "Playing" }).waitFor({ timeout: 30_000 });
+    try {
+      await page.locator("#viewport-play-state").filter({ hasText: "Playing" }).waitFor({ timeout: 30_000 });
+    } catch (error) {
+      const diagnostic = await page.evaluate(() => ({
+        phase: document.getElementById("viewport-play-state")?.textContent,
+        source: document.getElementById("viewport-play-source")?.textContent,
+        viewport: document.getElementById("viewport-status")?.textContent,
+        progress: document.body.dataset.playProgress,
+        console: [...document.querySelectorAll("#log .log-msg")].slice(0, 6).map((row) => row.textContent),
+      }));
+      throw new Error(`Play did not activate in the aggregate Atlas harness: ${JSON.stringify(diagnostic)}`, { cause: error });
+    }
     const playLayout = await page.evaluate(() => {
       const play = document.querySelector(".editor-play-canvas");
       const atlas = document.getElementById("viewport-atlas");
@@ -168,23 +192,19 @@ function fail(message) { console.error("FAIL: " + message); process.exit(1); }
     await page.locator("#viewport-stop").click();
     await page.locator("#viewport-play-state").filter({ hasText: "Edit" }).waitFor({ timeout: 30_000 });
 
-    const entityRows = page.locator(".outliner-row[data-entity-id]");
-    await entityRows.first().waitFor({ state: "visible", timeout: 20_000 });
-    let revealed = false;
-    for (let index = 0; index < Math.min(await entityRows.count(), 24); index++) {
-      await entityRows.nth(index).click();
-      await page.waitForTimeout(100);
-      if (await atlasFrame.locator(".bridge-reveal").count() > 0) { revealed = true; break; }
-    }
-    if (!revealed) fail(`no visible outliner entity resolved into the live viewport; Atlas status=${await page.locator("#viewport-atlas-status").textContent()}`);
+    const fixtureRow = page.locator(`.outliner-row[data-entity-id="${fixtureEntity}"]`);
+    await fixtureRow.waitFor({ state: "visible", timeout: 20_000 });
+    await fixtureRow.click();
+    await page.locator("#viewport-atlas-status").filter({ hasText: `revealed Selection ${fixtureEntity}` }).waitFor({ timeout: 5_000 });
+    await atlasFrame.locator(".bridge-reveal").waitFor({ state: "visible", timeout: 5_000 });
 
     const map = atlasFrame.locator("#map-svg");
     const box = await map.boundingBox();
     if (!box || box.width < 300 || box.height < 300) fail(`Atlas map is not usable: ${JSON.stringify(box)}`);
     await map.dblclick({ position: { x: box.width * 0.52, y: box.height * 0.52 } });
-    await page.locator("#viewport-atlas-status").filter({ hasText: /^focused / }).waitFor({ timeout: 45_000 });
+    await page.locator("#viewport-atlas-status").filter({ hasText: /^focused Map coordinate$/ }).waitFor({ timeout: 45_000 });
     await page.locator("#viewport-navigation-views-toggle").click();
-    await page.locator("#viewport-navigation-recents").filter({ hasText: "Map coordinate" }).waitFor({ timeout: 5_000 });
+    await page.locator("#viewport-navigation-recents [data-navigation-entry]").filter({ hasText: /^Map coordinate$/ }).waitFor({ timeout: 5_000 });
 
     const after = await authority.callTool("authoring.sourceSnapshot", {});
     if (after.head.headHash !== before.head.headHash || after.head.revision !== before.head.revision) {
@@ -237,6 +257,8 @@ function fail(message) { console.error("FAIL: " + message); process.exit(1); }
     await page.screenshot({ path: artifactPath("atlas_bridge_mobile.png"), fullPage: true });
     if (pageErrors.length > 0) fail("browser errors: " + pageErrors.join(" | "));
     if (failedRequests.length > 0) fail("failed requests: " + failedRequests.join(" | "));
+    const cleanup = await authority.callTool("scene.destroyEntity", { entity: fixtureEntity });
+    if (cleanup.removed !== true) fail(`scene.destroyEntity did not remove fixture ${fixtureEntity}: ${JSON.stringify(cleanup)}`);
     console.log("atlas_bridge_browser.test OK: isolated dock, Edit/Play resize, maximize/restore, persistence, reverse reveal, exact focus, compact layouts, authority unchanged");
   } finally {
     authority.close();

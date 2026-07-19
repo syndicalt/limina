@@ -8,7 +8,7 @@
 //!   * host-owned resources held in `OpState`, fetched per call.
 
 use std::collections::HashMap;
-use std::io::{BufWriter, Read, Write};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -84,6 +84,8 @@ struct AssetRoot(std::path::PathBuf);
 
 const MAX_TRACE_CALL_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TRACE_FILE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_TRACE_DELTA_BYTES: u32 = 1024 * 1024;
+const TRACE_CURSOR_ANCHOR_BYTES: u64 = 4096;
 /// Cap on concurrently open trace file handles. Appends to more distinct trace
 /// names than this evict the least-recently-used writer (flushed, then closed);
 /// a later append to an evicted name transparently reopens it in append mode.
@@ -93,8 +95,62 @@ static TRACE_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 struct TraceWriter {
     writer: BufWriter<std::fs::File>,
     bytes: u64,
+    identity: String,
     /// Logical clock stamp of the most recent append (LRU eviction key).
     last_used: u64,
+}
+
+#[cfg(unix)]
+fn trace_file_identity(metadata: &std::fs::Metadata) -> String {
+    use std::os::unix::fs::MetadataExt;
+    format!("unix:{}:{}", metadata.dev(), metadata.ino())
+}
+
+#[cfg(windows)]
+fn trace_file_identity(metadata: &std::fs::Metadata) -> String {
+    use std::os::windows::fs::MetadataExt;
+    format!(
+        "windows:{:?}:{}",
+        metadata.volume_serial_number(),
+        metadata.file_index()
+    )
+}
+
+#[cfg(not(any(unix, windows)))]
+fn trace_file_identity(metadata: &std::fs::Metadata) -> String {
+    let created = metadata
+        .created()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("portable:{created}")
+}
+
+fn trace_modified_stamp(metadata: &std::fs::Metadata) -> String {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos().to_string())
+        .unwrap_or_default()
+}
+
+fn trace_cursor_anchor(file: &mut std::fs::File, offset: u64) -> Result<String, JsErrorBox> {
+    let start = offset.saturating_sub(TRACE_CURSOR_ANCHOR_BYTES);
+    let len = (offset - start) as usize;
+    let mut bytes = vec![0_u8; len];
+    file.seek(SeekFrom::Start(start))
+        .map_err(JsErrorBox::from_err)?;
+    file.read_exact(&mut bytes).map_err(JsErrorBox::from_err)?;
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    let digest = Sha256::digest(&bytes);
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    Ok(hex)
 }
 
 #[derive(Default)]
@@ -236,6 +292,30 @@ fn append_trace_at(
     let writers = state.borrow_mut::<TraceWriters>();
     writers.clock += 1;
     let now = writers.clock;
+    // Another process may append, truncate, or atomically replace this path
+    // while the host remains alive. Refresh the byte count from the path on
+    // every append, and discard a cached fd when it now names the old inode.
+    let reopen = if let Some(trace) = writers.writers.get_mut(&path) {
+        trace.writer.flush().map_err(JsErrorBox::from_err)?;
+        let open_metadata = trace
+            .writer
+            .get_ref()
+            .metadata()
+            .map_err(JsErrorBox::from_err)?;
+        let path_metadata = std::fs::metadata(&path).map_err(JsErrorBox::from_err)?;
+        let path_identity = trace_file_identity(&path_metadata);
+        if trace_file_identity(&open_metadata) != path_identity || trace.identity != path_identity {
+            true
+        } else {
+            trace.bytes = path_metadata.len();
+            false
+        }
+    } else {
+        false
+    };
+    if reopen {
+        writers.writers.remove(&path);
+    }
     if !writers.writers.contains_key(&path) {
         // Bound the open-handle map: evict the least-recently-used writer before
         // opening another. Every append already flushes, so eviction loses no
@@ -257,17 +337,23 @@ fn append_trace_at(
             .append(true)
             .open(&path)
             .map_err(JsErrorBox::from_err)?;
-        let bytes = file.metadata().map_err(JsErrorBox::from_err)?.len();
+        let metadata = file.metadata().map_err(JsErrorBox::from_err)?;
+        let bytes = metadata.len();
+        let identity = trace_file_identity(&metadata);
         writers.writers.insert(
             path.clone(),
             TraceWriter {
                 writer: BufWriter::new(file),
                 bytes,
+                identity,
                 last_used: now,
             },
         );
     }
-    let trace = writers.writers.get_mut(&path).expect("trace writer inserted");
+    let trace = writers
+        .writers
+        .get_mut(&path)
+        .expect("trace writer inserted");
     trace.last_used = now;
     let next_bytes = trace
         .bytes
@@ -310,6 +396,86 @@ pub fn op_read_trace(state: &mut OpState, #[string] name: String) -> Result<Stri
         return Err(JsErrorBox::generic("trace read exceeds size cap"));
     }
     Ok(content)
+}
+
+/// Read a bounded UTF-8 suffix plus file-generation metadata. Callers retain a
+/// verified byte cursor and compare `identity` + `cursorHash` before accepting
+/// the suffix. This makes long-lived trace polling O(new bytes), while still
+/// detecting truncation, atomic replacement, and mutation at the verified tail.
+fn read_trace_delta_at(path: &Path, offset: u32, max_bytes: u32) -> Result<String, JsErrorBox> {
+    if max_bytes > MAX_TRACE_DELTA_BYTES {
+        return Err(JsErrorBox::generic("trace delta exceeds per-call size cap"));
+    }
+    let mut file = std::fs::File::open(path).map_err(JsErrorBox::from_err)?;
+    let metadata = file.metadata().map_err(JsErrorBox::from_err)?;
+    let length = metadata.len();
+    if length > MAX_TRACE_FILE_BYTES {
+        return Err(JsErrorBox::generic(
+            "trace delta read exceeds file size cap",
+        ));
+    }
+    let start = u64::from(offset);
+    let cursor_at = start.min(length);
+    let cursor_hash = trace_cursor_anchor(&mut file, cursor_at)?;
+    let mut content = String::new();
+    let mut end = start;
+    if start <= length && max_bytes > 0 {
+        let wanted = u64::from(max_bytes).min(length - start) as usize;
+        let mut bytes = vec![0_u8; wanted];
+        file.seek(SeekFrom::Start(start))
+            .map_err(JsErrorBox::from_err)?;
+        file.read_exact(&mut bytes).map_err(JsErrorBox::from_err)?;
+        match std::str::from_utf8(&bytes) {
+            Ok(valid) => {
+                content.push_str(valid);
+                end += bytes.len() as u64;
+            }
+            Err(err) if err.error_len().is_none() => {
+                // The bounded read ended inside a multi-byte scalar. Return only
+                // the valid prefix; the next call resumes at that byte boundary.
+                let valid_len = err.valid_up_to();
+                if valid_len == 0 && wanted > 0 {
+                    return Err(JsErrorBox::generic(
+                        "trace delta chunk is too small for a UTF-8 scalar",
+                    ));
+                }
+                content.push_str(
+                    std::str::from_utf8(&bytes[..valid_len]).map_err(JsErrorBox::from_err)?,
+                );
+                end += valid_len as u64;
+            }
+            Err(_) => return Err(JsErrorBox::generic("trace is not valid UTF-8")),
+        }
+    }
+    let end_cursor_hash = trace_cursor_anchor(&mut file, end.min(length))?;
+    serde_json::to_string(&serde_json::json!({
+        "identity": trace_file_identity(&metadata),
+        "length": length,
+        "modifiedNs": trace_modified_stamp(&metadata),
+        "start": start,
+        "end": end,
+        "content": content,
+        "cursorHash": cursor_hash,
+        "endCursorHash": end_cursor_hash,
+    }))
+    .map_err(JsErrorBox::from_err)
+}
+
+#[op2]
+#[string]
+pub fn op_read_trace_delta(
+    state: &mut OpState,
+    #[string] name: String,
+    offset: u32,
+    max_bytes: u32,
+) -> Result<String, JsErrorBox> {
+    let path = trace_path(&name)?;
+    if let Some(writers) = state.try_borrow_mut::<TraceWriters>() {
+        if let Some(trace) = writers.writers.get_mut(&path) {
+            trace.writer.flush().map_err(JsErrorBox::from_err)?;
+        }
+    }
+    read_trace_delta_at(&path, offset, max_bytes)
 }
 
 /// Provider-agnostic HTTP POST (JSON). Async: returns a Promise resolved when the
@@ -718,11 +884,13 @@ fn sha256_hex(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write as _;
+
     use super::{
         append_trace_at, crypto_random_hex, is_http_post_host_allowed,
         is_http_post_target_ip_allowed, parse_http_post_headers, read_allowlisted_env,
-        read_asset_bytes, read_dotenv_value_in, sha256_hex, validate_http_post_url,
-        TraceWriters, MAX_OPEN_TRACE_WRITERS,
+        read_asset_bytes, read_dotenv_value_in, read_trace_delta_at, sha256_hex,
+        validate_http_post_url, TraceWriters, MAX_OPEN_TRACE_WRITERS,
     };
 
     /// A fresh, unique scratch directory under the OS temp dir. Canonicalizable
@@ -762,7 +930,9 @@ mod tests {
         let a = crypto_random_hex(16).unwrap();
         let b = crypto_random_hex(16).unwrap();
         assert_eq!(a.len(), 32);
-        assert!(a.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(a
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
         assert_ne!(a, b, "two 16-byte CSPRNG draws must not collide");
         assert!(crypto_random_hex(0).is_err());
         assert!(crypto_random_hex(4097).is_err());
@@ -892,6 +1062,91 @@ mod tests {
                 "evicted/live writer {i} lost bytes"
             );
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn trace_writer_refreshes_external_length_and_reopens_replaced_inode() {
+        let dir = temp_root("trace_external_writer");
+        let path = dir.join("trace.jsonl");
+        let mut state = deno_core::OpState::new(None);
+        append_trace_at(&mut state, path.clone(), "local-a\n").unwrap();
+
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"external-b\n")
+            .unwrap();
+        append_trace_at(&mut state, path.clone(), "local-c\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "local-a\nexternal-b\nlocal-c\n"
+        );
+
+        let replacement = dir.join("replacement");
+        std::fs::write(&replacement, "rotated-a\n").unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        append_trace_at(&mut state, path.clone(), "local-after-rotation\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "rotated-a\nlocal-after-rotation\n"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn trace_delta_reports_append_truncate_and_replace() {
+        let dir = temp_root("trace_delta");
+        let path = dir.join("trace.jsonl");
+        std::fs::write(&path, "one\n").unwrap();
+
+        let first: serde_json::Value =
+            serde_json::from_str(&read_trace_delta_at(&path, 0, 3).unwrap()).unwrap();
+        assert_eq!(first["content"], "one");
+        assert_eq!(first["start"], 0);
+        assert_eq!(first["end"], 3);
+        let identity = first["identity"].as_str().unwrap().to_string();
+        let end_anchor = first["endCursorHash"].as_str().unwrap().to_string();
+
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"two\n")
+            .unwrap();
+        let appended: serde_json::Value =
+            serde_json::from_str(&read_trace_delta_at(&path, 3, 1024).unwrap()).unwrap();
+        assert_eq!(appended["identity"], identity);
+        assert_eq!(appended["cursorHash"], end_anchor);
+        assert_eq!(appended["content"], "\ntwo\n");
+
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(2)
+            .unwrap();
+        let truncated: serde_json::Value =
+            serde_json::from_str(&read_trace_delta_at(&path, 8, 1024).unwrap()).unwrap();
+        assert_eq!(truncated["identity"], identity);
+        assert_eq!(truncated["length"], 2);
+
+        let replacement = dir.join("replacement");
+        std::fs::write(&replacement, "new\n").unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        let replaced: serde_json::Value =
+            serde_json::from_str(&read_trace_delta_at(&path, 0, 0).unwrap()).unwrap();
+        assert_ne!(replaced["identity"], identity);
+
+        std::fs::write(&path, "ab🙂\n").unwrap();
+        let unicode_prefix: serde_json::Value =
+            serde_json::from_str(&read_trace_delta_at(&path, 0, 3).unwrap()).unwrap();
+        assert_eq!(unicode_prefix["content"], "ab");
+        assert_eq!(unicode_prefix["end"], 2);
+        let unicode_suffix: serde_json::Value =
+            serde_json::from_str(&read_trace_delta_at(&path, 2, 5).unwrap()).unwrap();
+        assert_eq!(unicode_suffix["content"], "🙂\n");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1106,6 +1361,7 @@ extension!(
         op_write_trace,
         op_append_trace,
         op_read_trace,
+        op_read_trace_delta,
     ],
     state = |state| {
         let root = std::env::var_os("LIMINA_ASSET_ROOT")

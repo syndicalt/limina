@@ -179,6 +179,8 @@ const TILES = (BOUNDS.maxTx - BOUNDS.minTx + 1) * (BOUNDS.maxTz - BOUNDS.minTz +
   assert((pop.instances as number) > 0, `world.populateBiome placed NO props (instances=${pop.instances}) — the populate path is broken`);
   const layers = pop.layers as { instances: number; mounted: number }[];
   assert(layers.length > 0 && layers.some((l) => l.mounted > 0), "populateBiome mounted no InstancedMeshes");
+  assert(pop.mounted === layers.reduce((sum, layer) => sum + layer.mounted, 0),
+    "populateBiome whole-population mounted total does not equal its layer sum");
 
   // GATED — 0 in water: flood the region OVER its peak so EVERY candidate is in water; the
   // waterGated mountains layers must then place ZERO. Falsifiable against the run above.

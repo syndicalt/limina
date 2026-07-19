@@ -32362,12 +32362,6 @@ try {
 /*! Bundled license information:
 
 three/build/three.core.js:
-  (**
-   * @license
-   * Copyright 2010-2026 Three.js Authors
-   * SPDX-License-Identifier: MIT
-   *)
-
 three/build/three.module.js:
   (**
    * @license

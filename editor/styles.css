@@ -164,7 +164,7 @@ body.atlas-workspace-maximized .viewport-compass, body.atlas-workspace-compact .
 }
 .viewport-navigation { position: relative; max-width: 100%; pointer-events: none; }
 .navigation-toolbar {
-  max-width: 100%; min-height: 32px; display: flex; align-items: center; gap: 5px; padding: 3px;
+  max-width: 100%; min-height: 32px; display: flex; align-items: center; gap: 5px; padding: 3px; flex-wrap: wrap;
   border: 1px solid var(--border); border-radius: 6px; background: rgba(14, 17, 22, .94);
   box-shadow: 0 6px 18px rgba(0, 0, 0, .28); pointer-events: auto;
 }

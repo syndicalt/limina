@@ -1,31 +1,26 @@
 import { createHash } from "node:crypto";
 import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { synthesizeTimberHallHouse } from "../../js/src/architecture/building-program-synthesizer.ts";
+import { synthesizeTimberHallHouseV3 } from "../../js/src/architecture/building-program-synthesizer-v3.ts";
+import { buildingCueProfileV2Hash, validateBuildingCueProfileV2 } from "../../js/src/architecture/building-cue-profile.ts";
+import { validateVisualDesignContract, visualDesignContractHash } from "../../js/src/architecture/visual-design-contract.ts";
 import { parseFunctionalBuildingContract } from "../../js/src/assets/functional-building-contract.ts";
 import { portableAssetContentHash } from "../../js/src/world/asset-content-hash.mjs";
+import { collectCaptureModuleClosure } from "../preview/capture-producer-closure.mjs";
 
 const ROOT = resolve(import.meta.dirname, "../..");
-const PROGRAM = "assets/buildings/programs/functional-hall-house-fb4-program-v1.json";
-const BUILD_SOURCE_AUTHORITIES = [
+const PROGRAM = "assets/buildings/programs/functional-hall-house-fb4-program-v3.json";
+const VISUAL_DESIGN = "art-direction/functional-hall-house-v4-v3-visual-design.json";
+const CUE_PROFILE = "assets/buildings/programs/functional-hall-house-fb4-cue-profile-v3.json";
+const BUILD_MODULE_ENTRIES = [
   "tools/architecture/build-fb4-multi-room-candidate.ts",
   "tools/architecture/build-building.ts",
   "tools/architecture/blender-toolchain.mjs",
+  "tools/asset/batch-architecture-building.mjs",
+] as const;
+const BUILD_NON_MODULE_AUTHORITIES = [
   "tools/blender/architecture-adapter.py",
   "tools/blender/validate-architecture-blend.py",
-  "tools/asset/batch-architecture-building.mjs",
-  "js/src/architecture/building-program.ts",
-  "js/src/architecture/building-program-synthesizer.ts",
-  "js/src/architecture/schema.ts",
-  "js/src/architecture/compiler.ts",
-  "js/src/architecture/blender-adapter.ts",
-  "js/src/architecture/staged-partition.ts",
-  "js/src/architecture/stages.ts",
-  "js/src/authoring/canonical.ts",
-  "js/src/world/sha256.mjs",
-  "js/src/world/asset-content-hash.mjs",
-  "js/src/assets/functional-building-contract.ts",
-  "js/src/assets/functional-building-visual-contract.ts",
 ] as const;
 const MATERIAL_PACKS = ["cottage-fieldstone", "cottage-white-plaster", "cottage-structural-oak", "cottage-worn-planks", "cottage-grey-roof", "cottage-medieval-brick"] as const;
 const raw = (bytes: Uint8Array) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
@@ -37,7 +32,12 @@ async function missing(path: string): Promise<void> {
 }
 
 const programBytes = await readFile(resolve(ROOT, PROGRAM));
-const synthesis = synthesizeTimberHallHouse(JSON.parse(programBytes.toString("utf8")));
+const visualDesignBytes=await readFile(resolve(ROOT,VISUAL_DESIGN)),visualDesign=validateVisualDesignContract(JSON.parse(visualDesignBytes.toString("utf8"))),visualDesignHash=visualDesignContractHash(visualDesign);
+const referenceAuthorityPaths:string[]=[];for(const reference of visualDesign.references){const bytes=await readFile(resolve(ROOT,reference.localPath));if(raw(bytes)!==reference.sha256)throw new Error(`FB-4 visual reference bytes drifted: ${reference.id}`);referenceAuthorityPaths.push(reference.localPath);}
+const cueProfileBytes=await readFile(resolve(ROOT,CUE_PROFILE)),cueProfile=validateBuildingCueProfileV2(JSON.parse(cueProfileBytes.toString("utf8")),visualDesign.cues.map((cue)=>cue.id)),cueProfileHash=buildingCueProfileV2Hash(cueProfile,visualDesign.cues.map((cue)=>cue.id));
+if(cueProfile.visualDesign.path!==VISUAL_DESIGN||cueProfile.visualDesign.sha256!==raw(visualDesignBytes)||cueProfile.visualDesign.contractHash!==visualDesignHash||cueProfile.program.path!==PROGRAM||cueProfile.program.sha256!==raw(programBytes))throw new Error("FB-4 V3 cue profile drifted from its exact visual design or program authority");
+const synthesis = synthesizeTimberHallHouseV3(JSON.parse(programBytes.toString("utf8")));
+if(cueProfile.program.programHash!==synthesis.programHash)throw new Error("FB-4 V3 cue profile program hash drifted");
 const selected = synthesis.candidates[0];
 if (!selected) throw new Error(`FB-4 synthesis produced no compiler-valid candidate:\n${JSON.stringify(synthesis.rejections, null, 2)}`);
 const { spec, compiled } = selected;
@@ -47,17 +47,18 @@ for (const pack of MATERIAL_PACKS) {
   materialAuthorityPaths.add(manifestPath);
   for (const record of Object.values(manifest.maps) as { assetId: string }[]) materialAuthorityPaths.add(`assets/${record.assetId}`);
 }
-const authorityPaths = [...BUILD_SOURCE_AUTHORITIES, ...materialAuthorityPaths].sort();
+const moduleClosure=await collectCaptureModuleClosure(ROOT,BUILD_MODULE_ENTRIES),authorityPaths = [...new Set([...moduleClosure.map(({path})=>path),...BUILD_NON_MODULE_AUTHORITIES,VISUAL_DESIGN,CUE_PROFILE,...referenceAuthorityPaths, ...materialAuthorityPaths])].sort();
 const buildAuthority = await Promise.all(authorityPaths.map(async (path) => {
   const bytes = await readFile(resolve(ROOT, path));
   return Object.freeze({ path, sha256: raw(bytes), bytes: bytes.byteLength });
 }));
 const buildClosure = createHash("sha256").update(raw(programBytes)).update(synthesis.programHash)
+  .update(raw(visualDesignBytes)).update(visualDesignHash).update(raw(cueProfileBytes)).update(cueProfileHash)
   .update(synthesis.rulebookHash).update(selected.manifest.decisionHash).update(compiled.specHash).update(compiled.irHash);
 for (const record of buildAuthority) buildClosure.update(record.path).update(record.sha256);
 const buildClosureHash = `sha256:${buildClosure.digest("hex")}`;
 const suffix = buildClosureHash.slice("sha256:".length, "sha256:".length + 12);
-const relativeRoot = `assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-${suffix}`;
+const relativeRoot = `assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-${suffix}`;
 const finalRoot = resolve(ROOT, relativeRoot);
 const stagingRoot = `${finalRoot}.staging-${process.pid}`;
 await missing(finalRoot);
@@ -78,7 +79,7 @@ const paths = {
 try {
   await writeFile(paths.spec, `${JSON.stringify(spec, null, 2)}\n`, { flag: "wx", mode: 0o600 });
   await writeFile(paths.synthesis, `${JSON.stringify({
-    schema: "limina.fb4-program-synthesis-evidence/v1",
+    schema: "limina.fb4-program-synthesis-evidence/v3",
     program: { path: PROGRAM, sha256: raw(programBytes) },
     evaluatedDecisionCount: synthesis.evaluatedDecisionCount,
     acceptedDecisionCount: synthesis.acceptedDecisionCount,
@@ -94,6 +95,7 @@ try {
     "--spec", paths.spec, "--out", paths.glb, "--lod-out", paths.lod,
     "--blend-out", paths.blend, "--handoff", paths.handoff,
     "--evidence", paths.evidence, "--stages-out", paths.stages,
+    "--logical-from", stagingRoot, "--logical-to", finalRoot,
   ], { cwd: ROOT, stdout: "pipe", stderr: "pipe" });
   if (run.exitCode !== 0) throw new Error(`FB-4 Blender build failed (${run.exitCode})\n${run.stdout}\n${run.stderr}`);
 
@@ -102,10 +104,10 @@ try {
     readFile(paths.handoff), readFile(paths.evidence),
   ]);
   const contract = parseFunctionalBuildingContract(glb);
-  if (contract.schema !== "limina.functional-building/v2" || contract.rooms.length !== 5
-    || contract.portals.length !== 4 || contract.verticalLinks.length !== 1
-    || contract.spawnAnchors.length !== 5 || contract.visibilityCells.length !== 5) {
-    throw new Error("FB-4 candidate lost strict multi-room semantic authority");
+  if (contract.schema !== "limina.functional-building/v2" || contract.rooms.length !== 6
+    || contract.portals.length !== 5 || contract.verticalLinks.length !== 1
+    || contract.spawnAnchors.length !== 6 || contract.visibilityCells.length !== 6) {
+    throw new Error("FB-4 V3 candidate lost strict functional service-bay semantic authority");
   }
   const records = [
     ["architectureProgramSynthesis", paths.synthesis, synthesisOut], ["architectureSpec", paths.spec, specOut], ["productionGlb", paths.glb, glb],
@@ -117,12 +119,15 @@ try {
     bytes: (bytes as Uint8Array).byteLength,
   }));
   const manifest = Object.freeze({
-    schema: "limina.fb4-multi-room-production-candidate/v2",
+    schema: "limina.fb4-multi-room-production-candidate/v3",
     status: "cpu-verified-human-pending",
     candidateId: `functional-hall-house/fb4/${suffix}`,
     programAuthority: Object.freeze({ path: PROGRAM, sha256: raw(programBytes), programHash: synthesis.programHash }),
+    visualDesign: Object.freeze({path:VISUAL_DESIGN,sha256:raw(visualDesignBytes),contractHash:visualDesignHash,status:visualDesign.status}),
+    cueProfile:Object.freeze({path:CUE_PROFILE,sha256:raw(cueProfileBytes),profileHash:cueProfileHash,cueIds:cueProfile.mappings.map((mapping)=>mapping.cueId)}),
     synthesis: Object.freeze({ rulebookHash: synthesis.rulebookHash, rank: selected.rank, decisionId: selected.decision.id,
-      decisionHash: selected.manifest.decisionHash, evidencePath: logical(paths.synthesis).replace(`.staging-${process.pid}`, "") }),
+      decisionHash: selected.manifest.decisionHash, compiledMassing: selected.manifest.compiledMassing, cueFacts: selected.manifest.cueFacts,
+      evidenceRequirements: selected.manifest.evidenceRequirements, evidencePath: logical(paths.synthesis).replace(`.staging-${process.pid}`, "") }),
     compiler: Object.freeze({ schema: compiled.schema, specHash: compiled.specHash, irHash: compiled.irHash }),
     buildAuthority: Object.freeze({ closureHash: buildClosureHash, files: Object.freeze(buildAuthority) }),
     functional: Object.freeze({ schema: contract.schema, buildingId: contract.buildingId, rooms: contract.roomIds,
@@ -132,6 +137,7 @@ try {
     nonEngineApprovalProhibited: true,
     visualApprovalClaimed: false,
     gpuCaptureAtBuild: false,
+    cpuProxyEvidenceAtBuild: false,
     files: records,
   });
   await writeFile(resolve(stagingRoot, "candidate-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx", mode: 0o600 });

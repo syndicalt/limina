@@ -247,6 +247,16 @@ export interface GrassFieldStreamOptions {
 interface StreamSource { readonly tile: TerrainTile; readonly options: Readonly<GrassFieldSourceOptions>; readonly bounds: GrassFieldBounds }
 interface CountedMount extends GrassFieldResidencyMount { readonly accepted: number }
 
+/** Resolve the package's density floor before either reservation or construction. Keeping this at
+ * the stream boundary makes the native and forceWebGL paths reserve the same canonical lattice;
+ * otherwise a sparse authored spacing can reserve a small CPU mount that construction correctly
+ * densifies and then transactionally rejects as an accounting mismatch. */
+function resolvedStreamSource(source: Readonly<GrassFieldSourceOptions>, visualPackage: GrassFieldVisualPackage,
+  quality: GrassFieldQualityTier, lod: GrassFieldLod): Readonly<GrassFieldSourceOptions> {
+  const packageSpacing = grassFieldInstanceSpacing(visualPackage, quality, lod);
+  return Object.freeze({ ...source, spacing: Math.min(source.spacing ?? packageSpacing, packageSpacing) });
+}
+
 class CpuMount implements CountedMount {
   private published = false;
   private disposed = false;
@@ -319,23 +329,28 @@ export class GrassFieldStreamManager {
       spacingMultipliers: multipliers,
       maxResidentSlots: GRASS_FIELD_MAX_RESIDENT_SLOTS,
       maxResidentCost: options.maxResidentBlades ?? this.profile.maxResidentBlades,
-      estimateSlots: (entry, _lod, spacingMultiplier) => this.native
-        ? nativeGrassFieldStreamSlots({ tile: entry.tile, source: entry.options, spacingMultiplier, requestedBounds: entry.bounds })
-        : countGrassFieldTerrainSlots(entry.tile,
-          positive(entry.options.spacing, 0.45, "grass field spacing") * spacingMultiplier, entry.bounds),
+      estimateSlots: (entry, lod, spacingMultiplier) => {
+        const source = resolvedStreamSource(entry.options, options.visualPackage, this.quality, lod);
+        return this.native
+          ? nativeGrassFieldStreamSlots({ tile: entry.tile, source, spacingMultiplier, requestedBounds: entry.bounds })
+          : countGrassFieldTerrainSlots(entry.tile,
+            positive(source.spacing, 0.45, "grass field spacing") * spacingMultiplier, entry.bounds);
+      },
       estimateCost: (entry, lod, spacingMultiplier, slots) => {
+        const source = resolvedStreamSource(entry.options, options.visualPackage, this.quality, lod);
         const bladesPerInstance = grassFieldBladesPerInstance(this.profile, lod, options.presentationBand);
-        if (entry.options.placement === undefined) return slots * bladesPerInstance;
-        const spacing = positive(entry.options.spacing, 0.45, "grass field spacing") * spacingMultiplier;
-        return countGrassFieldTerrainPlacementCapacity(entry.tile, spacing, entry.options.seed,
-          entry.options.placement, entry.bounds) * bladesPerInstance;
+        if (source.placement === undefined) return slots * bladesPerInstance;
+        const spacing = positive(source.spacing, 0.45, "grass field spacing") * spacingMultiplier;
+        return countGrassFieldTerrainPlacementCapacity(entry.tile, spacing, source.seed,
+          source.placement, entry.bounds) * bladesPerInstance;
       },
       build: async (input) => {
         const lod = input.lod as GrassFieldResidencyLod;
+        const source = resolvedStreamSource(input.source.options, options.visualPackage, this.quality, lod);
         let mount: CountedMount;
         if (this.native) {
           mount = await buildNativeGrassFieldStreamMount({ scene: this.scene, renderer: this.renderer!,
-            tile: input.source.tile, source: input.source.options, spacingMultiplier: input.spacingMultiplier,
+            tile: input.source.tile, source, spacingMultiplier: input.spacingMultiplier,
             requestedBounds: input.source.bounds,
             visualPackage: options.visualPackage, quality: this.quality, lod,
             ...(options.variant === undefined ? {} : { variant: options.variant }),
@@ -343,7 +358,7 @@ export class GrassFieldStreamManager {
             buildComputeBatch: options.buildComputeBatch });
         } else {
           const root = new THREE.Group(); root.name = "limina:grass-field-fallback";
-          const field = new GrassFieldTileMount(root, input.source.tile, () => input.source.options,
+          const field = new GrassFieldTileMount(root, input.source.tile, () => source,
             options.visualPackage, this.quality, lod, input.spacingMultiplier, options.variant, undefined,
             input.source.bounds, options.presentationBand);
           mount = new CpuMount(this.scene, root, field, field.slotCount(), field.bladeCount());

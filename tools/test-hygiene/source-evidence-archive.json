@@ -1,0 +1,2673 @@
+{
+  "schema": "limina.historical-source-evidence-archive/v1",
+  "policy": {
+    "historicalEvidenceIsImmutable": true,
+    "mutableWorkspacePathsAreNotHistoricalBytes": true,
+    "hashAttestedOnlyMayAuthorizeTransition": false,
+    "newCapturesRequireCompleteSourceArchive": true,
+    "renderedChangesRequireNewHitlApproval": true
+  },
+  "formatter": {
+    "package": "prettier",
+    "version": "3.9.5",
+    "config": {
+      "path": ".prettierrc.json",
+      "sha256": "sha256:17d5837d15884f9c7ebd4446b0985a9bca6e55e52349f2d90e59b492b631b4b1"
+    }
+  },
+  "evidenceSets": [
+    {
+      "path": "assets/qc/internal/compositions/functional-hall-house-v4-c1-r2-v1/capture-evidence.json",
+      "sha256": "sha256:c240c7b14744edf0e77341c5bc442dc7c6a1626a200e2af4ea738ec06ab2f43b",
+      "family": "composition",
+      "reviewStatus": "revised",
+      "lifecycle": "superseded",
+      "authority": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/composition-r2/review-authority-v1.json",
+        "sha256": "sha256:36dbacc3d593abfd744019e96cb86ab2c28f0b69503b565dc7b89461744bbc76"
+      },
+      "decision": {
+        "path": "assets/qc/internal/compositions/functional-hall-house-v4-c1-r2-v1/review-decision-revise.json",
+        "sha256": "sha256:e74f673df2d9202e8a90a1a5fc04fc0303ef32b11d20caba52ed6ee11571a6b2"
+      },
+      "successor": {
+        "authority": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/composition-r3/review-authority-v2.json",
+          "sha256": "sha256:d64b907c14024e529ee3316df4ec043890ff614a587287228693d3ad7defcfa7"
+        },
+        "decision": {
+          "path": "assets/qc/internal/compositions/functional-hall-house-v4-c1-r3-v2/review-decision-approve.json",
+          "sha256": "sha256:b4a53f78b4cf032b7989b2e88989aee976faaf1b5b5068e6aabe3c8d18e7a5e6"
+        }
+      }
+    },
+    {
+      "path": "assets/qc/internal/compositions/functional-hall-house-v4-c1-r3-v1/capture-evidence.json",
+      "sha256": "sha256:414aac4b758367a8cb798d92c91a66db2300675632626c0baf805cca49e28800",
+      "family": "composition",
+      "reviewStatus": "intermediate",
+      "lifecycle": "superseded",
+      "authority": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/composition-r3/review-authority-v1.json",
+        "sha256": "sha256:0e2836dcc62a39baa8e56a65cd2608c14e5807b8d2ae82a81c705c738ccf2e72"
+      },
+      "decision": null,
+      "successor": {
+        "authority": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/composition-r3/review-authority-v2.json",
+          "sha256": "sha256:d64b907c14024e529ee3316df4ec043890ff614a587287228693d3ad7defcfa7"
+        },
+        "decision": {
+          "path": "assets/qc/internal/compositions/functional-hall-house-v4-c1-r3-v2/review-decision-approve.json",
+          "sha256": "sha256:b4a53f78b4cf032b7989b2e88989aee976faaf1b5b5068e6aabe3c8d18e7a5e6"
+        }
+      }
+    },
+    {
+      "path": "assets/qc/internal/compositions/functional-hall-house-v4-c1-r3-v2/capture-evidence.json",
+      "sha256": "sha256:9f498efefa1e26d1830d3f0be76af033033d215a4f0a54a3fd0184b6450268f8",
+      "family": "composition",
+      "reviewStatus": "approved",
+      "lifecycle": "current-component",
+      "authority": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/composition-r3/review-authority-v2.json",
+        "sha256": "sha256:d64b907c14024e529ee3316df4ec043890ff614a587287228693d3ad7defcfa7"
+      },
+      "decision": {
+        "path": "assets/qc/internal/compositions/functional-hall-house-v4-c1-r3-v2/review-decision-approve.json",
+        "sha256": "sha256:b4a53f78b4cf032b7989b2e88989aee976faaf1b5b5068e6aabe3c8d18e7a5e6"
+      },
+      "successor": {
+        "authority": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653/production-review-authority-v5.json",
+          "sha256": "sha256:df607673a570ee9e610b4b684d20646c65fcc0768bd74d6ee4c950fe04747ab4"
+        },
+        "decision": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653/production-review-decision-approve-v5.json",
+          "sha256": "sha256:491e87ac7bfc80b47b8c196f17fac907104186b28e374bdcc8b647800449b310"
+        }
+      }
+    },
+    {
+      "path": "assets/qc/internal/fb4-multi-room/program-v2-1b4470041e01-r1/capture-provenance.json",
+      "sha256": "sha256:ccd5d6475a3629aeaa613dfdfc4b96e573f94ca7bd7d7aad50dfe8b177705312",
+      "family": "fb4",
+      "reviewStatus": "intermediate",
+      "lifecycle": "superseded",
+      "authority": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-1b4470041e01/review-v3-r2/review-authority.json",
+        "sha256": "sha256:0d62f8cbe7d41741389a952d97ba0bdfae5e107f801ccc51ec2d935a3eba641c"
+      },
+      "decision": null,
+      "successor": {
+        "authority": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-1f375ec3abe1/review-v4-r1/review-authority.json",
+          "sha256": "sha256:e02a8b50070a6b0a131f1e6e54ddef6e67c9b5a23219bea87509bd9c06768217"
+        },
+        "decision": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-1f375ec3abe1/review-v4-r1/hitl-decision-approve.json",
+          "sha256": "sha256:b5bfb9ebdab3ba6f628778dfea46c8575e00a43ba26e148461721587973ee561"
+        }
+      }
+    },
+    {
+      "path": "assets/qc/internal/fb4-multi-room/program-v3-1f375ec3abe1-v4-r1/capture-provenance.json",
+      "sha256": "sha256:53206b739681c8260f4e545d79b7c4868fcf5a2deea8aad903a1821425e36517",
+      "family": "fb4",
+      "reviewStatus": "approved",
+      "lifecycle": "current-release",
+      "authority": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-1f375ec3abe1/review-v4-r1/review-authority.json",
+        "sha256": "sha256:e02a8b50070a6b0a131f1e6e54ddef6e67c9b5a23219bea87509bd9c06768217"
+      },
+      "decision": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-1f375ec3abe1/review-v4-r1/hitl-decision-approve.json",
+        "sha256": "sha256:b5bfb9ebdab3ba6f628778dfea46c8575e00a43ba26e148461721587973ee561"
+      },
+      "successor": null
+    },
+    {
+      "path": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r2/capture-provenance.json",
+      "sha256": "sha256:e84a5e4469cd8b3dc763e424795adddb4238f49fac955ee0f2f056ddb57d6110",
+      "family": "fb4",
+      "reviewStatus": "intermediate",
+      "lifecycle": "superseded",
+      "authority": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-a11f21423016/review-v4-r2/review-authority.json",
+        "sha256": "sha256:3926dab4af0339052054ef0646a9b65834a413ad85595d06772ae70c0e07ce7b"
+      },
+      "decision": null,
+      "successor": {
+        "authority": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-1f375ec3abe1/review-v4-r1/review-authority.json",
+          "sha256": "sha256:e02a8b50070a6b0a131f1e6e54ddef6e67c9b5a23219bea87509bd9c06768217"
+        },
+        "decision": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-1f375ec3abe1/review-v4-r1/hitl-decision-approve.json",
+          "sha256": "sha256:b5bfb9ebdab3ba6f628778dfea46c8575e00a43ba26e148461721587973ee561"
+        }
+      }
+    },
+    {
+      "path": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r3/capture-provenance.json",
+      "sha256": "sha256:cf87b554a4aa86ba5fd8619f9e3f02fe2abe62990b526909a84dbfe8d32bee43",
+      "family": "fb4",
+      "reviewStatus": "intermediate",
+      "lifecycle": "superseded",
+      "authority": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-a11f21423016/review-v4-r3/review-authority.json",
+        "sha256": "sha256:b1a3f0ba760c49fb18839563d41fa76fccae93dd0d8df9efc372a2bd91226556"
+      },
+      "decision": null,
+      "successor": {
+        "authority": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-1f375ec3abe1/review-v4-r1/review-authority.json",
+          "sha256": "sha256:e02a8b50070a6b0a131f1e6e54ddef6e67c9b5a23219bea87509bd9c06768217"
+        },
+        "decision": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-1f375ec3abe1/review-v4-r1/hitl-decision-approve.json",
+          "sha256": "sha256:b5bfb9ebdab3ba6f628778dfea46c8575e00a43ba26e148461721587973ee561"
+        }
+      }
+    },
+    {
+      "path": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r4/capture-provenance.json",
+      "sha256": "sha256:9d874d0ba7b8fd1bc20c3365991789b4f42228e560fa916a3d4cc4167cc1834e",
+      "family": "fb4",
+      "reviewStatus": "revised",
+      "lifecycle": "superseded",
+      "authority": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-a11f21423016/review-v4-r4/review-authority.json",
+        "sha256": "sha256:9eb71d1a6e821105a6ae8a79c2f90b325b3cb216d1d8001fcfa36d797c21e5e0"
+      },
+      "decision": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-a11f21423016/review-v4-r4/hitl-decision-revise.json",
+        "sha256": "sha256:ccfe628c16d096e6d1879ddb1bd3dc2fcf6d33f8c6d5979b03f4b2c30744c2f8"
+      },
+      "successor": {
+        "authority": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-1f375ec3abe1/review-v4-r1/review-authority.json",
+          "sha256": "sha256:e02a8b50070a6b0a131f1e6e54ddef6e67c9b5a23219bea87509bd9c06768217"
+        },
+        "decision": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-1f375ec3abe1/review-v4-r1/hitl-decision-approve.json",
+          "sha256": "sha256:b5bfb9ebdab3ba6f628778dfea46c8575e00a43ba26e148461721587973ee561"
+        }
+      }
+    },
+    {
+      "path": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r12/capture-evidence.json",
+      "sha256": "sha256:9132cf758e11f793d0c6fa96cb2e9d7433481e9ab9d9f24f810c8eb3362b24dc",
+      "family": "fire",
+      "reviewStatus": "intermediate",
+      "lifecycle": "superseded",
+      "authority": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/fire-r4/fire-review-authority-r4.json",
+        "sha256": "sha256:8206801a69d6124d7dd5f2a000f42d312b454fc95830ccf8be3eb7d37a3e3324"
+      },
+      "decision": null,
+      "successor": {
+        "authority": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/fire-r4/fire-review-authority-r7.json",
+          "sha256": "sha256:2443394c43b083e080bc154f6fa3395c19e7e041ea5b37e79f1f7e8e89580cf0"
+        },
+        "decision": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/fire-r4/fire-review-decision-approve-r15.json",
+          "sha256": "sha256:1aaed1f7fc3e4d3c41bbce2ae42fa3d84ae190a3c24c933f7650b30035fb9cf5"
+        }
+      }
+    },
+    {
+      "path": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r13/capture-evidence.json",
+      "sha256": "sha256:9abfaa772519b76ec73228c1a1152847c635ea54db287232b6ade51b55b34ac4",
+      "family": "fire",
+      "reviewStatus": "intermediate",
+      "lifecycle": "superseded",
+      "authority": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/fire-r4/fire-review-authority-r5.json",
+        "sha256": "sha256:92a4436885f32cf5371d269fe7008a6645cc468c418a098d2eef8383ce137148"
+      },
+      "decision": null,
+      "successor": {
+        "authority": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/fire-r4/fire-review-authority-r7.json",
+          "sha256": "sha256:2443394c43b083e080bc154f6fa3395c19e7e041ea5b37e79f1f7e8e89580cf0"
+        },
+        "decision": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/fire-r4/fire-review-decision-approve-r15.json",
+          "sha256": "sha256:1aaed1f7fc3e4d3c41bbce2ae42fa3d84ae190a3c24c933f7650b30035fb9cf5"
+        }
+      }
+    },
+    {
+      "path": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r14/capture-evidence.json",
+      "sha256": "sha256:975e1e55795bba43a25d7e160c31422622da9cb4875fa063dc6f6275db6cb62b",
+      "family": "fire",
+      "reviewStatus": "intermediate",
+      "lifecycle": "superseded",
+      "authority": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/fire-r4/fire-review-authority-r6.json",
+        "sha256": "sha256:851aa8e51659473b91c32bd005773c53f19bcf4bc6585466f933a2fdce32c541"
+      },
+      "decision": null,
+      "successor": {
+        "authority": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/fire-r4/fire-review-authority-r7.json",
+          "sha256": "sha256:2443394c43b083e080bc154f6fa3395c19e7e041ea5b37e79f1f7e8e89580cf0"
+        },
+        "decision": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/fire-r4/fire-review-decision-approve-r15.json",
+          "sha256": "sha256:1aaed1f7fc3e4d3c41bbce2ae42fa3d84ae190a3c24c933f7650b30035fb9cf5"
+        }
+      }
+    },
+    {
+      "path": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r15/capture-evidence.json",
+      "sha256": "sha256:05effbe228e0b55010239f45e8e92b51c633c7b6da1d341c3444f80f7f6bbeab",
+      "family": "fire",
+      "reviewStatus": "approved",
+      "lifecycle": "current-component",
+      "authority": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/fire-r4/fire-review-authority-r7.json",
+        "sha256": "sha256:2443394c43b083e080bc154f6fa3395c19e7e041ea5b37e79f1f7e8e89580cf0"
+      },
+      "decision": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/fire-r4/fire-review-decision-approve-r15.json",
+        "sha256": "sha256:1aaed1f7fc3e4d3c41bbce2ae42fa3d84ae190a3c24c933f7650b30035fb9cf5"
+      },
+      "successor": {
+        "authority": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653/production-review-authority-v5.json",
+          "sha256": "sha256:df607673a570ee9e610b4b684d20646c65fcc0768bd74d6ee4c950fe04747ab4"
+        },
+        "decision": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653/production-review-decision-approve-v5.json",
+          "sha256": "sha256:491e87ac7bfc80b47b8c196f17fac907104186b28e374bdcc8b647800449b310"
+        }
+      }
+    },
+    {
+      "path": "assets/qc/internal/interiors/functional-hall-house-v4/i1-r2/capture-evidence.json",
+      "sha256": "sha256:ea6e5a3b74a76614d36815ed2717c6d5913458ffefd8a06640587adbc97a3711",
+      "family": "interior",
+      "reviewStatus": "approved",
+      "lifecycle": "superseded",
+      "authority": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/interior-r1/interior-review-authority.json",
+        "sha256": "sha256:6a2f815dd70f697c456cd9162ce1e08a2f509dbf57f5f749138e5f747a23ad39"
+      },
+      "decision": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/interior-r1/interior-review-decision-approve.json",
+        "sha256": "sha256:22268b0d487f737d82c91967ed029d74f9b2e12f4c56d329b951a27c8c252aae"
+      },
+      "successor": {
+        "authority": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/interior-r4/interior-review-authority.json",
+          "sha256": "sha256:412e02156fdcc45b5669e07f013f2c5f635bceb612cfd6f459e42a006725ba59"
+        },
+        "decision": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/interior-r4/interior-review-decision-approve.json",
+          "sha256": "sha256:86e05208d98d0261bb4abf97ba15b4a671ee7414a1d8ee303da73928a4f9158c"
+        }
+      }
+    },
+    {
+      "path": "assets/qc/internal/interiors/functional-hall-house-v4/i1-r2-yaw-r1/capture-evidence.json",
+      "sha256": "sha256:0df13979d42fea5d7115293be1f9a813070b3c6c55e2e6970553f32020d73141",
+      "family": "interior",
+      "reviewStatus": "approved",
+      "lifecycle": "superseded",
+      "authority": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/interior-r2/interior-review-authority.json",
+        "sha256": "sha256:fdbc1250289db7394538f4dbfbdc889cf6548ad36bd80198a84560ed925d2775"
+      },
+      "decision": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/interior-r2/interior-review-decision-approve.json",
+        "sha256": "sha256:139fb5e3a0cdc74542ba08fab9e3b1a192c01d8485326befd784c7140cf7bffe"
+      },
+      "successor": {
+        "authority": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/interior-r4/interior-review-authority.json",
+          "sha256": "sha256:412e02156fdcc45b5669e07f013f2c5f635bceb612cfd6f459e42a006725ba59"
+        },
+        "decision": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/interior-r4/interior-review-decision-approve.json",
+          "sha256": "sha256:86e05208d98d0261bb4abf97ba15b4a671ee7414a1d8ee303da73928a4f9158c"
+        }
+      }
+    },
+    {
+      "path": "assets/qc/internal/interiors/functional-hall-house-v4/i1-r3/capture-evidence.json",
+      "sha256": "sha256:d555d8660ec453f577ca42ed250c450a1e16cf9db79fccb68ee7b501f4f70819",
+      "family": "interior",
+      "reviewStatus": "approved",
+      "lifecycle": "superseded",
+      "authority": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/interior-r3/interior-review-authority.json",
+        "sha256": "sha256:e1ae1617756fcfa84a0eea2fafda30a4a852ad6f7ef67ce8c872577870029182"
+      },
+      "decision": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/interior-r3/interior-review-decision-approve.json",
+        "sha256": "sha256:b951b2ff9a225e00ecafe46ff530a90253be8ffcf4428750f2c13712d17bc0c3"
+      },
+      "successor": {
+        "authority": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/interior-r4/interior-review-authority.json",
+          "sha256": "sha256:412e02156fdcc45b5669e07f013f2c5f635bceb612cfd6f459e42a006725ba59"
+        },
+        "decision": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/interior-r4/interior-review-decision-approve.json",
+          "sha256": "sha256:86e05208d98d0261bb4abf97ba15b4a671ee7414a1d8ee303da73928a4f9158c"
+        }
+      }
+    },
+    {
+      "path": "assets/qc/internal/interiors/functional-hall-house-v4/i1-r4/capture-evidence.json",
+      "sha256": "sha256:8da64dfadb0e08bb62075265817623224db46dfffe3a7a4fd645d7e90e7a8118",
+      "family": "interior",
+      "reviewStatus": "approved",
+      "lifecycle": "current-component",
+      "authority": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/interior-r4/interior-review-authority.json",
+        "sha256": "sha256:412e02156fdcc45b5669e07f013f2c5f635bceb612cfd6f459e42a006725ba59"
+      },
+      "decision": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/interior-r4/interior-review-decision-approve.json",
+        "sha256": "sha256:86e05208d98d0261bb4abf97ba15b4a671ee7414a1d8ee303da73928a4f9158c"
+      },
+      "successor": {
+        "authority": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653/production-review-authority-v5.json",
+          "sha256": "sha256:df607673a570ee9e610b4b684d20646c65fcc0768bd74d6ee4c950fe04747ab4"
+        },
+        "decision": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653/production-review-decision-approve-v5.json",
+          "sha256": "sha256:491e87ac7bfc80b47b8c196f17fac907104186b28e374bdcc8b647800449b310"
+        }
+      }
+    },
+    {
+      "path": "assets/qc/internal/production-r1/r1-v4-spark-20260716/capture-evidence.json",
+      "sha256": "sha256:f7f1bf4d41a527a4cad5db3e4b06e99cf4fc7ded5832f0caa0e85245767a191a",
+      "family": "production-r1",
+      "reviewStatus": "intermediate",
+      "lifecycle": "superseded",
+      "authority": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653/production-review-authority-v4.json",
+        "sha256": "sha256:1120af0a182bbb5ea757beaf1ea82fb37511da5b6b24282b38f596f24be77438"
+      },
+      "decision": null,
+      "successor": {
+        "authority": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653/production-review-authority-v5.json",
+          "sha256": "sha256:df607673a570ee9e610b4b684d20646c65fcc0768bd74d6ee4c950fe04747ab4"
+        },
+        "decision": {
+          "path": "assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653/production-review-decision-approve-v5.json",
+          "sha256": "sha256:491e87ac7bfc80b47b8c196f17fac907104186b28e374bdcc8b647800449b310"
+        }
+      }
+    },
+    {
+      "path": "assets/qc/internal/production-r1/r1-v5-spark-20260716/capture-evidence.json",
+      "sha256": "sha256:fe28b7121598838007539dd88132b1bf42e2b3919e8416ea0f5369f76ad3ab76",
+      "family": "production-r1",
+      "reviewStatus": "approved",
+      "lifecycle": "current-release",
+      "authority": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653/production-review-authority-v5.json",
+        "sha256": "sha256:df607673a570ee9e610b4b684d20646c65fcc0768bd74d6ee4c950fe04747ab4"
+      },
+      "decision": {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653/production-review-decision-approve-v5.json",
+        "sha256": "sha256:491e87ac7bfc80b47b8c196f17fac907104186b28e374bdcc8b647800449b310"
+      },
+      "successor": null
+    }
+  ],
+  "historyDocuments": [
+    {
+      "path": "art-direction/functional-cottage-review-scene.json",
+      "sha256": "sha256:050c59a08844a70bb7303eac43a74190aa86d67345b2df9a057288a09f9d9f18",
+      "status": "append-only-historical-provenance"
+    },
+    {
+      "path": "art-direction/functional-cottage-v4-iteration.json",
+      "sha256": "sha256:c1312519a0b384aaf7798f3169d92c147d94e3f37ae3ab58f027a177afdedb77",
+      "status": "append-only-historical-provenance"
+    }
+  ],
+  "transitionAuthorities": [
+    {
+      "path": "assets/buildings/authoring/functional-hall-house-v4/shell-review-authority.json",
+      "sha256": "sha256:7da1909dff09924a05e81e948056dac06406d6df48e6c13aff958a0cb55db7bc",
+      "status": "approved-authority-source-transition"
+    }
+  ],
+  "sourceReferences": [
+    {
+      "evidencePath": "art-direction/functional-cottage-review-scene.json",
+      "jsonLocation": "generator.path",
+      "sourcePath": "tools/architecture/build-building.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:d8d48b82f44258dc06047c27fd2b4a1c7f956473deb58a405747f0a110a8d3aa",
+      "currentAtRemediationSha256": "sha256:2d968143b50e139c2df8e4c151d8f90fd5df89e507230f37ac7579c7eadd2109",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.0.provenance.batcher.path",
+      "sourcePath": "tools/asset/batch-hall-house-v4.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:48045b0626e90dffa26f385914b9dea4796bd8bcc3bd7db01a8231669ea2e480",
+      "currentAtRemediationSha256": "sha256:0b5b126dca27c36cea4409584304c58d89f44d5f4a7d155af0db4e55f28b3ac7",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.0.provenance.generator.path",
+      "sourcePath": "tools/blender/functional-hall-house-v4.py",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:6a796bd3c4be013ce43081b7ab9875413700f29e731f6813f8621b4c398e191d",
+      "currentAtRemediationSha256": "sha256:0d21dcb977283d2ee875fc121b0b3d46f9dabbdd9bcb25f4f9ea9eef0e457ce1",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.1.provenance.batcher.path",
+      "sourcePath": "tools/asset/batch-hall-house-v4.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:48045b0626e90dffa26f385914b9dea4796bd8bcc3bd7db01a8231669ea2e480",
+      "currentAtRemediationSha256": "sha256:0b5b126dca27c36cea4409584304c58d89f44d5f4a7d155af0db4e55f28b3ac7",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.1.provenance.compressor.path",
+      "sourcePath": "tools/asset/compress-hall-house-v4-ktx2.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:ce577d293707313ebf6375c38282da50fabd1e196f39f34cce09401985e922c6",
+      "currentAtRemediationSha256": "sha256:4781e0b17079109888fc1361463144ee9ae129573a3bc4e18794de1398469202",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.1.provenance.generator.path",
+      "sourcePath": "tools/blender/functional-hall-house-v4.py",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:6a796bd3c4be013ce43081b7ab9875413700f29e731f6813f8621b4c398e191d",
+      "currentAtRemediationSha256": "sha256:0d21dcb977283d2ee875fc121b0b3d46f9dabbdd9bcb25f4f9ea9eef0e457ce1",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.10.provenance.batcher.path",
+      "sourcePath": "tools/asset/batch-architecture-building.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:6cd57a54561dc9da1c6336ea1439fdb6d1ffb8faf770b97d291f626c2cc14290",
+      "currentAtRemediationSha256": "sha256:d2a0b29a5825569d5fc29ee9490705dee9e0466a6fd592144db377dcb853568e",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.10.provenance.blenderAdapter.path",
+      "sourcePath": "tools/blender/architecture-adapter.py",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:3a9bc35b6bc6fc696ede718078d28b2a1351e9623fd1801581a32b9251ef1491",
+      "currentAtRemediationSha256": "sha256:7f2bfce5cfe07b971bd403ef627c2e0822f295f4009cc61a7897921162a13b1c",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.10.provenance.buildDriver.path",
+      "sourcePath": "tools/architecture/build-building.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:d8d48b82f44258dc06047c27fd2b4a1c7f956473deb58a405747f0a110a8d3aa",
+      "currentAtRemediationSha256": "sha256:2d968143b50e139c2df8e4c151d8f90fd5df89e507230f37ac7579c7eadd2109",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.10.provenance.compressor.path",
+      "sourcePath": "tools/asset/compress-hall-house-v4-ktx2.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:a778e42c44da5deb7ea91650b45489c9f1a6fe7cbf20c1cfa8ef5aeb102b9ee7",
+      "currentAtRemediationSha256": "sha256:4781e0b17079109888fc1361463144ee9ae129573a3bc4e18794de1398469202",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.11.provenance.batcher.path",
+      "sourcePath": "tools/asset/batch-architecture-building.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:6cd57a54561dc9da1c6336ea1439fdb6d1ffb8faf770b97d291f626c2cc14290",
+      "currentAtRemediationSha256": "sha256:d2a0b29a5825569d5fc29ee9490705dee9e0466a6fd592144db377dcb853568e",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.11.provenance.blenderAdapter.path",
+      "sourcePath": "tools/blender/architecture-adapter.py",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:3a9bc35b6bc6fc696ede718078d28b2a1351e9623fd1801581a32b9251ef1491",
+      "currentAtRemediationSha256": "sha256:7f2bfce5cfe07b971bd403ef627c2e0822f295f4009cc61a7897921162a13b1c",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.11.provenance.buildDriver.path",
+      "sourcePath": "tools/architecture/build-building.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:d8d48b82f44258dc06047c27fd2b4a1c7f956473deb58a405747f0a110a8d3aa",
+      "currentAtRemediationSha256": "sha256:2d968143b50e139c2df8e4c151d8f90fd5df89e507230f37ac7579c7eadd2109",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.11.provenance.compressor.path",
+      "sourcePath": "tools/asset/compress-hall-house-v4-ktx2.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:e54aebee78479b12f8214e28e6fb865ec2599db97439df68b185a6d05e385d0c",
+      "currentAtRemediationSha256": "sha256:4781e0b17079109888fc1361463144ee9ae129573a3bc4e18794de1398469202",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.12.provenance.batcher.path",
+      "sourcePath": "tools/asset/batch-architecture-building.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:6cd57a54561dc9da1c6336ea1439fdb6d1ffb8faf770b97d291f626c2cc14290",
+      "currentAtRemediationSha256": "sha256:d2a0b29a5825569d5fc29ee9490705dee9e0466a6fd592144db377dcb853568e",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.12.provenance.blenderAdapter.path",
+      "sourcePath": "tools/blender/architecture-adapter.py",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:f696cc2940a3b3d8f9b9543de4d97c99cca0be6ea2b95e0c240870dc14281f0d",
+      "currentAtRemediationSha256": "sha256:7f2bfce5cfe07b971bd403ef627c2e0822f295f4009cc61a7897921162a13b1c",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.12.provenance.buildDriver.path",
+      "sourcePath": "tools/architecture/build-building.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:d8d48b82f44258dc06047c27fd2b4a1c7f956473deb58a405747f0a110a8d3aa",
+      "currentAtRemediationSha256": "sha256:2d968143b50e139c2df8e4c151d8f90fd5df89e507230f37ac7579c7eadd2109",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.12.provenance.compressor.path",
+      "sourcePath": "tools/asset/compress-hall-house-v4-ktx2.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:a899f0f76c13bc3eed12dcdd08e4386050d286671bc843e264246913ffaf080c",
+      "currentAtRemediationSha256": "sha256:4781e0b17079109888fc1361463144ee9ae129573a3bc4e18794de1398469202",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.2.provenance.batcher.path",
+      "sourcePath": "tools/asset/batch-hall-house-v4.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:298469dda8b2c940d705825d349b78b5d5500c00b6ad5bfd49615336b7cd1394",
+      "currentAtRemediationSha256": "sha256:0b5b126dca27c36cea4409584304c58d89f44d5f4a7d155af0db4e55f28b3ac7",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.2.provenance.compressor.path",
+      "sourcePath": "tools/asset/compress-hall-house-v4-ktx2.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:0bda7c64752f0e536cf4308c4f4e09e4c94bfd5b17bd891bd6bc6c80140424cf",
+      "currentAtRemediationSha256": "sha256:4781e0b17079109888fc1361463144ee9ae129573a3bc4e18794de1398469202",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.2.provenance.generator.path",
+      "sourcePath": "tools/blender/functional-hall-house-v4.py",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:ddb33b619bb9247d2b01f1f95c0f1b3ad423cc601e1c99afb63a94b2e99248ea",
+      "currentAtRemediationSha256": "sha256:0d21dcb977283d2ee875fc121b0b3d46f9dabbdd9bcb25f4f9ea9eef0e457ce1",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.3.provenance.batcher.path",
+      "sourcePath": "tools/asset/batch-hall-house-v4.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:fcc712ea6e49692b9b0f0ede2e408379c8d4fc8db06b738661235eda59f0d247",
+      "currentAtRemediationSha256": "sha256:0b5b126dca27c36cea4409584304c58d89f44d5f4a7d155af0db4e55f28b3ac7",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.3.provenance.compressor.path",
+      "sourcePath": "tools/asset/compress-hall-house-v4-ktx2.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:526d7e86c804d8cfcd0175907c1a956f48f92123b3da289336221c18c18a534b",
+      "currentAtRemediationSha256": "sha256:4781e0b17079109888fc1361463144ee9ae129573a3bc4e18794de1398469202",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.3.provenance.generator.path",
+      "sourcePath": "tools/blender/functional-hall-house-v4.py",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:b5af5fbb034c578e5a375c34e4e7464cc2bf2381c4b6fd2a9b881aac04b6d2b7",
+      "currentAtRemediationSha256": "sha256:0d21dcb977283d2ee875fc121b0b3d46f9dabbdd9bcb25f4f9ea9eef0e457ce1",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.4.provenance.batcher.path",
+      "sourcePath": "tools/asset/batch-hall-house-v4.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:d3e85e105708bd407bd3372ba068587f4b875217a2f66648226141fe04bf7d25",
+      "currentAtRemediationSha256": "sha256:0b5b126dca27c36cea4409584304c58d89f44d5f4a7d155af0db4e55f28b3ac7",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.4.provenance.compressor.path",
+      "sourcePath": "tools/asset/compress-hall-house-v4-ktx2.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:2532123770d94fe9fc706359cfe353cfe7278348094c1bcf9b42e21915640b0f",
+      "currentAtRemediationSha256": "sha256:4781e0b17079109888fc1361463144ee9ae129573a3bc4e18794de1398469202",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.4.provenance.generator.path",
+      "sourcePath": "tools/blender/functional-hall-house-v4.py",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:4f1062ccb7fe446e635d79e773e66e6699c3c10e2363664a03215760e052c047",
+      "currentAtRemediationSha256": "sha256:0d21dcb977283d2ee875fc121b0b3d46f9dabbdd9bcb25f4f9ea9eef0e457ce1",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.5.provenance.batcher.path",
+      "sourcePath": "tools/asset/batch-hall-house-v4.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:c21622ca2fb9a126ad52e3bc567b326cbee3ed4b98f6bf441598fc9b10cfcb7c",
+      "currentAtRemediationSha256": "sha256:0b5b126dca27c36cea4409584304c58d89f44d5f4a7d155af0db4e55f28b3ac7",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.5.provenance.compressor.path",
+      "sourcePath": "tools/asset/compress-hall-house-v4-ktx2.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:9999bf5447e6c9a36a03a82989d3bf89b5d9e56df6b5e5e9f9d43ce0cb43bd10",
+      "currentAtRemediationSha256": "sha256:4781e0b17079109888fc1361463144ee9ae129573a3bc4e18794de1398469202",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.5.provenance.generator.path",
+      "sourcePath": "tools/blender/functional-hall-house-v4.py",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:17f50adb47ffcd770aca2b6ecc1bd131bdab1079b550c997d9a9ac8aba0dd58c",
+      "currentAtRemediationSha256": "sha256:0d21dcb977283d2ee875fc121b0b3d46f9dabbdd9bcb25f4f9ea9eef0e457ce1",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.6.provenance.batcher.path",
+      "sourcePath": "tools/asset/batch-hall-house-v4.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:77522811e2a8b52462e7b83cd1948d7c125262c8fa2d4c1ccd3259c865a0c4a9",
+      "currentAtRemediationSha256": "sha256:0b5b126dca27c36cea4409584304c58d89f44d5f4a7d155af0db4e55f28b3ac7",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/77522811e2a8b52462e7b83cd1948d7c125262c8fa2d4c1ccd3259c865a0c4a9.blob",
+        "archiveSha256": "sha256:77522811e2a8b52462e7b83cd1948d7c125262c8fa2d4c1ccd3259c865a0c4a9",
+        "recoveryGitBlobOid": "22e5d7ff17e997f6963b49be3e3a6bbb54289313"
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.6.provenance.compressor.path",
+      "sourcePath": "tools/asset/compress-hall-house-v4-ktx2.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:8d5e2e2e2692905512747e9cb15a027491f6a9f348eded247c1010ca428f5d0d",
+      "currentAtRemediationSha256": "sha256:4781e0b17079109888fc1361463144ee9ae129573a3bc4e18794de1398469202",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.7.provenance.batcher.path",
+      "sourcePath": "tools/asset/batch-architecture-building.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:6cd57a54561dc9da1c6336ea1439fdb6d1ffb8faf770b97d291f626c2cc14290",
+      "currentAtRemediationSha256": "sha256:d2a0b29a5825569d5fc29ee9490705dee9e0466a6fd592144db377dcb853568e",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.7.provenance.blenderAdapter.path",
+      "sourcePath": "tools/blender/architecture-adapter.py",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:c78f9cfe740d27cb82abc346800288173fa41990237ffb4e51c9bb23f010f021",
+      "currentAtRemediationSha256": "sha256:7f2bfce5cfe07b971bd403ef627c2e0822f295f4009cc61a7897921162a13b1c",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.7.provenance.buildDriver.path",
+      "sourcePath": "tools/architecture/build-building.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:d8d48b82f44258dc06047c27fd2b4a1c7f956473deb58a405747f0a110a8d3aa",
+      "currentAtRemediationSha256": "sha256:2d968143b50e139c2df8e4c151d8f90fd5df89e507230f37ac7579c7eadd2109",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.7.provenance.compressor.path",
+      "sourcePath": "tools/asset/compress-hall-house-v4-ktx2.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:28d4547a2241832bf39ba9c3db8946c1e8ba121c7bf987b7d22a7eb16a6c17a7",
+      "currentAtRemediationSha256": "sha256:4781e0b17079109888fc1361463144ee9ae129573a3bc4e18794de1398469202",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.8.provenance.batcher.path",
+      "sourcePath": "tools/asset/batch-architecture-building.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:6cd57a54561dc9da1c6336ea1439fdb6d1ffb8faf770b97d291f626c2cc14290",
+      "currentAtRemediationSha256": "sha256:d2a0b29a5825569d5fc29ee9490705dee9e0466a6fd592144db377dcb853568e",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.8.provenance.blenderAdapter.path",
+      "sourcePath": "tools/blender/architecture-adapter.py",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:351b02299e2747f3cf2543ac65ead3ccd1318446e20501d4011283a0a3a43019",
+      "currentAtRemediationSha256": "sha256:7f2bfce5cfe07b971bd403ef627c2e0822f295f4009cc61a7897921162a13b1c",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.8.provenance.buildDriver.path",
+      "sourcePath": "tools/architecture/build-building.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:d8d48b82f44258dc06047c27fd2b4a1c7f956473deb58a405747f0a110a8d3aa",
+      "currentAtRemediationSha256": "sha256:2d968143b50e139c2df8e4c151d8f90fd5df89e507230f37ac7579c7eadd2109",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.8.provenance.compressor.path",
+      "sourcePath": "tools/asset/compress-hall-house-v4-ktx2.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:8741c4bebeac700eded2ec7197955f23f8fbd3bff97da24caed6906c26e5bec7",
+      "currentAtRemediationSha256": "sha256:4781e0b17079109888fc1361463144ee9ae129573a3bc4e18794de1398469202",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.9.provenance.batcher.path",
+      "sourcePath": "tools/asset/batch-architecture-building.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:6cd57a54561dc9da1c6336ea1439fdb6d1ffb8faf770b97d291f626c2cc14290",
+      "currentAtRemediationSha256": "sha256:d2a0b29a5825569d5fc29ee9490705dee9e0466a6fd592144db377dcb853568e",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.9.provenance.blenderAdapter.path",
+      "sourcePath": "tools/blender/architecture-adapter.py",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:aaf3dbb0e7a0ba92c092478b5e5c39cbc1a1111390d6303c0097bf6c528e7e03",
+      "currentAtRemediationSha256": "sha256:7f2bfce5cfe07b971bd403ef627c2e0822f295f4009cc61a7897921162a13b1c",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.9.provenance.buildDriver.path",
+      "sourcePath": "tools/architecture/build-building.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:d8d48b82f44258dc06047c27fd2b4a1c7f956473deb58a405747f0a110a8d3aa",
+      "currentAtRemediationSha256": "sha256:2d968143b50e139c2df8e4c151d8f90fd5df89e507230f37ac7579c7eadd2109",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "art-direction/functional-cottage-v4-iteration.json",
+      "jsonLocation": "cycles.9.provenance.compressor.path",
+      "sourcePath": "tools/asset/compress-hall-house-v4-ktx2.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:1395434d379506fceb4baa120aa230abcfc26e516744aa5edf0d27cb1e8f57f2",
+      "currentAtRemediationSha256": "sha256:4781e0b17079109888fc1361463144ee9ae129573a3bc4e18794de1398469202",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/buildings/authoring/functional-hall-house-v4/shell-review-authority.json",
+      "jsonLocation": "source.adapterPath",
+      "sourcePath": "tools/blender/architecture-adapter.py",
+      "hashKey": "adapterSha256",
+      "expectedSha256": "sha256:edf47c8ca1a01c8a7d74c16545eea2d204580f3cec694496ee1472edfa585597",
+      "currentAtRemediationSha256": "sha256:7f2bfce5cfe07b971bd403ef627c2e0822f295f4009cc61a7897921162a13b1c",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/buildings/authoring/functional-hall-house-v4/shell-review-authority.json",
+      "jsonLocation": "source.buildToolPath",
+      "sourcePath": "tools/architecture/build-shell.ts",
+      "hashKey": "buildToolSha256",
+      "expectedSha256": "sha256:aa2edceae22e2be4869f5dd2d51d7cf375d51e7a2ca04975b13bcd7deba6f7f2",
+      "currentAtRemediationSha256": "sha256:212f4e3e9c25f3e9f65ed44813905be7702378de896b345a3f114b8fad1c5506",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/aa2edceae22e2be4869f5dd2d51d7cf375d51e7a2ca04975b13bcd7deba6f7f2.blob",
+        "archiveSha256": "sha256:aa2edceae22e2be4869f5dd2d51d7cf375d51e7a2ca04975b13bcd7deba6f7f2",
+        "recoveryGitBlobOid": "bee921670a53ce0d5231882e38b34d591c6ccd03"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/compositions/functional-hall-house-v4-c1-r2-v1/capture-evidence.json",
+      "jsonLocation": "source.0.path",
+      "sourcePath": "js/src/render/building-composition-review-scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68",
+      "currentAtRemediationSha256": "sha256:3df1f3849f11d8ae1aa8c04d314373d6ffc26a7e04cc847510f2fa33a42a3c2f",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68.blob",
+        "archiveSha256": "sha256:ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68",
+        "recoveryGitBlobOid": "e2085ff2bc9e551db0acf56444d26e27c1bd4526"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/compositions/functional-hall-house-v4-c1-r2-v1/capture-evidence.json",
+      "jsonLocation": "source.1.path",
+      "sourcePath": "js/src/demos/building_composition_capture_window.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:3008c9a288e3e896dbcffece0e65a8a035da7c78a2c5a41a900146a539a41db9",
+      "currentAtRemediationSha256": "sha256:32651e369ac62cfbad1f67f373938c7ab922a45528edc7e2e282e2d6c630f47b",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/3008c9a288e3e896dbcffece0e65a8a035da7c78a2c5a41a900146a539a41db9.blob",
+        "archiveSha256": "sha256:3008c9a288e3e896dbcffece0e65a8a035da7c78a2c5a41a900146a539a41db9",
+        "recoveryGitBlobOid": "e9a7838ffba9c871550a389e6312d3ae8aa4510d"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/compositions/functional-hall-house-v4-c1-r3-v1/capture-evidence.json",
+      "jsonLocation": "source.0.path",
+      "sourcePath": "js/src/render/building-composition-review-scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68",
+      "currentAtRemediationSha256": "sha256:3df1f3849f11d8ae1aa8c04d314373d6ffc26a7e04cc847510f2fa33a42a3c2f",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68.blob",
+        "archiveSha256": "sha256:ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68",
+        "recoveryGitBlobOid": "e2085ff2bc9e551db0acf56444d26e27c1bd4526"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/compositions/functional-hall-house-v4-c1-r3-v1/capture-evidence.json",
+      "jsonLocation": "source.1.path",
+      "sourcePath": "js/src/demos/building_composition_capture_window.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:3008c9a288e3e896dbcffece0e65a8a035da7c78a2c5a41a900146a539a41db9",
+      "currentAtRemediationSha256": "sha256:32651e369ac62cfbad1f67f373938c7ab922a45528edc7e2e282e2d6c630f47b",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/3008c9a288e3e896dbcffece0e65a8a035da7c78a2c5a41a900146a539a41db9.blob",
+        "archiveSha256": "sha256:3008c9a288e3e896dbcffece0e65a8a035da7c78a2c5a41a900146a539a41db9",
+        "recoveryGitBlobOid": "e9a7838ffba9c871550a389e6312d3ae8aa4510d"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/compositions/functional-hall-house-v4-c1-r3-v2/capture-evidence.json",
+      "jsonLocation": "source.0.path",
+      "sourcePath": "js/src/render/building-composition-review-scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68",
+      "currentAtRemediationSha256": "sha256:3df1f3849f11d8ae1aa8c04d314373d6ffc26a7e04cc847510f2fa33a42a3c2f",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68.blob",
+        "archiveSha256": "sha256:ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68",
+        "recoveryGitBlobOid": "e2085ff2bc9e551db0acf56444d26e27c1bd4526"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/compositions/functional-hall-house-v4-c1-r3-v2/capture-evidence.json",
+      "jsonLocation": "source.1.path",
+      "sourcePath": "js/src/demos/building_composition_capture_window.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:3008c9a288e3e896dbcffece0e65a8a035da7c78a2c5a41a900146a539a41db9",
+      "currentAtRemediationSha256": "sha256:32651e369ac62cfbad1f67f373938c7ab922a45528edc7e2e282e2d6c630f47b",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/3008c9a288e3e896dbcffece0e65a8a035da7c78a2c5a41a900146a539a41db9.blob",
+        "archiveSha256": "sha256:3008c9a288e3e896dbcffece0e65a8a035da7c78a2c5a41a900146a539a41db9",
+        "recoveryGitBlobOid": "e9a7838ffba9c871550a389e6312d3ae8aa4510d"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v2-1b4470041e01-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.112.path",
+      "sourcePath": "js/src/skills/asset.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:4a4d742fa628c14973063286d2ed7614dd2616635708f34d8b7dd55910369a60",
+      "currentAtRemediationSha256": "sha256:798e43604d4982e7bc391c71de7624109c939b6111ce2a733e0c530c3af56943",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/4a4d742fa628c14973063286d2ed7614dd2616635708f34d8b7dd55910369a60.blob",
+        "archiveSha256": "sha256:4a4d742fa628c14973063286d2ed7614dd2616635708f34d8b7dd55910369a60",
+        "recoveryGitBlobOid": "77d4d320eb95532bc464a7c3aaa1f31339166f26"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v2-1b4470041e01-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.12.path",
+      "sourcePath": "js/src/assets/functional-building-contract.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:4d28989301e209efbc73f709c9595fc2f72d39dee81e32be424f4dd784dd30b1",
+      "currentAtRemediationSha256": "sha256:dba38f0f2e965e9aefab82f4222eaece6e327b0a0f36e47e0f99148d0d115cd6",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/4d28989301e209efbc73f709c9595fc2f72d39dee81e32be424f4dd784dd30b1.blob",
+        "archiveSha256": "sha256:4d28989301e209efbc73f709c9595fc2f72d39dee81e32be424f4dd784dd30b1",
+        "recoveryGitBlobOid": "5dac527b13b9f7fa8efbadff2618b7e0db7167ac"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v2-1b4470041e01-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.13.path",
+      "sourcePath": "js/src/assets/functional-building-site-artifact.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:2333c96958dda809ae3aa68a3df624d3113c06446f3e05737ac03b6a9aebf06b",
+      "currentAtRemediationSha256": "sha256:a82836041e90e7bee4e51b95f40e05b483f9ce4d0f775f2d9502ee446ee91cbc",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/2333c96958dda809ae3aa68a3df624d3113c06446f3e05737ac03b6a9aebf06b.blob",
+        "archiveSha256": "sha256:2333c96958dda809ae3aa68a3df624d3113c06446f3e05737ac03b6a9aebf06b",
+        "recoveryGitBlobOid": "9618fe116c112d3d6c48ac035caa98b5a783f345"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v2-1b4470041e01-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.138.path",
+      "sourcePath": "js/src/skills/material.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:1c0d78074c261f4f8a5582378f946933a64ea5493ad1d8e88802972f27986450",
+      "currentAtRemediationSha256": "sha256:0beee56c90374d2aaaec0a88c6873881f4569281ec9b156663d1856edbab4b6a",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/1c0d78074c261f4f8a5582378f946933a64ea5493ad1d8e88802972f27986450.blob",
+        "archiveSha256": "sha256:1c0d78074c261f4f8a5582378f946933a64ea5493ad1d8e88802972f27986450",
+        "recoveryGitBlobOid": "5b68c6c601cc7e7b6433f19d6416ad525129d555"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v2-1b4470041e01-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.150.path",
+      "sourcePath": "js/src/skills/scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:f14073e4ae6ffaf94c4becd5661cc6318ff2d263a8dcedc654d33bed7be90217",
+      "currentAtRemediationSha256": "sha256:c035119f28d9b5e1494c8e669580503ff40ae65a95c041039f904e8cd9d08e74",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/f14073e4ae6ffaf94c4becd5661cc6318ff2d263a8dcedc654d33bed7be90217.blob",
+        "archiveSha256": "sha256:f14073e4ae6ffaf94c4becd5661cc6318ff2d263a8dcedc654d33bed7be90217",
+        "recoveryGitBlobOid": "99dc677780dd14c03c95cc423170b9816ad7e2e5"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v2-1b4470041e01-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.155.path",
+      "sourcePath": "js/src/skills/terrain.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:b94af6c67b0cfbf1fd200ef6c3fccf16ceed9f8448c38936e544059fb15fb4b4",
+      "currentAtRemediationSha256": "sha256:a7afb5095a518d2e7052772d3fc7873ef6acf1d82a5c0e92dcd8f44ffc28efd6",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/b94af6c67b0cfbf1fd200ef6c3fccf16ceed9f8448c38936e544059fb15fb4b4.blob",
+        "archiveSha256": "sha256:b94af6c67b0cfbf1fd200ef6c3fccf16ceed9f8448c38936e544059fb15fb4b4",
+        "recoveryGitBlobOid": "4d2128343e02f5a037d7879853d2ac3d8fccce65"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v2-1b4470041e01-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.161.path",
+      "sourcePath": "js/src/skills/village.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:38d11526f03a9909549aa7526b019ba9f239957e3783744540a8c12274c5e724",
+      "currentAtRemediationSha256": "sha256:489f008a45dcfe2b059150a692c1bca531b54a4155230562bbc0f9b72832da90",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/38d11526f03a9909549aa7526b019ba9f239957e3783744540a8c12274c5e724.blob",
+        "archiveSha256": "sha256:38d11526f03a9909549aa7526b019ba9f239957e3783744540a8c12274c5e724",
+        "recoveryGitBlobOid": "7e3d82589e3cda6f0a7469341f6c2bf3dca3f415"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v2-1b4470041e01-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.34.path",
+      "sourcePath": "js/src/demos/building_multi_room_review_window.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:ccf2142b238b9b8961e6c42138009f966654f05177bcc942b433841ae533902e",
+      "currentAtRemediationSha256": "sha256:1f218c31dda4fe3471e6e1352a5425e93a100e2be0a316c0a3163f84e0c6874d",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/ccf2142b238b9b8961e6c42138009f966654f05177bcc942b433841ae533902e.blob",
+        "archiveSha256": "sha256:ccf2142b238b9b8961e6c42138009f966654f05177bcc942b433841ae533902e",
+        "recoveryGitBlobOid": "774f7a14c18e2520fc4cb4fb34af84a99022c640"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v2-1b4470041e01-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.68.path",
+      "sourcePath": "js/src/render/building-multi-room-review-scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:9cc747f212c11d15c3317b4f8c3221d45c9203a5770f6c83d405ebf1e197ed27",
+      "currentAtRemediationSha256": "sha256:c9be278f0d4419162811859e1251ef6020f6e3b107c2af35ce9c0552227e700b",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v2-1b4470041e01-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.69.path",
+      "sourcePath": "js/src/render/building-site-review-envelope.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:96ac8c84bd2dc58c28f11bb2f48169a87fd488c05c89a2cbaf02c5caad2d3cb8",
+      "currentAtRemediationSha256": "sha256:cf048b4d0c479a4f45ee1ae06db316ed12d840a944ef94be61133b536d823bc1",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/96ac8c84bd2dc58c28f11bb2f48169a87fd488c05c89a2cbaf02c5caad2d3cb8.blob",
+        "archiveSha256": "sha256:96ac8c84bd2dc58c28f11bb2f48169a87fd488c05c89a2cbaf02c5caad2d3cb8",
+        "recoveryGitBlobOid": "8bc997c317fcc57b7b29d26ba57ecf753668c34c"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v2-1b4470041e01-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.74.path",
+      "sourcePath": "js/src/render/fb4-capture-provenance.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:3e2e3533b77bc5adb4c461c297c1a61ceb600e154de61dd23f790f751da03be1",
+      "currentAtRemediationSha256": "sha256:7d8e9f3636e1740a77651236b414069bb464eb4b42604c7ac848c66710589d32",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/3e2e3533b77bc5adb4c461c297c1a61ceb600e154de61dd23f790f751da03be1.blob",
+        "archiveSha256": "sha256:3e2e3533b77bc5adb4c461c297c1a61ceb600e154de61dd23f790f751da03be1",
+        "recoveryGitBlobOid": "7148889910fcd29ab1ec4301bab9bcd2510740e3"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v2-1b4470041e01-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.8.path",
+      "sourcePath": "js/src/architecture/furniture-design-contract.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:cea19b23c5477d68f812bd8a636ee97c97ba3034c724aa4141cc2b8063262810",
+      "currentAtRemediationSha256": "sha256:f68dac2ac729334dbbab79323cbd8947ea8061f94103976839ba3d3971332efc",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/cea19b23c5477d68f812bd8a636ee97c97ba3034c724aa4141cc2b8063262810.blob",
+        "archiveSha256": "sha256:cea19b23c5477d68f812bd8a636ee97c97ba3034c724aa4141cc2b8063262810",
+        "recoveryGitBlobOid": "3fce05e33453604150cdca26afa047a6d5d85e7a"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v2-1b4470041e01-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.9.path",
+      "sourcePath": "js/src/architecture/visual-design-contract.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:d9e0ccd97526eaa65a72cd3ee85e2d2ae0813792401e79893f39cc2d48161e7f",
+      "currentAtRemediationSha256": "sha256:c83c29f995b0541a8467dfe05426bfb85ff58ed42f6cf2a798a6ffa3b2b2ac39",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/d9e0ccd97526eaa65a72cd3ee85e2d2ae0813792401e79893f39cc2d48161e7f.blob",
+        "archiveSha256": "sha256:d9e0ccd97526eaa65a72cd3ee85e2d2ae0813792401e79893f39cc2d48161e7f",
+        "recoveryGitBlobOid": "0cd21ec047468b7396f551b51f25ba49ffcb63b9"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-1f375ec3abe1-v4-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.10.path",
+      "sourcePath": "js/src/architecture/visual-design-contract.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:d9e0ccd97526eaa65a72cd3ee85e2d2ae0813792401e79893f39cc2d48161e7f",
+      "currentAtRemediationSha256": "sha256:c83c29f995b0541a8467dfe05426bfb85ff58ed42f6cf2a798a6ffa3b2b2ac39",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/d9e0ccd97526eaa65a72cd3ee85e2d2ae0813792401e79893f39cc2d48161e7f.blob",
+        "archiveSha256": "sha256:d9e0ccd97526eaa65a72cd3ee85e2d2ae0813792401e79893f39cc2d48161e7f",
+        "recoveryGitBlobOid": "0cd21ec047468b7396f551b51f25ba49ffcb63b9"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-1f375ec3abe1-v4-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.117.path",
+      "sourcePath": "js/src/skills/asset.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:4a4d742fa628c14973063286d2ed7614dd2616635708f34d8b7dd55910369a60",
+      "currentAtRemediationSha256": "sha256:798e43604d4982e7bc391c71de7624109c939b6111ce2a733e0c530c3af56943",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/4a4d742fa628c14973063286d2ed7614dd2616635708f34d8b7dd55910369a60.blob",
+        "archiveSha256": "sha256:4a4d742fa628c14973063286d2ed7614dd2616635708f34d8b7dd55910369a60",
+        "recoveryGitBlobOid": "77d4d320eb95532bc464a7c3aaa1f31339166f26"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-1f375ec3abe1-v4-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.13.path",
+      "sourcePath": "js/src/assets/functional-building-contract.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:df9997b16e9bd418b7ffe365d3a28704f5519e8f8305a2e2e518bf972b41d945",
+      "currentAtRemediationSha256": "sha256:dba38f0f2e965e9aefab82f4222eaece6e327b0a0f36e47e0f99148d0d115cd6",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-1f375ec3abe1-v4-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.14.path",
+      "sourcePath": "js/src/assets/functional-building-site-artifact.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:2333c96958dda809ae3aa68a3df624d3113c06446f3e05737ac03b6a9aebf06b",
+      "currentAtRemediationSha256": "sha256:a82836041e90e7bee4e51b95f40e05b483f9ce4d0f775f2d9502ee446ee91cbc",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/2333c96958dda809ae3aa68a3df624d3113c06446f3e05737ac03b6a9aebf06b.blob",
+        "archiveSha256": "sha256:2333c96958dda809ae3aa68a3df624d3113c06446f3e05737ac03b6a9aebf06b",
+        "recoveryGitBlobOid": "9618fe116c112d3d6c48ac035caa98b5a783f345"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-1f375ec3abe1-v4-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.144.path",
+      "sourcePath": "js/src/skills/material.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:1c0d78074c261f4f8a5582378f946933a64ea5493ad1d8e88802972f27986450",
+      "currentAtRemediationSha256": "sha256:0beee56c90374d2aaaec0a88c6873881f4569281ec9b156663d1856edbab4b6a",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/1c0d78074c261f4f8a5582378f946933a64ea5493ad1d8e88802972f27986450.blob",
+        "archiveSha256": "sha256:1c0d78074c261f4f8a5582378f946933a64ea5493ad1d8e88802972f27986450",
+        "recoveryGitBlobOid": "5b68c6c601cc7e7b6433f19d6416ad525129d555"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-1f375ec3abe1-v4-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.156.path",
+      "sourcePath": "js/src/skills/scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:f14073e4ae6ffaf94c4becd5661cc6318ff2d263a8dcedc654d33bed7be90217",
+      "currentAtRemediationSha256": "sha256:c035119f28d9b5e1494c8e669580503ff40ae65a95c041039f904e8cd9d08e74",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/f14073e4ae6ffaf94c4becd5661cc6318ff2d263a8dcedc654d33bed7be90217.blob",
+        "archiveSha256": "sha256:f14073e4ae6ffaf94c4becd5661cc6318ff2d263a8dcedc654d33bed7be90217",
+        "recoveryGitBlobOid": "99dc677780dd14c03c95cc423170b9816ad7e2e5"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-1f375ec3abe1-v4-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.161.path",
+      "sourcePath": "js/src/skills/terrain.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:711b75eabb49d794865080e9adcaca325cce83f1dea79cf379136aec7141ba47",
+      "currentAtRemediationSha256": "sha256:a7afb5095a518d2e7052772d3fc7873ef6acf1d82a5c0e92dcd8f44ffc28efd6",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/711b75eabb49d794865080e9adcaca325cce83f1dea79cf379136aec7141ba47.blob",
+        "archiveSha256": "sha256:711b75eabb49d794865080e9adcaca325cce83f1dea79cf379136aec7141ba47",
+        "recoveryGitBlobOid": "e5488a96797f69d9680b32b0e0f629c4dd708ab7"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-1f375ec3abe1-v4-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.167.path",
+      "sourcePath": "js/src/skills/village.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:38d11526f03a9909549aa7526b019ba9f239957e3783744540a8c12274c5e724",
+      "currentAtRemediationSha256": "sha256:489f008a45dcfe2b059150a692c1bca531b54a4155230562bbc0f9b72832da90",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/38d11526f03a9909549aa7526b019ba9f239957e3783744540a8c12274c5e724.blob",
+        "archiveSha256": "sha256:38d11526f03a9909549aa7526b019ba9f239957e3783744540a8c12274c5e724",
+        "recoveryGitBlobOid": "7e3d82589e3cda6f0a7469341f6c2bf3dca3f415"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-1f375ec3abe1-v4-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.35.path",
+      "sourcePath": "js/src/demos/building_multi_room_review_window.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:97758f7274382abd667cee74f6b475bdc5ee2ffe4e04b3989d46a73590f2ed10",
+      "currentAtRemediationSha256": "sha256:1f218c31dda4fe3471e6e1352a5425e93a100e2be0a316c0a3163f84e0c6874d",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-1f375ec3abe1-v4-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.71.path",
+      "sourcePath": "js/src/render/building-multi-room-review-scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:8b156978b5ff119f1f4f4ff9264d07611611de170bce6b03242bad90ab454bd5",
+      "currentAtRemediationSha256": "sha256:c9be278f0d4419162811859e1251ef6020f6e3b107c2af35ce9c0552227e700b",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-1f375ec3abe1-v4-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.72.path",
+      "sourcePath": "js/src/render/building-semantic-evidence.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:e60c32a2526a77a848b9563dbbb91f9e0d0fab2bc673122e05e48f8422069947",
+      "currentAtRemediationSha256": "sha256:b7f076e2b2b7fae28b4d7635799b6060b0536f7b5b97ca028cb1d6e2ef79a240",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-1f375ec3abe1-v4-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.73.path",
+      "sourcePath": "js/src/render/building-site-review-envelope.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:96ac8c84bd2dc58c28f11bb2f48169a87fd488c05c89a2cbaf02c5caad2d3cb8",
+      "currentAtRemediationSha256": "sha256:cf048b4d0c479a4f45ee1ae06db316ed12d840a944ef94be61133b536d823bc1",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/96ac8c84bd2dc58c28f11bb2f48169a87fd488c05c89a2cbaf02c5caad2d3cb8.blob",
+        "archiveSha256": "sha256:96ac8c84bd2dc58c28f11bb2f48169a87fd488c05c89a2cbaf02c5caad2d3cb8",
+        "recoveryGitBlobOid": "8bc997c317fcc57b7b29d26ba57ecf753668c34c"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-1f375ec3abe1-v4-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.78.path",
+      "sourcePath": "js/src/render/fb4-capture-provenance.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:3e2e3533b77bc5adb4c461c297c1a61ceb600e154de61dd23f790f751da03be1",
+      "currentAtRemediationSha256": "sha256:7d8e9f3636e1740a77651236b414069bb464eb4b42604c7ac848c66710589d32",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/3e2e3533b77bc5adb4c461c297c1a61ceb600e154de61dd23f790f751da03be1.blob",
+        "archiveSha256": "sha256:3e2e3533b77bc5adb4c461c297c1a61ceb600e154de61dd23f790f751da03be1",
+        "recoveryGitBlobOid": "7148889910fcd29ab1ec4301bab9bcd2510740e3"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-1f375ec3abe1-v4-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.8.path",
+      "sourcePath": "js/src/architecture/building-articulation-cpu-proxy.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:227a8998b3dd3921821515fb8d5a6a82f3c569e35809e6b8482826569a4d005b",
+      "currentAtRemediationSha256": "sha256:b2f6af4c9e532570431ac612bad233a3163f488f718b2511113e8a2f97835fa1",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-1f375ec3abe1-v4-r1/capture-provenance.json",
+      "jsonLocation": "execution.sources.9.path",
+      "sourcePath": "js/src/architecture/furniture-design-contract.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:cea19b23c5477d68f812bd8a636ee97c97ba3034c724aa4141cc2b8063262810",
+      "currentAtRemediationSha256": "sha256:f68dac2ac729334dbbab79323cbd8947ea8061f94103976839ba3d3971332efc",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/cea19b23c5477d68f812bd8a636ee97c97ba3034c724aa4141cc2b8063262810.blob",
+        "archiveSha256": "sha256:cea19b23c5477d68f812bd8a636ee97c97ba3034c724aa4141cc2b8063262810",
+        "recoveryGitBlobOid": "3fce05e33453604150cdca26afa047a6d5d85e7a"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r2/capture-provenance.json",
+      "jsonLocation": "execution.sources.10.path",
+      "sourcePath": "js/src/architecture/visual-design-contract.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:d9e0ccd97526eaa65a72cd3ee85e2d2ae0813792401e79893f39cc2d48161e7f",
+      "currentAtRemediationSha256": "sha256:c83c29f995b0541a8467dfe05426bfb85ff58ed42f6cf2a798a6ffa3b2b2ac39",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/d9e0ccd97526eaa65a72cd3ee85e2d2ae0813792401e79893f39cc2d48161e7f.blob",
+        "archiveSha256": "sha256:d9e0ccd97526eaa65a72cd3ee85e2d2ae0813792401e79893f39cc2d48161e7f",
+        "recoveryGitBlobOid": "0cd21ec047468b7396f551b51f25ba49ffcb63b9"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r2/capture-provenance.json",
+      "jsonLocation": "execution.sources.117.path",
+      "sourcePath": "js/src/skills/asset.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:4a4d742fa628c14973063286d2ed7614dd2616635708f34d8b7dd55910369a60",
+      "currentAtRemediationSha256": "sha256:798e43604d4982e7bc391c71de7624109c939b6111ce2a733e0c530c3af56943",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/4a4d742fa628c14973063286d2ed7614dd2616635708f34d8b7dd55910369a60.blob",
+        "archiveSha256": "sha256:4a4d742fa628c14973063286d2ed7614dd2616635708f34d8b7dd55910369a60",
+        "recoveryGitBlobOid": "77d4d320eb95532bc464a7c3aaa1f31339166f26"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r2/capture-provenance.json",
+      "jsonLocation": "execution.sources.13.path",
+      "sourcePath": "js/src/assets/functional-building-contract.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:718701b526e6158efa8ae2971d65649619fedc9e3d06255d8bb2cb458779bbe4",
+      "currentAtRemediationSha256": "sha256:dba38f0f2e965e9aefab82f4222eaece6e327b0a0f36e47e0f99148d0d115cd6",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r2/capture-provenance.json",
+      "jsonLocation": "execution.sources.14.path",
+      "sourcePath": "js/src/assets/functional-building-site-artifact.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:2333c96958dda809ae3aa68a3df624d3113c06446f3e05737ac03b6a9aebf06b",
+      "currentAtRemediationSha256": "sha256:a82836041e90e7bee4e51b95f40e05b483f9ce4d0f775f2d9502ee446ee91cbc",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/2333c96958dda809ae3aa68a3df624d3113c06446f3e05737ac03b6a9aebf06b.blob",
+        "archiveSha256": "sha256:2333c96958dda809ae3aa68a3df624d3113c06446f3e05737ac03b6a9aebf06b",
+        "recoveryGitBlobOid": "9618fe116c112d3d6c48ac035caa98b5a783f345"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r2/capture-provenance.json",
+      "jsonLocation": "execution.sources.144.path",
+      "sourcePath": "js/src/skills/material.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:1c0d78074c261f4f8a5582378f946933a64ea5493ad1d8e88802972f27986450",
+      "currentAtRemediationSha256": "sha256:0beee56c90374d2aaaec0a88c6873881f4569281ec9b156663d1856edbab4b6a",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/1c0d78074c261f4f8a5582378f946933a64ea5493ad1d8e88802972f27986450.blob",
+        "archiveSha256": "sha256:1c0d78074c261f4f8a5582378f946933a64ea5493ad1d8e88802972f27986450",
+        "recoveryGitBlobOid": "5b68c6c601cc7e7b6433f19d6416ad525129d555"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r2/capture-provenance.json",
+      "jsonLocation": "execution.sources.156.path",
+      "sourcePath": "js/src/skills/scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:f14073e4ae6ffaf94c4becd5661cc6318ff2d263a8dcedc654d33bed7be90217",
+      "currentAtRemediationSha256": "sha256:c035119f28d9b5e1494c8e669580503ff40ae65a95c041039f904e8cd9d08e74",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/f14073e4ae6ffaf94c4becd5661cc6318ff2d263a8dcedc654d33bed7be90217.blob",
+        "archiveSha256": "sha256:f14073e4ae6ffaf94c4becd5661cc6318ff2d263a8dcedc654d33bed7be90217",
+        "recoveryGitBlobOid": "99dc677780dd14c03c95cc423170b9816ad7e2e5"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r2/capture-provenance.json",
+      "jsonLocation": "execution.sources.161.path",
+      "sourcePath": "js/src/skills/terrain.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:711b75eabb49d794865080e9adcaca325cce83f1dea79cf379136aec7141ba47",
+      "currentAtRemediationSha256": "sha256:a7afb5095a518d2e7052772d3fc7873ef6acf1d82a5c0e92dcd8f44ffc28efd6",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/711b75eabb49d794865080e9adcaca325cce83f1dea79cf379136aec7141ba47.blob",
+        "archiveSha256": "sha256:711b75eabb49d794865080e9adcaca325cce83f1dea79cf379136aec7141ba47",
+        "recoveryGitBlobOid": "e5488a96797f69d9680b32b0e0f629c4dd708ab7"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r2/capture-provenance.json",
+      "jsonLocation": "execution.sources.167.path",
+      "sourcePath": "js/src/skills/village.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:38d11526f03a9909549aa7526b019ba9f239957e3783744540a8c12274c5e724",
+      "currentAtRemediationSha256": "sha256:489f008a45dcfe2b059150a692c1bca531b54a4155230562bbc0f9b72832da90",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/38d11526f03a9909549aa7526b019ba9f239957e3783744540a8c12274c5e724.blob",
+        "archiveSha256": "sha256:38d11526f03a9909549aa7526b019ba9f239957e3783744540a8c12274c5e724",
+        "recoveryGitBlobOid": "7e3d82589e3cda6f0a7469341f6c2bf3dca3f415"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r2/capture-provenance.json",
+      "jsonLocation": "execution.sources.35.path",
+      "sourcePath": "js/src/demos/building_multi_room_review_window.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:97758f7274382abd667cee74f6b475bdc5ee2ffe4e04b3989d46a73590f2ed10",
+      "currentAtRemediationSha256": "sha256:1f218c31dda4fe3471e6e1352a5425e93a100e2be0a316c0a3163f84e0c6874d",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r2/capture-provenance.json",
+      "jsonLocation": "execution.sources.71.path",
+      "sourcePath": "js/src/render/building-multi-room-review-scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:8b156978b5ff119f1f4f4ff9264d07611611de170bce6b03242bad90ab454bd5",
+      "currentAtRemediationSha256": "sha256:c9be278f0d4419162811859e1251ef6020f6e3b107c2af35ce9c0552227e700b",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r2/capture-provenance.json",
+      "jsonLocation": "execution.sources.72.path",
+      "sourcePath": "js/src/render/building-semantic-evidence.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:bccdaaf1f0f45d3601afe901eb82b718c6b5db1fb9025997c5018f13829c9584",
+      "currentAtRemediationSha256": "sha256:b7f076e2b2b7fae28b4d7635799b6060b0536f7b5b97ca028cb1d6e2ef79a240",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r2/capture-provenance.json",
+      "jsonLocation": "execution.sources.73.path",
+      "sourcePath": "js/src/render/building-site-review-envelope.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:96ac8c84bd2dc58c28f11bb2f48169a87fd488c05c89a2cbaf02c5caad2d3cb8",
+      "currentAtRemediationSha256": "sha256:cf048b4d0c479a4f45ee1ae06db316ed12d840a944ef94be61133b536d823bc1",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/96ac8c84bd2dc58c28f11bb2f48169a87fd488c05c89a2cbaf02c5caad2d3cb8.blob",
+        "archiveSha256": "sha256:96ac8c84bd2dc58c28f11bb2f48169a87fd488c05c89a2cbaf02c5caad2d3cb8",
+        "recoveryGitBlobOid": "8bc997c317fcc57b7b29d26ba57ecf753668c34c"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r2/capture-provenance.json",
+      "jsonLocation": "execution.sources.78.path",
+      "sourcePath": "js/src/render/fb4-capture-provenance.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:3e2e3533b77bc5adb4c461c297c1a61ceb600e154de61dd23f790f751da03be1",
+      "currentAtRemediationSha256": "sha256:7d8e9f3636e1740a77651236b414069bb464eb4b42604c7ac848c66710589d32",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/3e2e3533b77bc5adb4c461c297c1a61ceb600e154de61dd23f790f751da03be1.blob",
+        "archiveSha256": "sha256:3e2e3533b77bc5adb4c461c297c1a61ceb600e154de61dd23f790f751da03be1",
+        "recoveryGitBlobOid": "7148889910fcd29ab1ec4301bab9bcd2510740e3"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r2/capture-provenance.json",
+      "jsonLocation": "execution.sources.8.path",
+      "sourcePath": "js/src/architecture/building-articulation-cpu-proxy.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:c28d5efedfc23e193fd37fa3f30b5d53240d105406d591345f1538c275b57733",
+      "currentAtRemediationSha256": "sha256:b2f6af4c9e532570431ac612bad233a3163f488f718b2511113e8a2f97835fa1",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r2/capture-provenance.json",
+      "jsonLocation": "execution.sources.9.path",
+      "sourcePath": "js/src/architecture/furniture-design-contract.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:cea19b23c5477d68f812bd8a636ee97c97ba3034c724aa4141cc2b8063262810",
+      "currentAtRemediationSha256": "sha256:f68dac2ac729334dbbab79323cbd8947ea8061f94103976839ba3d3971332efc",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/cea19b23c5477d68f812bd8a636ee97c97ba3034c724aa4141cc2b8063262810.blob",
+        "archiveSha256": "sha256:cea19b23c5477d68f812bd8a636ee97c97ba3034c724aa4141cc2b8063262810",
+        "recoveryGitBlobOid": "3fce05e33453604150cdca26afa047a6d5d85e7a"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r3/capture-provenance.json",
+      "jsonLocation": "execution.sources.10.path",
+      "sourcePath": "js/src/architecture/visual-design-contract.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:d9e0ccd97526eaa65a72cd3ee85e2d2ae0813792401e79893f39cc2d48161e7f",
+      "currentAtRemediationSha256": "sha256:c83c29f995b0541a8467dfe05426bfb85ff58ed42f6cf2a798a6ffa3b2b2ac39",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/d9e0ccd97526eaa65a72cd3ee85e2d2ae0813792401e79893f39cc2d48161e7f.blob",
+        "archiveSha256": "sha256:d9e0ccd97526eaa65a72cd3ee85e2d2ae0813792401e79893f39cc2d48161e7f",
+        "recoveryGitBlobOid": "0cd21ec047468b7396f551b51f25ba49ffcb63b9"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r3/capture-provenance.json",
+      "jsonLocation": "execution.sources.117.path",
+      "sourcePath": "js/src/skills/asset.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:4a4d742fa628c14973063286d2ed7614dd2616635708f34d8b7dd55910369a60",
+      "currentAtRemediationSha256": "sha256:798e43604d4982e7bc391c71de7624109c939b6111ce2a733e0c530c3af56943",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/4a4d742fa628c14973063286d2ed7614dd2616635708f34d8b7dd55910369a60.blob",
+        "archiveSha256": "sha256:4a4d742fa628c14973063286d2ed7614dd2616635708f34d8b7dd55910369a60",
+        "recoveryGitBlobOid": "77d4d320eb95532bc464a7c3aaa1f31339166f26"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r3/capture-provenance.json",
+      "jsonLocation": "execution.sources.13.path",
+      "sourcePath": "js/src/assets/functional-building-contract.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:718701b526e6158efa8ae2971d65649619fedc9e3d06255d8bb2cb458779bbe4",
+      "currentAtRemediationSha256": "sha256:dba38f0f2e965e9aefab82f4222eaece6e327b0a0f36e47e0f99148d0d115cd6",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r3/capture-provenance.json",
+      "jsonLocation": "execution.sources.14.path",
+      "sourcePath": "js/src/assets/functional-building-site-artifact.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:2333c96958dda809ae3aa68a3df624d3113c06446f3e05737ac03b6a9aebf06b",
+      "currentAtRemediationSha256": "sha256:a82836041e90e7bee4e51b95f40e05b483f9ce4d0f775f2d9502ee446ee91cbc",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/2333c96958dda809ae3aa68a3df624d3113c06446f3e05737ac03b6a9aebf06b.blob",
+        "archiveSha256": "sha256:2333c96958dda809ae3aa68a3df624d3113c06446f3e05737ac03b6a9aebf06b",
+        "recoveryGitBlobOid": "9618fe116c112d3d6c48ac035caa98b5a783f345"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r3/capture-provenance.json",
+      "jsonLocation": "execution.sources.144.path",
+      "sourcePath": "js/src/skills/material.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:1c0d78074c261f4f8a5582378f946933a64ea5493ad1d8e88802972f27986450",
+      "currentAtRemediationSha256": "sha256:0beee56c90374d2aaaec0a88c6873881f4569281ec9b156663d1856edbab4b6a",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/1c0d78074c261f4f8a5582378f946933a64ea5493ad1d8e88802972f27986450.blob",
+        "archiveSha256": "sha256:1c0d78074c261f4f8a5582378f946933a64ea5493ad1d8e88802972f27986450",
+        "recoveryGitBlobOid": "5b68c6c601cc7e7b6433f19d6416ad525129d555"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r3/capture-provenance.json",
+      "jsonLocation": "execution.sources.156.path",
+      "sourcePath": "js/src/skills/scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:f14073e4ae6ffaf94c4becd5661cc6318ff2d263a8dcedc654d33bed7be90217",
+      "currentAtRemediationSha256": "sha256:c035119f28d9b5e1494c8e669580503ff40ae65a95c041039f904e8cd9d08e74",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/f14073e4ae6ffaf94c4becd5661cc6318ff2d263a8dcedc654d33bed7be90217.blob",
+        "archiveSha256": "sha256:f14073e4ae6ffaf94c4becd5661cc6318ff2d263a8dcedc654d33bed7be90217",
+        "recoveryGitBlobOid": "99dc677780dd14c03c95cc423170b9816ad7e2e5"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r3/capture-provenance.json",
+      "jsonLocation": "execution.sources.161.path",
+      "sourcePath": "js/src/skills/terrain.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:711b75eabb49d794865080e9adcaca325cce83f1dea79cf379136aec7141ba47",
+      "currentAtRemediationSha256": "sha256:a7afb5095a518d2e7052772d3fc7873ef6acf1d82a5c0e92dcd8f44ffc28efd6",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/711b75eabb49d794865080e9adcaca325cce83f1dea79cf379136aec7141ba47.blob",
+        "archiveSha256": "sha256:711b75eabb49d794865080e9adcaca325cce83f1dea79cf379136aec7141ba47",
+        "recoveryGitBlobOid": "e5488a96797f69d9680b32b0e0f629c4dd708ab7"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r3/capture-provenance.json",
+      "jsonLocation": "execution.sources.167.path",
+      "sourcePath": "js/src/skills/village.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:38d11526f03a9909549aa7526b019ba9f239957e3783744540a8c12274c5e724",
+      "currentAtRemediationSha256": "sha256:489f008a45dcfe2b059150a692c1bca531b54a4155230562bbc0f9b72832da90",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/38d11526f03a9909549aa7526b019ba9f239957e3783744540a8c12274c5e724.blob",
+        "archiveSha256": "sha256:38d11526f03a9909549aa7526b019ba9f239957e3783744540a8c12274c5e724",
+        "recoveryGitBlobOid": "7e3d82589e3cda6f0a7469341f6c2bf3dca3f415"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r3/capture-provenance.json",
+      "jsonLocation": "execution.sources.35.path",
+      "sourcePath": "js/src/demos/building_multi_room_review_window.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:97758f7274382abd667cee74f6b475bdc5ee2ffe4e04b3989d46a73590f2ed10",
+      "currentAtRemediationSha256": "sha256:1f218c31dda4fe3471e6e1352a5425e93a100e2be0a316c0a3163f84e0c6874d",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r3/capture-provenance.json",
+      "jsonLocation": "execution.sources.71.path",
+      "sourcePath": "js/src/render/building-multi-room-review-scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:8b156978b5ff119f1f4f4ff9264d07611611de170bce6b03242bad90ab454bd5",
+      "currentAtRemediationSha256": "sha256:c9be278f0d4419162811859e1251ef6020f6e3b107c2af35ce9c0552227e700b",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r3/capture-provenance.json",
+      "jsonLocation": "execution.sources.72.path",
+      "sourcePath": "js/src/render/building-semantic-evidence.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:bccdaaf1f0f45d3601afe901eb82b718c6b5db1fb9025997c5018f13829c9584",
+      "currentAtRemediationSha256": "sha256:b7f076e2b2b7fae28b4d7635799b6060b0536f7b5b97ca028cb1d6e2ef79a240",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r3/capture-provenance.json",
+      "jsonLocation": "execution.sources.73.path",
+      "sourcePath": "js/src/render/building-site-review-envelope.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:96ac8c84bd2dc58c28f11bb2f48169a87fd488c05c89a2cbaf02c5caad2d3cb8",
+      "currentAtRemediationSha256": "sha256:cf048b4d0c479a4f45ee1ae06db316ed12d840a944ef94be61133b536d823bc1",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/96ac8c84bd2dc58c28f11bb2f48169a87fd488c05c89a2cbaf02c5caad2d3cb8.blob",
+        "archiveSha256": "sha256:96ac8c84bd2dc58c28f11bb2f48169a87fd488c05c89a2cbaf02c5caad2d3cb8",
+        "recoveryGitBlobOid": "8bc997c317fcc57b7b29d26ba57ecf753668c34c"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r3/capture-provenance.json",
+      "jsonLocation": "execution.sources.78.path",
+      "sourcePath": "js/src/render/fb4-capture-provenance.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:3e2e3533b77bc5adb4c461c297c1a61ceb600e154de61dd23f790f751da03be1",
+      "currentAtRemediationSha256": "sha256:7d8e9f3636e1740a77651236b414069bb464eb4b42604c7ac848c66710589d32",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/3e2e3533b77bc5adb4c461c297c1a61ceb600e154de61dd23f790f751da03be1.blob",
+        "archiveSha256": "sha256:3e2e3533b77bc5adb4c461c297c1a61ceb600e154de61dd23f790f751da03be1",
+        "recoveryGitBlobOid": "7148889910fcd29ab1ec4301bab9bcd2510740e3"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r3/capture-provenance.json",
+      "jsonLocation": "execution.sources.8.path",
+      "sourcePath": "js/src/architecture/building-articulation-cpu-proxy.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:c28d5efedfc23e193fd37fa3f30b5d53240d105406d591345f1538c275b57733",
+      "currentAtRemediationSha256": "sha256:b2f6af4c9e532570431ac612bad233a3163f488f718b2511113e8a2f97835fa1",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r3/capture-provenance.json",
+      "jsonLocation": "execution.sources.9.path",
+      "sourcePath": "js/src/architecture/furniture-design-contract.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:cea19b23c5477d68f812bd8a636ee97c97ba3034c724aa4141cc2b8063262810",
+      "currentAtRemediationSha256": "sha256:f68dac2ac729334dbbab79323cbd8947ea8061f94103976839ba3d3971332efc",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/cea19b23c5477d68f812bd8a636ee97c97ba3034c724aa4141cc2b8063262810.blob",
+        "archiveSha256": "sha256:cea19b23c5477d68f812bd8a636ee97c97ba3034c724aa4141cc2b8063262810",
+        "recoveryGitBlobOid": "3fce05e33453604150cdca26afa047a6d5d85e7a"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r4/capture-provenance.json",
+      "jsonLocation": "execution.sources.10.path",
+      "sourcePath": "js/src/architecture/visual-design-contract.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:d9e0ccd97526eaa65a72cd3ee85e2d2ae0813792401e79893f39cc2d48161e7f",
+      "currentAtRemediationSha256": "sha256:c83c29f995b0541a8467dfe05426bfb85ff58ed42f6cf2a798a6ffa3b2b2ac39",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/d9e0ccd97526eaa65a72cd3ee85e2d2ae0813792401e79893f39cc2d48161e7f.blob",
+        "archiveSha256": "sha256:d9e0ccd97526eaa65a72cd3ee85e2d2ae0813792401e79893f39cc2d48161e7f",
+        "recoveryGitBlobOid": "0cd21ec047468b7396f551b51f25ba49ffcb63b9"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r4/capture-provenance.json",
+      "jsonLocation": "execution.sources.117.path",
+      "sourcePath": "js/src/skills/asset.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:4a4d742fa628c14973063286d2ed7614dd2616635708f34d8b7dd55910369a60",
+      "currentAtRemediationSha256": "sha256:798e43604d4982e7bc391c71de7624109c939b6111ce2a733e0c530c3af56943",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/4a4d742fa628c14973063286d2ed7614dd2616635708f34d8b7dd55910369a60.blob",
+        "archiveSha256": "sha256:4a4d742fa628c14973063286d2ed7614dd2616635708f34d8b7dd55910369a60",
+        "recoveryGitBlobOid": "77d4d320eb95532bc464a7c3aaa1f31339166f26"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r4/capture-provenance.json",
+      "jsonLocation": "execution.sources.13.path",
+      "sourcePath": "js/src/assets/functional-building-contract.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:718701b526e6158efa8ae2971d65649619fedc9e3d06255d8bb2cb458779bbe4",
+      "currentAtRemediationSha256": "sha256:dba38f0f2e965e9aefab82f4222eaece6e327b0a0f36e47e0f99148d0d115cd6",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r4/capture-provenance.json",
+      "jsonLocation": "execution.sources.14.path",
+      "sourcePath": "js/src/assets/functional-building-site-artifact.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:2333c96958dda809ae3aa68a3df624d3113c06446f3e05737ac03b6a9aebf06b",
+      "currentAtRemediationSha256": "sha256:a82836041e90e7bee4e51b95f40e05b483f9ce4d0f775f2d9502ee446ee91cbc",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/2333c96958dda809ae3aa68a3df624d3113c06446f3e05737ac03b6a9aebf06b.blob",
+        "archiveSha256": "sha256:2333c96958dda809ae3aa68a3df624d3113c06446f3e05737ac03b6a9aebf06b",
+        "recoveryGitBlobOid": "9618fe116c112d3d6c48ac035caa98b5a783f345"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r4/capture-provenance.json",
+      "jsonLocation": "execution.sources.144.path",
+      "sourcePath": "js/src/skills/material.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:1c0d78074c261f4f8a5582378f946933a64ea5493ad1d8e88802972f27986450",
+      "currentAtRemediationSha256": "sha256:0beee56c90374d2aaaec0a88c6873881f4569281ec9b156663d1856edbab4b6a",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/1c0d78074c261f4f8a5582378f946933a64ea5493ad1d8e88802972f27986450.blob",
+        "archiveSha256": "sha256:1c0d78074c261f4f8a5582378f946933a64ea5493ad1d8e88802972f27986450",
+        "recoveryGitBlobOid": "5b68c6c601cc7e7b6433f19d6416ad525129d555"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r4/capture-provenance.json",
+      "jsonLocation": "execution.sources.156.path",
+      "sourcePath": "js/src/skills/scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:f14073e4ae6ffaf94c4becd5661cc6318ff2d263a8dcedc654d33bed7be90217",
+      "currentAtRemediationSha256": "sha256:c035119f28d9b5e1494c8e669580503ff40ae65a95c041039f904e8cd9d08e74",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/f14073e4ae6ffaf94c4becd5661cc6318ff2d263a8dcedc654d33bed7be90217.blob",
+        "archiveSha256": "sha256:f14073e4ae6ffaf94c4becd5661cc6318ff2d263a8dcedc654d33bed7be90217",
+        "recoveryGitBlobOid": "99dc677780dd14c03c95cc423170b9816ad7e2e5"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r4/capture-provenance.json",
+      "jsonLocation": "execution.sources.161.path",
+      "sourcePath": "js/src/skills/terrain.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:711b75eabb49d794865080e9adcaca325cce83f1dea79cf379136aec7141ba47",
+      "currentAtRemediationSha256": "sha256:a7afb5095a518d2e7052772d3fc7873ef6acf1d82a5c0e92dcd8f44ffc28efd6",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/711b75eabb49d794865080e9adcaca325cce83f1dea79cf379136aec7141ba47.blob",
+        "archiveSha256": "sha256:711b75eabb49d794865080e9adcaca325cce83f1dea79cf379136aec7141ba47",
+        "recoveryGitBlobOid": "e5488a96797f69d9680b32b0e0f629c4dd708ab7"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r4/capture-provenance.json",
+      "jsonLocation": "execution.sources.167.path",
+      "sourcePath": "js/src/skills/village.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:38d11526f03a9909549aa7526b019ba9f239957e3783744540a8c12274c5e724",
+      "currentAtRemediationSha256": "sha256:489f008a45dcfe2b059150a692c1bca531b54a4155230562bbc0f9b72832da90",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/38d11526f03a9909549aa7526b019ba9f239957e3783744540a8c12274c5e724.blob",
+        "archiveSha256": "sha256:38d11526f03a9909549aa7526b019ba9f239957e3783744540a8c12274c5e724",
+        "recoveryGitBlobOid": "7e3d82589e3cda6f0a7469341f6c2bf3dca3f415"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r4/capture-provenance.json",
+      "jsonLocation": "execution.sources.35.path",
+      "sourcePath": "js/src/demos/building_multi_room_review_window.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:97758f7274382abd667cee74f6b475bdc5ee2ffe4e04b3989d46a73590f2ed10",
+      "currentAtRemediationSha256": "sha256:1f218c31dda4fe3471e6e1352a5425e93a100e2be0a316c0a3163f84e0c6874d",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r4/capture-provenance.json",
+      "jsonLocation": "execution.sources.71.path",
+      "sourcePath": "js/src/render/building-multi-room-review-scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:8b156978b5ff119f1f4f4ff9264d07611611de170bce6b03242bad90ab454bd5",
+      "currentAtRemediationSha256": "sha256:c9be278f0d4419162811859e1251ef6020f6e3b107c2af35ce9c0552227e700b",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r4/capture-provenance.json",
+      "jsonLocation": "execution.sources.72.path",
+      "sourcePath": "js/src/render/building-semantic-evidence.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:bccdaaf1f0f45d3601afe901eb82b718c6b5db1fb9025997c5018f13829c9584",
+      "currentAtRemediationSha256": "sha256:b7f076e2b2b7fae28b4d7635799b6060b0536f7b5b97ca028cb1d6e2ef79a240",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r4/capture-provenance.json",
+      "jsonLocation": "execution.sources.73.path",
+      "sourcePath": "js/src/render/building-site-review-envelope.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:96ac8c84bd2dc58c28f11bb2f48169a87fd488c05c89a2cbaf02c5caad2d3cb8",
+      "currentAtRemediationSha256": "sha256:cf048b4d0c479a4f45ee1ae06db316ed12d840a944ef94be61133b536d823bc1",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/96ac8c84bd2dc58c28f11bb2f48169a87fd488c05c89a2cbaf02c5caad2d3cb8.blob",
+        "archiveSha256": "sha256:96ac8c84bd2dc58c28f11bb2f48169a87fd488c05c89a2cbaf02c5caad2d3cb8",
+        "recoveryGitBlobOid": "8bc997c317fcc57b7b29d26ba57ecf753668c34c"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r4/capture-provenance.json",
+      "jsonLocation": "execution.sources.78.path",
+      "sourcePath": "js/src/render/fb4-capture-provenance.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:3e2e3533b77bc5adb4c461c297c1a61ceb600e154de61dd23f790f751da03be1",
+      "currentAtRemediationSha256": "sha256:7d8e9f3636e1740a77651236b414069bb464eb4b42604c7ac848c66710589d32",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/3e2e3533b77bc5adb4c461c297c1a61ceb600e154de61dd23f790f751da03be1.blob",
+        "archiveSha256": "sha256:3e2e3533b77bc5adb4c461c297c1a61ceb600e154de61dd23f790f751da03be1",
+        "recoveryGitBlobOid": "7148889910fcd29ab1ec4301bab9bcd2510740e3"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r4/capture-provenance.json",
+      "jsonLocation": "execution.sources.8.path",
+      "sourcePath": "js/src/architecture/building-articulation-cpu-proxy.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:c28d5efedfc23e193fd37fa3f30b5d53240d105406d591345f1538c275b57733",
+      "currentAtRemediationSha256": "sha256:b2f6af4c9e532570431ac612bad233a3163f488f718b2511113e8a2f97835fa1",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fb4-multi-room/program-v3-a11f21423016-v4-r4/capture-provenance.json",
+      "jsonLocation": "execution.sources.9.path",
+      "sourcePath": "js/src/architecture/furniture-design-contract.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:cea19b23c5477d68f812bd8a636ee97c97ba3034c724aa4141cc2b8063262810",
+      "currentAtRemediationSha256": "sha256:f68dac2ac729334dbbab79323cbd8947ea8061f94103976839ba3d3971332efc",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/cea19b23c5477d68f812bd8a636ee97c97ba3034c724aa4141cc2b8063262810.blob",
+        "archiveSha256": "sha256:cea19b23c5477d68f812bd8a636ee97c97ba3034c724aa4141cc2b8063262810",
+        "recoveryGitBlobOid": "3fce05e33453604150cdca26afa047a6d5d85e7a"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r12/capture-evidence.json",
+      "jsonLocation": "source.0.path",
+      "sourcePath": "js/src/assets/building-fire-runtime-v2.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:52e3eafaf2fc2f424c44bc64067674ad122e1cc7a5af1cae87dde01abbf1f171",
+      "currentAtRemediationSha256": "sha256:415a1bba035691c87d05c2d960e92cd4bf52d806f83ccfd335ece0fc62c9570d",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/52e3eafaf2fc2f424c44bc64067674ad122e1cc7a5af1cae87dde01abbf1f171.blob",
+        "archiveSha256": "sha256:52e3eafaf2fc2f424c44bc64067674ad122e1cc7a5af1cae87dde01abbf1f171",
+        "recoveryGitBlobOid": "b93d89f8fb93124907f8898ccd3e6674c60eecd0"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r12/capture-evidence.json",
+      "jsonLocation": "source.1.path",
+      "sourcePath": "js/src/render/building-fire-review-authority.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:243363cb0c56bbf8e73f75d9859e8130bd1a70b60063daeb46d7471a041b4b7b",
+      "currentAtRemediationSha256": "sha256:086c7fed0b6bc5a6a18fd45d6cc62ae9400e8e4e580a10a048251bb8b99ba51a",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/243363cb0c56bbf8e73f75d9859e8130bd1a70b60063daeb46d7471a041b4b7b.blob",
+        "archiveSha256": "sha256:243363cb0c56bbf8e73f75d9859e8130bd1a70b60063daeb46d7471a041b4b7b",
+        "recoveryGitBlobOid": "3bc347c03421218f1503cc59a33009632e07e96d"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r12/capture-evidence.json",
+      "jsonLocation": "source.10.path",
+      "sourcePath": "js/src/demos/building_fire_capture_window.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:643d1ccf99f23cbcbaaeb2f8f3e65617e982c12a6a2aacb78fb1c1e77ad73fa2",
+      "currentAtRemediationSha256": "sha256:99c209c5e1c1eb1407ced6d2c9c272f1e4074910b472930795ac107f9fe1fcca",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/643d1ccf99f23cbcbaaeb2f8f3e65617e982c12a6a2aacb78fb1c1e77ad73fa2.blob",
+        "archiveSha256": "sha256:643d1ccf99f23cbcbaaeb2f8f3e65617e982c12a6a2aacb78fb1c1e77ad73fa2",
+        "recoveryGitBlobOid": "3af319f22c7353278cadc138b558de0c63ee1dee"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r12/capture-evidence.json",
+      "jsonLocation": "source.2.path",
+      "sourcePath": "js/src/render/building-composition-review-scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68",
+      "currentAtRemediationSha256": "sha256:3df1f3849f11d8ae1aa8c04d314373d6ffc26a7e04cc847510f2fa33a42a3c2f",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68.blob",
+        "archiveSha256": "sha256:ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68",
+        "recoveryGitBlobOid": "e2085ff2bc9e551db0acf56444d26e27c1bd4526"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r12/capture-evidence.json",
+      "jsonLocation": "source.8.path",
+      "sourcePath": "js/src/skills/asset.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:77ce7a8723a9bd4b16bf7b5108bf72db00f16e91fd5cd3cc0f3102f14eed257d",
+      "currentAtRemediationSha256": "sha256:798e43604d4982e7bc391c71de7624109c939b6111ce2a733e0c530c3af56943",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/77ce7a8723a9bd4b16bf7b5108bf72db00f16e91fd5cd3cc0f3102f14eed257d.blob",
+        "archiveSha256": "sha256:77ce7a8723a9bd4b16bf7b5108bf72db00f16e91fd5cd3cc0f3102f14eed257d",
+        "recoveryGitBlobOid": "ffa9fd2d5d027f55a988520d7d452fb78b2fe38f"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r13/capture-evidence.json",
+      "jsonLocation": "source.0.path",
+      "sourcePath": "js/src/assets/building-fire-runtime-v2.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:52e3eafaf2fc2f424c44bc64067674ad122e1cc7a5af1cae87dde01abbf1f171",
+      "currentAtRemediationSha256": "sha256:415a1bba035691c87d05c2d960e92cd4bf52d806f83ccfd335ece0fc62c9570d",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/52e3eafaf2fc2f424c44bc64067674ad122e1cc7a5af1cae87dde01abbf1f171.blob",
+        "archiveSha256": "sha256:52e3eafaf2fc2f424c44bc64067674ad122e1cc7a5af1cae87dde01abbf1f171",
+        "recoveryGitBlobOid": "b93d89f8fb93124907f8898ccd3e6674c60eecd0"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r13/capture-evidence.json",
+      "jsonLocation": "source.1.path",
+      "sourcePath": "js/src/render/building-fire-review-authority.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:243363cb0c56bbf8e73f75d9859e8130bd1a70b60063daeb46d7471a041b4b7b",
+      "currentAtRemediationSha256": "sha256:086c7fed0b6bc5a6a18fd45d6cc62ae9400e8e4e580a10a048251bb8b99ba51a",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/243363cb0c56bbf8e73f75d9859e8130bd1a70b60063daeb46d7471a041b4b7b.blob",
+        "archiveSha256": "sha256:243363cb0c56bbf8e73f75d9859e8130bd1a70b60063daeb46d7471a041b4b7b",
+        "recoveryGitBlobOid": "3bc347c03421218f1503cc59a33009632e07e96d"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r13/capture-evidence.json",
+      "jsonLocation": "source.10.path",
+      "sourcePath": "js/src/demos/building_fire_capture_window.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:643d1ccf99f23cbcbaaeb2f8f3e65617e982c12a6a2aacb78fb1c1e77ad73fa2",
+      "currentAtRemediationSha256": "sha256:99c209c5e1c1eb1407ced6d2c9c272f1e4074910b472930795ac107f9fe1fcca",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/643d1ccf99f23cbcbaaeb2f8f3e65617e982c12a6a2aacb78fb1c1e77ad73fa2.blob",
+        "archiveSha256": "sha256:643d1ccf99f23cbcbaaeb2f8f3e65617e982c12a6a2aacb78fb1c1e77ad73fa2",
+        "recoveryGitBlobOid": "3af319f22c7353278cadc138b558de0c63ee1dee"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r13/capture-evidence.json",
+      "jsonLocation": "source.2.path",
+      "sourcePath": "js/src/render/building-composition-review-scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68",
+      "currentAtRemediationSha256": "sha256:3df1f3849f11d8ae1aa8c04d314373d6ffc26a7e04cc847510f2fa33a42a3c2f",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68.blob",
+        "archiveSha256": "sha256:ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68",
+        "recoveryGitBlobOid": "e2085ff2bc9e551db0acf56444d26e27c1bd4526"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r13/capture-evidence.json",
+      "jsonLocation": "source.8.path",
+      "sourcePath": "js/src/skills/asset.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:77ce7a8723a9bd4b16bf7b5108bf72db00f16e91fd5cd3cc0f3102f14eed257d",
+      "currentAtRemediationSha256": "sha256:798e43604d4982e7bc391c71de7624109c939b6111ce2a733e0c530c3af56943",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/77ce7a8723a9bd4b16bf7b5108bf72db00f16e91fd5cd3cc0f3102f14eed257d.blob",
+        "archiveSha256": "sha256:77ce7a8723a9bd4b16bf7b5108bf72db00f16e91fd5cd3cc0f3102f14eed257d",
+        "recoveryGitBlobOid": "ffa9fd2d5d027f55a988520d7d452fb78b2fe38f"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r14/capture-evidence.json",
+      "jsonLocation": "source.0.path",
+      "sourcePath": "js/src/assets/building-fire-runtime-v2.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:52e3eafaf2fc2f424c44bc64067674ad122e1cc7a5af1cae87dde01abbf1f171",
+      "currentAtRemediationSha256": "sha256:415a1bba035691c87d05c2d960e92cd4bf52d806f83ccfd335ece0fc62c9570d",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/52e3eafaf2fc2f424c44bc64067674ad122e1cc7a5af1cae87dde01abbf1f171.blob",
+        "archiveSha256": "sha256:52e3eafaf2fc2f424c44bc64067674ad122e1cc7a5af1cae87dde01abbf1f171",
+        "recoveryGitBlobOid": "b93d89f8fb93124907f8898ccd3e6674c60eecd0"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r14/capture-evidence.json",
+      "jsonLocation": "source.1.path",
+      "sourcePath": "js/src/render/building-fire-review-authority.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:243363cb0c56bbf8e73f75d9859e8130bd1a70b60063daeb46d7471a041b4b7b",
+      "currentAtRemediationSha256": "sha256:086c7fed0b6bc5a6a18fd45d6cc62ae9400e8e4e580a10a048251bb8b99ba51a",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/243363cb0c56bbf8e73f75d9859e8130bd1a70b60063daeb46d7471a041b4b7b.blob",
+        "archiveSha256": "sha256:243363cb0c56bbf8e73f75d9859e8130bd1a70b60063daeb46d7471a041b4b7b",
+        "recoveryGitBlobOid": "3bc347c03421218f1503cc59a33009632e07e96d"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r14/capture-evidence.json",
+      "jsonLocation": "source.10.path",
+      "sourcePath": "js/src/demos/building_fire_capture_window.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:643d1ccf99f23cbcbaaeb2f8f3e65617e982c12a6a2aacb78fb1c1e77ad73fa2",
+      "currentAtRemediationSha256": "sha256:99c209c5e1c1eb1407ced6d2c9c272f1e4074910b472930795ac107f9fe1fcca",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/643d1ccf99f23cbcbaaeb2f8f3e65617e982c12a6a2aacb78fb1c1e77ad73fa2.blob",
+        "archiveSha256": "sha256:643d1ccf99f23cbcbaaeb2f8f3e65617e982c12a6a2aacb78fb1c1e77ad73fa2",
+        "recoveryGitBlobOid": "3af319f22c7353278cadc138b558de0c63ee1dee"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r14/capture-evidence.json",
+      "jsonLocation": "source.2.path",
+      "sourcePath": "js/src/render/building-composition-review-scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68",
+      "currentAtRemediationSha256": "sha256:3df1f3849f11d8ae1aa8c04d314373d6ffc26a7e04cc847510f2fa33a42a3c2f",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68.blob",
+        "archiveSha256": "sha256:ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68",
+        "recoveryGitBlobOid": "e2085ff2bc9e551db0acf56444d26e27c1bd4526"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r14/capture-evidence.json",
+      "jsonLocation": "source.8.path",
+      "sourcePath": "js/src/skills/asset.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:77ce7a8723a9bd4b16bf7b5108bf72db00f16e91fd5cd3cc0f3102f14eed257d",
+      "currentAtRemediationSha256": "sha256:798e43604d4982e7bc391c71de7624109c939b6111ce2a733e0c530c3af56943",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/77ce7a8723a9bd4b16bf7b5108bf72db00f16e91fd5cd3cc0f3102f14eed257d.blob",
+        "archiveSha256": "sha256:77ce7a8723a9bd4b16bf7b5108bf72db00f16e91fd5cd3cc0f3102f14eed257d",
+        "recoveryGitBlobOid": "ffa9fd2d5d027f55a988520d7d452fb78b2fe38f"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r15/capture-evidence.json",
+      "jsonLocation": "source.0.path",
+      "sourcePath": "js/src/assets/building-fire-runtime-v2.mjs",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:52e3eafaf2fc2f424c44bc64067674ad122e1cc7a5af1cae87dde01abbf1f171",
+      "currentAtRemediationSha256": "sha256:415a1bba035691c87d05c2d960e92cd4bf52d806f83ccfd335ece0fc62c9570d",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/52e3eafaf2fc2f424c44bc64067674ad122e1cc7a5af1cae87dde01abbf1f171.blob",
+        "archiveSha256": "sha256:52e3eafaf2fc2f424c44bc64067674ad122e1cc7a5af1cae87dde01abbf1f171",
+        "recoveryGitBlobOid": "b93d89f8fb93124907f8898ccd3e6674c60eecd0"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r15/capture-evidence.json",
+      "jsonLocation": "source.1.path",
+      "sourcePath": "js/src/render/building-fire-review-authority.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:243363cb0c56bbf8e73f75d9859e8130bd1a70b60063daeb46d7471a041b4b7b",
+      "currentAtRemediationSha256": "sha256:086c7fed0b6bc5a6a18fd45d6cc62ae9400e8e4e580a10a048251bb8b99ba51a",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/243363cb0c56bbf8e73f75d9859e8130bd1a70b60063daeb46d7471a041b4b7b.blob",
+        "archiveSha256": "sha256:243363cb0c56bbf8e73f75d9859e8130bd1a70b60063daeb46d7471a041b4b7b",
+        "recoveryGitBlobOid": "3bc347c03421218f1503cc59a33009632e07e96d"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r15/capture-evidence.json",
+      "jsonLocation": "source.10.path",
+      "sourcePath": "js/src/demos/building_fire_capture_window.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:643d1ccf99f23cbcbaaeb2f8f3e65617e982c12a6a2aacb78fb1c1e77ad73fa2",
+      "currentAtRemediationSha256": "sha256:99c209c5e1c1eb1407ced6d2c9c272f1e4074910b472930795ac107f9fe1fcca",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/643d1ccf99f23cbcbaaeb2f8f3e65617e982c12a6a2aacb78fb1c1e77ad73fa2.blob",
+        "archiveSha256": "sha256:643d1ccf99f23cbcbaaeb2f8f3e65617e982c12a6a2aacb78fb1c1e77ad73fa2",
+        "recoveryGitBlobOid": "3af319f22c7353278cadc138b558de0c63ee1dee"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r15/capture-evidence.json",
+      "jsonLocation": "source.2.path",
+      "sourcePath": "js/src/render/building-composition-review-scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68",
+      "currentAtRemediationSha256": "sha256:3df1f3849f11d8ae1aa8c04d314373d6ffc26a7e04cc847510f2fa33a42a3c2f",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68.blob",
+        "archiveSha256": "sha256:ae7a135c3b44e7ca57cb3d8f21910df2c357d988281ab0ac285e8ecebabc4d68",
+        "recoveryGitBlobOid": "e2085ff2bc9e551db0acf56444d26e27c1bd4526"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/fire/functional-hall-house-v4-v1-volumetric-r15/capture-evidence.json",
+      "jsonLocation": "source.8.path",
+      "sourcePath": "js/src/skills/asset.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:77ce7a8723a9bd4b16bf7b5108bf72db00f16e91fd5cd3cc0f3102f14eed257d",
+      "currentAtRemediationSha256": "sha256:798e43604d4982e7bc391c71de7624109c939b6111ce2a733e0c530c3af56943",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/77ce7a8723a9bd4b16bf7b5108bf72db00f16e91fd5cd3cc0f3102f14eed257d.blob",
+        "archiveSha256": "sha256:77ce7a8723a9bd4b16bf7b5108bf72db00f16e91fd5cd3cc0f3102f14eed257d",
+        "recoveryGitBlobOid": "ffa9fd2d5d027f55a988520d7d452fb78b2fe38f"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/interiors/functional-hall-house-v4/i1-r2-yaw-r1/capture-evidence.json",
+      "jsonLocation": "source.0.path",
+      "sourcePath": "js/src/render/staged-interior-proxy-review-scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:8726c577ff59caa152c382cb040a5240d2f5dea27cdda9386b2556067ee72911",
+      "currentAtRemediationSha256": "sha256:dd83fd013dfe290b88e2d61b58f26f10ba0b5d5e7dc91645a940fe2f80a93788",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/interiors/functional-hall-house-v4/i1-r2-yaw-r1/capture-evidence.json",
+      "jsonLocation": "source.1.path",
+      "sourcePath": "js/src/demos/staged_interior_proxy_capture_window.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:9dd6cd95fb403945548b4b22e3f850e155d1dd60c0b38a818ca28632210cd007",
+      "currentAtRemediationSha256": "sha256:3513ceddeab21be8c6fbd4fb5f7544d7217962c174bdc621ae3998cf7db0d148",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/9dd6cd95fb403945548b4b22e3f850e155d1dd60c0b38a818ca28632210cd007.blob",
+        "archiveSha256": "sha256:9dd6cd95fb403945548b4b22e3f850e155d1dd60c0b38a818ca28632210cd007",
+        "recoveryGitBlobOid": "2aa5abe2d1d71ec07d7a2f19e7204d64fe61f6d7"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/interiors/functional-hall-house-v4/i1-r2/capture-evidence.json",
+      "jsonLocation": "source.0.path",
+      "sourcePath": "js/src/render/staged-interior-proxy-review-scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:e088c115c8f599b6b35b256e4616ffc9b66f6aefa48961981b6d811e48ac82c7",
+      "currentAtRemediationSha256": "sha256:dd83fd013dfe290b88e2d61b58f26f10ba0b5d5e7dc91645a940fe2f80a93788",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/interiors/functional-hall-house-v4/i1-r2/capture-evidence.json",
+      "jsonLocation": "source.1.path",
+      "sourcePath": "js/src/demos/staged_interior_proxy_capture_window.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:9217abfdd2eb3ae822425498650476bce3d5a6e88bfd9ad5d55edd3e5510ac0d",
+      "currentAtRemediationSha256": "sha256:3513ceddeab21be8c6fbd4fb5f7544d7217962c174bdc621ae3998cf7db0d148",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/interiors/functional-hall-house-v4/i1-r3/capture-evidence.json",
+      "jsonLocation": "source.0.path",
+      "sourcePath": "js/src/render/staged-interior-proxy-review-scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:93b5e2deb57a2222f6ac4c0ea881ff670bcbd441ada7eb1092b1b36be8c34305",
+      "currentAtRemediationSha256": "sha256:dd83fd013dfe290b88e2d61b58f26f10ba0b5d5e7dc91645a940fe2f80a93788",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/interiors/functional-hall-house-v4/i1-r3/capture-evidence.json",
+      "jsonLocation": "source.1.path",
+      "sourcePath": "js/src/demos/staged_interior_proxy_capture_window.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:9dd6cd95fb403945548b4b22e3f850e155d1dd60c0b38a818ca28632210cd007",
+      "currentAtRemediationSha256": "sha256:3513ceddeab21be8c6fbd4fb5f7544d7217962c174bdc621ae3998cf7db0d148",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/9dd6cd95fb403945548b4b22e3f850e155d1dd60c0b38a818ca28632210cd007.blob",
+        "archiveSha256": "sha256:9dd6cd95fb403945548b4b22e3f850e155d1dd60c0b38a818ca28632210cd007",
+        "recoveryGitBlobOid": "2aa5abe2d1d71ec07d7a2f19e7204d64fe61f6d7"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/interiors/functional-hall-house-v4/i1-r4/capture-evidence.json",
+      "jsonLocation": "source.0.path",
+      "sourcePath": "js/src/render/staged-interior-proxy-review-scene.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:b2bf4e0b534b5e1c7a404684a81c1c343bcb34aa14a2450083dec8b11e9da41e",
+      "currentAtRemediationSha256": "sha256:dd83fd013dfe290b88e2d61b58f26f10ba0b5d5e7dc91645a940fe2f80a93788",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/b2bf4e0b534b5e1c7a404684a81c1c343bcb34aa14a2450083dec8b11e9da41e.blob",
+        "archiveSha256": "sha256:b2bf4e0b534b5e1c7a404684a81c1c343bcb34aa14a2450083dec8b11e9da41e",
+        "recoveryGitBlobOid": "ecbc5a67405905c36042484cb15c86e58532ba1e"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/interiors/functional-hall-house-v4/i1-r4/capture-evidence.json",
+      "jsonLocation": "source.1.path",
+      "sourcePath": "js/src/demos/staged_interior_proxy_capture_window.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:9dd6cd95fb403945548b4b22e3f850e155d1dd60c0b38a818ca28632210cd007",
+      "currentAtRemediationSha256": "sha256:3513ceddeab21be8c6fbd4fb5f7544d7217962c174bdc621ae3998cf7db0d148",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/9dd6cd95fb403945548b4b22e3f850e155d1dd60c0b38a818ca28632210cd007.blob",
+        "archiveSha256": "sha256:9dd6cd95fb403945548b4b22e3f850e155d1dd60c0b38a818ca28632210cd007",
+        "recoveryGitBlobOid": "2aa5abe2d1d71ec07d7a2f19e7204d64fe61f6d7"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/production-r1/r1-v4-spark-20260716/capture-evidence.json",
+      "jsonLocation": "source.0.path",
+      "sourcePath": "js/src/render/building-production-review-authority.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:eac8df42b8de7959be7f5d6fb0b49a271dd834157b8293da0dcdbf65b6ca8138",
+      "currentAtRemediationSha256": "sha256:e3a15ef7943252d2f9dc7b9b500b3ffa1eb488878015e57aa2e8d876e407fadd",
+      "reproducibility": {
+        "status": "hash-attested-only",
+        "archivePath": null,
+        "archiveSha256": null,
+        "recoveryGitBlobOid": null
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/production-r1/r1-v4-spark-20260716/capture-evidence.json",
+      "jsonLocation": "source.2.path",
+      "sourcePath": "js/src/demos/building_production_review_window.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:9410b8dba44eebcc1434e843f13a5d3ef126d7d8aaeba7f7817ca15d80b73711",
+      "currentAtRemediationSha256": "sha256:3a5a3dfae6b6101d8a4571a02eca73578f72521e6cb73f59a1c73d15fab56e21",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/9410b8dba44eebcc1434e843f13a5d3ef126d7d8aaeba7f7817ca15d80b73711.blob",
+        "archiveSha256": "sha256:9410b8dba44eebcc1434e843f13a5d3ef126d7d8aaeba7f7817ca15d80b73711",
+        "recoveryGitBlobOid": "1c43d73b4dd827e4ea2bf79a592b9f6aef24b09a"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/production-r1/r1-v5-spark-20260716/capture-evidence.json",
+      "jsonLocation": "source.0.path",
+      "sourcePath": "js/src/render/building-production-review-authority.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:c1d2a96efec46f0f36fffd4a4436412135be4089600957c54359b40673ab1e6d",
+      "currentAtRemediationSha256": "sha256:e3a15ef7943252d2f9dc7b9b500b3ffa1eb488878015e57aa2e8d876e407fadd",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/c1d2a96efec46f0f36fffd4a4436412135be4089600957c54359b40673ab1e6d.blob",
+        "archiveSha256": "sha256:c1d2a96efec46f0f36fffd4a4436412135be4089600957c54359b40673ab1e6d",
+        "recoveryGitBlobOid": "ebee30e2f8d90173dcc2ebf684cf8e4cb6eb0ee3"
+      }
+    },
+    {
+      "evidencePath": "assets/qc/internal/production-r1/r1-v5-spark-20260716/capture-evidence.json",
+      "jsonLocation": "source.2.path",
+      "sourcePath": "js/src/demos/building_production_review_window.ts",
+      "hashKey": "sha256",
+      "expectedSha256": "sha256:9410b8dba44eebcc1434e843f13a5d3ef126d7d8aaeba7f7817ca15d80b73711",
+      "currentAtRemediationSha256": "sha256:3a5a3dfae6b6101d8a4571a02eca73578f72521e6cb73f59a1c73d15fab56e21",
+      "reproducibility": {
+        "status": "archived-exact",
+        "archivePath": "tools/test-hygiene/historical-source-blobs/9410b8dba44eebcc1434e843f13a5d3ef126d7d8aaeba7f7817ca15d80b73711.blob",
+        "archiveSha256": "sha256:9410b8dba44eebcc1434e843f13a5d3ef126d7d8aaeba7f7817ca15d80b73711",
+        "recoveryGitBlobOid": "1c43d73b4dd827e4ea2bf79a592b9f6aef24b09a"
+      }
+    }
+  ],
+  "transitions": [
+    {
+      "evidencePath": "assets/qc/internal/production-r1/r1-v5-spark-20260716/capture-evidence.json",
+      "sourcePath": "js/src/render/building-production-review-authority.ts",
+      "historicalSha256": "sha256:c1d2a96efec46f0f36fffd4a4436412135be4089600957c54359b40673ab1e6d",
+      "archivePath": "tools/test-hygiene/historical-source-blobs/c1d2a96efec46f0f36fffd4a4436412135be4089600957c54359b40673ab1e6d.blob",
+      "currentSha256": "sha256:e3a15ef7943252d2f9dc7b9b500b3ffa1eb488878015e57aa2e8d876e407fadd",
+      "recipe": "prettier:3.9.5+typescript-transpile-equivalence/v1"
+    },
+    {
+      "evidencePath": "assets/qc/internal/production-r1/r1-v5-spark-20260716/capture-evidence.json",
+      "sourcePath": "js/src/demos/building_production_review_window.ts",
+      "historicalSha256": "sha256:9410b8dba44eebcc1434e843f13a5d3ef126d7d8aaeba7f7817ca15d80b73711",
+      "archivePath": "tools/test-hygiene/historical-source-blobs/9410b8dba44eebcc1434e843f13a5d3ef126d7d8aaeba7f7817ca15d80b73711.blob",
+      "currentSha256": "sha256:3a5a3dfae6b6101d8a4571a02eca73578f72521e6cb73f59a1c73d15fab56e21",
+      "recipe": "prettier:3.9.5+typescript-transpile-equivalence/v1"
+    },
+    {
+      "evidencePath": "assets/buildings/authoring/functional-hall-house-v4/shell-review-authority.json",
+      "sourcePath": "tools/architecture/build-shell.ts",
+      "historicalSha256": "sha256:aa2edceae22e2be4869f5dd2d51d7cf375d51e7a2ca04975b13bcd7deba6f7f2",
+      "archivePath": "tools/test-hygiene/historical-source-blobs/aa2edceae22e2be4869f5dd2d51d7cf375d51e7a2ca04975b13bcd7deba6f7f2.blob",
+      "currentSha256": "sha256:212f4e3e9c25f3e9f65ed44813905be7702378de896b345a3f114b8fad1c5506",
+      "recipe": "prettier:3.9.5+typescript-transpile-equivalence/v1"
+    }
+  ]
+}

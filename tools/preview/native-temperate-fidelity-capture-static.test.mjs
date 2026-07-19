@@ -1,15 +1,29 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import { assertComparison, parseTypeScript } from "./source-semantics.test-helper.mjs";
 
-const demo = fs.readFileSync(new URL("../../js/src/demos/temperate_fidelity_capture_window.ts", import.meta.url), "utf8");
+const demo = fs.readFileSync(
+  new URL("../../js/src/demos/temperate_fidelity_capture_window.ts", import.meta.url),
+  "utf8",
+);
 const engine = fs.readFileSync(new URL("../../js/src/engine.ts", import.meta.url), "utf8");
 const launcher = fs.readFileSync(new URL("./run-native-temperate-fidelity-capture.mjs", import.meta.url), "utf8");
 const shared = fs.readFileSync(new URL("../../js/src/render/temperate-fidelity-scene.ts", import.meta.url), "utf8");
-const threeInfo = fs.readFileSync(new URL("../../js/node_modules/three/src/renderers/common/Info.js", import.meta.url), "utf8");
-const threeRenderObject = fs.readFileSync(new URL("../../js/node_modules/three/src/renderers/common/RenderObject.js", import.meta.url), "utf8");
-const threeWebGpuBackend = fs.readFileSync(new URL("../../js/node_modules/three/src/renderers/webgpu/WebGPUBackend.js", import.meta.url), "utf8");
+const threeInfo = fs.readFileSync(
+  new URL("../../js/node_modules/three/src/renderers/common/Info.js", import.meta.url),
+  "utf8",
+);
+const threeRenderObject = fs.readFileSync(
+  new URL("../../js/node_modules/three/src/renderers/common/RenderObject.js", import.meta.url),
+  "utf8",
+);
+const threeWebGpuBackend = fs.readFileSync(
+  new URL("../../js/node_modules/three/src/renderers/webgpu/WebGPUBackend.js", import.meta.url),
+  "utf8",
+);
 const threeBundle = fs.readFileSync(new URL("../../js/build/three.bundle.mjs", import.meta.url), "utf8");
+const launcherFile = parseTypeScript(launcher, "run-native-temperate-fidelity-capture.mjs");
 
 test("native capture uses the shared closure-scoped production scene and exact authority", () => {
   assert.match(demo, /loadTemperateFidelityCandidate/);
@@ -55,14 +69,17 @@ test("native capture records strict per-frame WebGPU submission counters before 
   assert.match(demo, /limina\.temperate-fidelity-native-capture\/v2/);
   assert.match(launcher, /limina\.three-render-submission\/v2/);
   assert.match(launcher, /single-production-frame-all-passes/);
-  assert.match(launcher, /submission\.renderCalls\) \|\| submission\.renderCalls <= 1/);
-  assert.match(launcher, /submission\.drawCalls\) \|\| submission\.drawCalls <= 1/);
-  assert.match(launcher, /submission\.triangles\) \|\| submission\.triangles <= 1/);
+  assertComparison(launcherFile, "submission.renderCalls", "<=", 1);
+  assertComparison(launcherFile, "submission.drawCalls", "<=", 1);
+  assertComparison(launcherFile, "submission.triangles", "<=", 1);
   assert.match(launcher, /missing valid single-frame render submission telemetry/);
 });
 
 test("manual capture advances Three frame identity before every post render", () => {
-  assert.match(demo, /for \(let frame = 0; frame < schedule\.warmupFrames; frame\+\+\)[\s\S]*beginFrame\(\);[\s\S]*mounted\.post\.render\(\)/);
+  assert.match(
+    demo,
+    /for \(let frame = 0; frame < schedule\.warmupFrames; frame\+\+\)[\s\S]*beginFrame\(\);[\s\S]*mounted\.post\.render\(\)/,
+  );
   assert.match(threeBundle, /this\.info\.frame = this\.nodes\.nodeFrame\.frameId/);
   assert.match(threeBundle, /this\.updateBeforeType = NodeUpdateType\.FRAME/);
   assert.match(threeBundle, /this\.frameId\+\+/);
@@ -76,14 +93,29 @@ test("native capture owns renderer teardown across adapter rejection and scene-m
   const lifecycleFinally = demo.lastIndexOf("} finally {");
   const sceneDispose = demo.indexOf("await mounted?.dispose()", lifecycleFinally);
   const rendererDispose = demo.indexOf(".dispose();", sceneDispose);
-  assert.ok(lifecycleTry >= 0 && lifecycleTry < adapterCheck && adapterCheck < mount
-    && mount < lifecycleFinally && lifecycleFinally < sceneDispose && sceneDispose < rendererDispose);
+  assert.ok(
+    lifecycleTry >= 0 &&
+      lifecycleTry < adapterCheck &&
+      adapterCheck < mount &&
+      mount < lifecycleFinally &&
+      lifecycleFinally < sceneDispose &&
+      sceneDispose < rendererDispose,
+  );
 });
 
 test("pinned Three WebGPU counters count fixed-slot instance submissions", () => {
-  assert.match(threeRenderObject, /else if \( object\.count !== undefined \)[\s\S]*instanceCount = Math\.max\( 0, object\.count \)/);
-  assert.match(threeWebGpuBackend, /drawIndexed\( indexCount, instanceCount,[\s\S]*info\.update\( object, indexCount, instanceCount \)/);
-  assert.match(threeWebGpuBackend, /draw\( vertexCount, instanceCount,[\s\S]*info\.update\( object, vertexCount, instanceCount \)/);
+  assert.match(
+    threeRenderObject,
+    /else if \( object\.count !== undefined \)[\s\S]*instanceCount = Math\.max\( 0, object\.count \)/,
+  );
+  assert.match(
+    threeWebGpuBackend,
+    /drawIndexed\( indexCount, instanceCount,[\s\S]*info\.update\( object, indexCount, instanceCount \)/,
+  );
+  assert.match(
+    threeWebGpuBackend,
+    /draw\( vertexCount, instanceCount,[\s\S]*info\.update\( object, vertexCount, instanceCount \)/,
+  );
   assert.match(threeInfo, /this\.render\.drawCalls \+\+/);
   assert.match(threeInfo, /this\.render\.triangles \+= instanceCount \* \( count \/ 3 \)/);
 });
@@ -94,9 +126,8 @@ test("launcher derives resolution from authority, verifies pixels, and fails clo
   assert.match(launcher, /--height/);
   assert.match(launcher, /LIMINA_NATIVE_CAPTURE_FULLSCREEN/);
   assert.match(launcher, /\.\.\.\(fullscreen \? \["--fullscreen"\] : \[\]\)/);
-  assert.match(launcher, /journalctl/);
-  assert.match(launcher, /current boot already contains an NVIDIA Xid/);
-  assert.match(launcher, /capture stopped and must not be retried before reboot/);
+  assert.match(launcher, /runGuardedCaptureWithSourceClosure/);
+  assert.doesNotMatch(launcher, /node:child_process|journalctl/);
   assert.match(launcher, /rgbaContentHash/);
   assert.match(launcher, /rgba\.toString\("hex"\)/);
   assert.match(launcher, /LIMINA_NATIVE_CAPTURE_REUSE_TRACE/);

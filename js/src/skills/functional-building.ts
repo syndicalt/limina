@@ -37,8 +37,16 @@ function rotateY(value: readonly number[], yaw: number): V3 {
 }
 function add(a: readonly number[], b: readonly number[]): V3 { return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]; }
 function quatYaw(yaw: number): [number, number, number, number] { return [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)]; }
+function multiplyQuat(a: readonly [number, number, number, number], b: readonly [number, number, number, number]): [number, number, number, number] {
+  return [
+    a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+    a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+    a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+    a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+  ];
+}
 
-function spawnBodyEntity(world: WorldContext, position: V3, half: V3, yaw: number, origin: EntityOrigin, mesh?: SceneObject): string {
+function spawnBodyEntity(world: WorldContext, position: V3, half: V3, orientation: number | readonly [number, number, number, number], origin: EntityOrigin, mesh?: SceneObject): string {
   if (mesh !== undefined) world.scene.add(mesh);
   const eid = spawnRenderable(world.ecs, (mesh ?? inert()) as never, ...position);
   if (eid >= MAX_ENTITIES) {
@@ -46,7 +54,7 @@ function spawnBodyEntity(world: WorldContext, position: V3, half: V3, yaw: numbe
     if (mesh !== undefined) world.scene.remove(mesh);
     throw new Error("functional building: entity capacity exceeded");
   }
-  const q = quatYaw(yaw);
+  const q = typeof orientation === "number" ? quatYaw(orientation) : orientation;
   Rotation.x[eid] = q[0]; Rotation.y[eid] = q[1]; Rotation.z[eid] = q[2]; Rotation.w[eid] = q[3];
   const bodyId = world.ops.op_physics_add_static_box(position[0], position[1], position[2], half[0], half[1], half[2], 0.85, 0);
   world.ops.op_physics_set_body_transform(bodyId, ...position, ...q);
@@ -105,6 +113,51 @@ export function registerFunctionalBuildingSkills(registry: SkillRegistry, assets
       else nav.setPortalOpen(state.portalRuntimeId, state.open);
     }
   };
+  const copyDoorState = (state: DoorRuntimeState): DoorRuntimeState => ({
+    ...state,
+    position: [...state.position] as V3,
+    door: {
+      ...state.door,
+      hinge: [...state.door.hinge] as V3,
+      center: [...state.door.center] as V3,
+      halfExtents: [...state.door.halfExtents] as V3,
+    },
+  });
+  const copyInteraction = (entity: string) => {
+    const value = deps?.interaction?.get(entity);
+    return value === undefined ? undefined : { ...value, state: { ...value.state } };
+  };
+  /** Restore one already-existing door after a later failure in its outer head
+   *  chain. Entity catch-all cannot help here: the door predates the chain, and
+   *  its origin/tags/transforms plus topology/interaction/nav closure state all
+   *  have to return to the exact pre-call value. */
+  const registerDoorStateUndo = (ctx: ExecutionContext, entity: string, state: DoorRuntimeState): void => {
+    const previous = copyDoorState(state), previousTags = new Set(ctx.world.tags.get(ctx.world.entities.resolve(entity)!.eid) ?? []),
+      previousInteraction = copyInteraction(entity), topologyRevision = deps?.topology?.getRevision(), navRevision = deps?.nav?.getRevision(),
+      previousNavOpen = deps?.nav?.isPortalOpen(state.portalRuntimeId);
+    ctx.undo(`functional door '${entity}' state`, () => {
+      const entry = ctx.world.entities.resolve(entity);
+      if (entry === undefined) throw new Error(`functional door rollback: '${entity}' disappeared`);
+      const collider = ctx.world.entities.resolve(previous.colliderEntity);
+      if (collider?.bodyId === undefined) throw new Error(`functional door rollback: '${entity}' lost its collider`);
+      const pose = doorPose(previous.door, previous.position, previous.buildingYaw, previous.open), q = quatYaw(pose.yaw);
+      Position.x[entry.eid] = pose.hinge[0]; Position.y[entry.eid] = pose.hinge[1]; Position.z[entry.eid] = pose.hinge[2];
+      Rotation.x[entry.eid] = q[0]; Rotation.y[entry.eid] = q[1]; Rotation.z[entry.eid] = q[2]; Rotation.w[entry.eid] = q[3];
+      Position.x[collider.eid] = pose.center[0]; Position.y[collider.eid] = pose.center[1]; Position.z[collider.eid] = pose.center[2];
+      Rotation.x[collider.eid] = q[0]; Rotation.y[collider.eid] = q[1]; Rotation.z[collider.eid] = q[2]; Rotation.w[collider.eid] = q[3];
+      ctx.world.ops.op_physics_set_body_transform(collider.bodyId, ...pose.center, ...q);
+      entry.origin = doorOrigin(copyDoorState(previous));
+      ctx.world.tags.set(entry.eid, new Set(previousTags));
+      if (entry.parent !== undefined) ctx.world.entities.setParent(entity, entry.parent, computeLocalOffset(ctx.world, entry.parent, entry.eid));
+      if (collider.parent !== undefined) ctx.world.entities.setParent(previous.colliderEntity, collider.parent, computeLocalOffset(ctx.world, collider.parent, collider.eid));
+      derive(ctx.world, entity, previous);
+      if (previousInteraction === undefined) deps?.interaction?.unregister(entity);
+      else deps?.interaction?.register({ ...previousInteraction, state: { ...previousInteraction.state } });
+      if (previousNavOpen === undefined) deps?.nav?.unregisterPortal(previous.portalRuntimeId);
+      if (topologyRevision !== undefined) deps?.topology?.restoreRevisionAfterRollback(topologyRevision);
+      if (navRevision !== undefined) deps?.nav?.restoreRevisionAfterRollback(navRevision);
+    });
+  };
   const reconcile = (world: WorldContext) => {
     if (reconciledVersions.get(world) === world.entities.version) return;
     for (const id of world.entities.ids()) {
@@ -145,10 +198,29 @@ export function registerFunctionalBuildingSkills(registry: SkillRegistry, assets
       const contract = parseFunctionalBuildingContract(resolved.bytes); // validate every byte before mutation
       const staticBatch = parseFunctionalBuildingStaticBatch(resolved.bytes);
       const created: string[] = [];
+      const registeredDoors: Array<{ entity: string; state: DoorRuntimeState }> = [];
+      const topologyRevision = deps?.topology?.getRevision(), navRevision = deps?.nav?.getRevision();
+      let registeredRoot: string | undefined;
+      const rollbackRuntimeRegistrations = () => {
+        for (let index = registeredDoors.length - 1; index >= 0; index--) {
+          const registered = registeredDoors[index]!;
+          deps?.interaction?.unregister(registered.entity);
+          deps?.nav?.unregisterPortal(registered.state.portalRuntimeId);
+        }
+        if (registeredRoot !== undefined) deps?.topology?.unregisterBuilding(registeredRoot);
+        if (topologyRevision !== undefined) deps?.topology?.restoreRevisionAfterRollback(topologyRevision);
+        if (navRevision !== undefined) deps?.nav?.restoreRevisionAfterRollback(navRevision);
+      };
       try {
         const loaded = await loadGltfIntoScene(ctx, input.assetId, resolved.bytes, resolved.hash, { position: input.position, rotationEuler: [0, input.yaw, 0] });
         const root = loaded.entity;
         created.push(root);
+        registeredRoot = root;
+        // Register before topology or door-derived managers mutate. On a later
+        // failure in an OUTER head skill this runs before the registry's entity
+        // catch-all, removing closure-owned registrations while their entities
+        // and semantic origins still exist.
+        ctx.undo(`building.placeFunctional '${root}' runtime registrations`, rollbackRuntimeRegistrations);
         ctx.world.entities.bindOrigin(root, { tool: "building.placeFunctional", input: { ...input, hash: resolved.hash,
           functionalSchema: contract.schema, ...(contract.schema === FUNCTIONAL_BUILDING_CONTRACT_V2 ? { topologyContract: contract } : {}) } });
         if (contract.schema === FUNCTIONAL_BUILDING_CONTRACT_V2 && !deps?.topology?.registerBuilding(root, contract, { position: input.position, yaw: input.yaw }))
@@ -189,7 +261,8 @@ export function registerFunctionalBuildingSkills(registry: SkillRegistry, assets
         const parts: string[] = [];
         for (const collider of contract.colliders) {
           const center = add(input.position, rotateY(collider.center, input.yaw));
-          const entity = spawnBodyEntity(ctx.world, center, collider.halfExtents, input.yaw,
+          const rotation = collider.rotation === undefined ? quatYaw(input.yaw) : multiplyQuat(quatYaw(input.yaw), collider.rotation);
+          const entity = spawnBodyEntity(ctx.world, center, collider.halfExtents, rotation,
             { tool: "building.functionalCollider", input: { assetId: input.assetId, hash: resolved.hash, semanticId: collider.id } });
           created.push(entity); parts.push(entity);
           const eid = ctx.world.entities.resolve(entity)!.eid;
@@ -219,13 +292,14 @@ export function registerFunctionalBuildingSkills(registry: SkillRegistry, assets
           const entry = ctx.world.entities.resolve(entity)!;
           const tags = ctx.world.tags.get(entry.eid)!; tags.add("functional-door"); tags.add("door-closed");
           ctx.world.entities.setParent(entity, root, computeLocalOffset(ctx.world, root, entry.eid));
+          registeredDoors.push({ entity, state });
           derive(ctx.world,entity,state);
         }
         ctx.emit("building.functionalPlaced", { root, buildingId: contract.buildingId, assetId: input.assetId, hash: resolved.hash, parts: parts.length, doors: doors.length });
         return { root, doors, parts, hash: resolved.hash };
       } catch (error) {
         const failures: unknown[] = [error];
-        if (created[0] !== undefined) deps?.topology?.unregisterBuilding(created[0]);
+        try { rollbackRuntimeRegistrations(); } catch (failure) { failures.push(failure); }
         for (const entity of created.reverse()) try { teardownEntity(ctx.world, entity); } catch (failure) { failures.push(failure); }
         if (failures.length > 1) throw new AggregateError(failures, "functional building: placement failed and rollback reported errors");
         throw error;
@@ -250,10 +324,10 @@ export function registerFunctionalBuildingSkills(registry: SkillRegistry, assets
     const entry = ctx.world.entities.resolve(doorId);
     if (entry === undefined || entry.origin?.tool !== "building.functionalDoor") throw new Error(`door.setOpen: '${doorId}' is not a functional door`);
     const state = entry.origin.input as unknown as DoorRuntimeState;
-    derive(ctx.world, doorId, state);
     if (!open && state.open && occupied(ctx.world, state)) return { door: doorId, open: true, ok: false, reason: "occupied" };
     const collider = ctx.world.entities.resolve(state.colliderEntity);
     if (collider?.bodyId === undefined) throw new Error(`door.setOpen: '${doorId}' lost its authored collider`);
+    registerDoorStateUndo(ctx, doorId, state);
     const pose = doorPose(state.door, state.position, state.buildingYaw, open), q = quatYaw(pose.yaw);
     Position.x[entry.eid] = pose.hinge[0]; Position.y[entry.eid] = pose.hinge[1]; Position.z[entry.eid] = pose.hinge[2];
     Rotation.x[entry.eid] = q[0]; Rotation.y[entry.eid] = q[1]; Rotation.z[entry.eid] = q[2]; Rotation.w[entry.eid] = q[3];
@@ -313,6 +387,7 @@ export function registerFunctionalBuildingSkills(registry: SkillRegistry, assets
       const entry = ctx.world.entities.resolve(input.door);
       if (entry?.origin?.tool !== "building.functionalDoor") throw new Error("door.setLocked: invalid door");
       const state = entry.origin.input as unknown as DoorRuntimeState;
+      registerDoorStateUndo(ctx, input.door, state);
       state.locked = input.locked;
       state.keyId = input.keyId ?? state.keyId;
       entry.origin = doorOrigin(state);

@@ -71,7 +71,7 @@ export function editorClientConfigFromEnvironment(environment = process.env, ove
   const token = environment.LIMINA_EDITOR_TOKEN;
   if (typeof token !== "string" || !/^[A-Za-z0-9_-]{32,128}$/.test(token)) {
     throw new EditorClientError(
-      "LIMINA_EDITOR_TOKEN must be the 32-128 character token printed by the project's editor launcher",
+      "LIMINA_EDITOR_TOKEN must be the 32-128 character token from the project's private editor capability file",
     );
   }
   const timeoutMs = Number(environment.LIMINA_CALL_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS);

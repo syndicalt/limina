@@ -514,6 +514,30 @@ class FakeTransport {
 
 type Posted = { message: Record<string, unknown>; transferCount: number };
 
+// Production runs this controller inside a browser Worker, where postMessage owns the
+// transfer operation.  This test also runs through the embedded native JS host, whose
+// structuredClone intentionally has no transfer-list target (p106_host_capabilities
+// enforces that contract).  Preserve the cross-realm clone in both environments while
+// using real detachment whenever the test host supports it; transferCount below still
+// proves that the controller supplied the complete production transfer list.
+const structuredCloneSupportsTransfer = (() => {
+  if (typeof globalThis.structuredClone !== "function") return false;
+  const probe = new ArrayBuffer(1);
+  try {
+    globalThis.structuredClone(probe, { transfer: [probe] });
+    return probe.byteLength === 0;
+  } catch {
+    return false;
+  }
+})();
+
+function cloneAcrossWorkerBoundary(message: unknown, transfers: Transferable[]): unknown {
+  if (typeof globalThis.structuredClone !== "function") return message;
+  return structuredCloneSupportsTransfer
+    ? globalThis.structuredClone(message, { transfer: transfers })
+    : globalThis.structuredClone(message);
+}
+
 function harness(initial: DerivedRuntimeCurrent, ackTimeoutMs = 1_000) {
   const timers = new TestTimers();
   const transport = new FakeTransport(initial);
@@ -523,9 +547,7 @@ function harness(initial: DerivedRuntimeCurrent, ackTimeoutMs = 1_000) {
     timers,
     activationAckTimeoutMs: ackTimeoutMs,
     postMessage: (message, transfers = []) => {
-      const clone = typeof globalThis.structuredClone === "function"
-        ? globalThis.structuredClone(message, { transfer: transfers })
-        : message;
+      const clone = cloneAcrossWorkerBoundary(message, transfers);
       posted.push({ message: clone as Record<string, unknown>, transferCount: transfers.length });
     },
   });

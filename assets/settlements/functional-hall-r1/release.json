@@ -1,0 +1,92 @@
+{
+  "schema": "limina.functional-settlement-release/v1",
+  "releaseId": "release/settlement/functional-hall-r1",
+  "settlementId": "settlement/functional-hall-r1",
+  "approval": {
+    "publication": {
+      "path": "assets/buildings/catalog/functional-hall-house-fb4-v3-r1.json",
+      "sha256": "sha256:8f9b6816a23639bc4dd3941b574ec422c53715ec00051788d2e291c249c956b0",
+      "contentHash": "sha256:3ece237da76569b60a79282d0020f08be838d18edd067f045d22b4739728c590",
+      "closureHash": "sha256:25dd7c2236726b595e11963877bee990c967191b97a5d5a2f4a2f23c63d95ced"
+    },
+    "candidateId": "functional-hall-house/fb4/1f375ec3abe1",
+    "reviewOutcome": {
+      "path": "assets/buildings/authoring/functional-hall-house-v4/review-outcomes/fb4-1f375ec3abe1-v4-r1-hitl-approved.json",
+      "sha256": "sha256:3856d6a9b03fad5cf82e838b587ff44be1d5465fdfd55fca06b4c3fb6f7a55ac",
+      "contentHash": "sha256:7665cfd88113bacccd1ae1ec3ef68fd131a42312e9d2abec912b0f79b4799b2e",
+      "bytes": 2776
+    }
+  },
+  "recipe": {
+    "path": "assets/buildings/authoring/functional-hall-house-v4/fb5-functional-hall-settlement-r1-recipe.json",
+    "sha256": "sha256:ace33045110e4808387f807542742fd5d81c5ca9af7dd8942505f36de6e29662",
+    "contentHash": "sha256:92ab478c64301a051a933b971fde59ee398b9cfc70452563fa0b9e9ae1f70bc0"
+  },
+  "worldMap": {
+    "path": "assets/settlements/functional-hall-r1/worldmap.json",
+    "sha256": "sha256:647caf9d9ae66520f16ae1e72ba6bcd3b0bb8b21f5a7b315df8ce216dd7c0bdc",
+    "contentHash": "sha256:98463a08ee64a61b770b8ff36c770cec6126901149de871708efd53e73eadcfc",
+    "bytes": 1382,
+    "mapId": "atlas/functional-hall-r1",
+    "worldMapHash": "sha256:a0ef76180be6ea8e32d2f9c904950fa6605ac52af08e62709c20398310d495f9"
+  },
+  "plan": {
+    "path": "assets/settlements/functional-hall-r1/plan.json",
+    "sha256": "sha256:0fab7f949c9db6fde56e672a970af38db86cb5d341e010621dcb7506b6f20a86",
+    "contentHash": "sha256:c371d41b911308b8589cc004aa084273c1a5dc25395bfe07324d9e25662f1d13",
+    "bytes": 4792,
+    "planId": "settlement/functional-hall-r1"
+  },
+  "sites": [
+    {
+      "path": "assets/settlements/functional-hall-r1/sites/a.json",
+      "sha256": "sha256:723913fb7fa93e03da05e648dd0232699fe732ad196a69cfb2d30a040bad0ea2",
+      "contentHash": "sha256:82d6870e99b85d0913632367166435aaa26120d1deba1578733b7a6b9506247f",
+      "bytes": 1476
+    },
+    {
+      "path": "assets/settlements/functional-hall-r1/sites/b.json",
+      "sha256": "sha256:a7f7af9a132eab5f284ea91ea3fb35728e1510993cf52a3a9b942a2b6a7f73b0",
+      "contentHash": "sha256:6a07b6a260d4aa588d01c7bfa37919f83d51d1dfe68eacd9811017866b257b97",
+      "bytes": 1465
+    },
+    {
+      "path": "assets/settlements/functional-hall-r1/sites/c.json",
+      "sha256": "sha256:1ae14b83f8489ae769a3aa97c808ac79a0cb9ec744c968de85802e6618e264ce",
+      "contentHash": "sha256:b5771a341aca2d8451ba776c1fc85319f50279d57ff5068d6274de2290afa786",
+      "bytes": 1479
+    }
+  ],
+  "runtime": {
+    "loadDistance": 16,
+    "keepDistance": 24,
+    "maxActiveUnits": 2,
+    "maxResidentBytes": 44317376
+  },
+  "terrain": {
+    "schema": "limina.shared-local-z-grade/v1",
+    "origin": [
+      250000.25,
+      -175000.75
+    ],
+    "yaw": 0.713,
+    "baseHeight": 5,
+    "localZSlope": 0.030907920154539602,
+    "maximumSampleSpacing": 0.5,
+    "maximumTerrainGrade": 0.1,
+    "maximumRouteElevationDelta": 0.02
+  },
+  "inventory": {
+    "buildings": 3,
+    "catalogEntries": 1,
+    "visibilityCellsPerBuilding": 6,
+    "lodLevels": 3
+  },
+  "engine": {
+    "placementSkill": "building.placeFunctional",
+    "settlementSkill": "settlement.placeFunctional",
+    "residencyPolicy": "whole-building-atomic",
+    "genericAssetPlacementProhibited": true
+  },
+  "closureHash": "sha256:e6cb4277226c55b8ae66d70f4768ea06bc3eba22d3bcb3e16fc23a424fa8220a"
+}

@@ -1413,6 +1413,7 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
     tick: 0,
     flags: 0,
     playerEid: -1,
+    droppedSteps: 0,
     generation: 0,
     inWater: false,
     swimming: false,

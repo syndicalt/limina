@@ -55,7 +55,8 @@ const bytes = encodeBiomeFieldArtifact(source);
 const bytesAgain = encodeBiomeFieldArtifact(source);
 assert(equalBytes(bytes, bytesAgain), "same strict field did not encode byte-identically");
 const hash = biomeFieldArtifactContentHash(bytes);
-assert(hash === "sha256:961521eb911d55f9488c36d6a34302a0fa32dfd2cdbfaf178f1a545fb6cbb83a",
+assert(source.pack.version === "1.0.1", `canonical vector pack version changed: ${source.pack.version}`);
+assert(hash === "sha256:d3e619196d6fa5e6d2c6135886c98f4e3ec8169b07d74e708f9b4b3a38bca32a",
   `canonical codec vector hash changed: ${hash}`);
 const decoded = decodeBiomeFieldArtifact(bytes);
 assert(decoded.metadata.artifactType === BIOME_FIELD_ARTIFACT_TYPE

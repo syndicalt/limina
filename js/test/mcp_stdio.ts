@@ -21,7 +21,9 @@ registerCoreSkills(registry);
 
 const mcp = new Mcp(registry, world);
 const writes: string[] = [];
-const transport = new StdioMcpTransport(mcp, (line) => writes.push(line));
+const transport = new StdioMcpTransport(mcp, (line) => writes.push(line), {
+  allowedProfiles: new Set(["builder.readWrite"]), specProfile: "builder.readWrite",
+});
 
 await transport.handleLine(JSON.stringify({
   jsonrpc: "2.0",

@@ -1,15 +1,18 @@
-// reference-library — RETRIEVAL over the art-direction reference library (art-direction/library/**),
-// the "art-knowledge layer" the build agent RAGs before authoring/sourcing an asset. Each leaf folder
+// reference-library — HISTORICAL/OPTIONAL retrieval over art-direction/library/**. Production building
+// architecture must reduce selected sources to source-neutral measurable cues before BuildingProgram;
+// this helper's cards/images may not be injected as geometry or acceptance authority. Each leaf folder
 // holds a `card.md` (YAML frontmatter + prose: What it is / References to drop / Likely build path) plus
 // reference images. This resolves a brief's DOTTED ID (e.g. "characters.npc.grundir-veteran",
-// "buildings.medieval.dwelling.cottage") to that leaf — the visual target (images) + the build recipe
-// (card) — so the pipeline can attach them to the build agent's prompt instead of the agent guessing.
+// "buildings.medieval.dwelling.cottage") to that leaf for compatibility/inspiration only.
 //
 //   import { resolveReference, searchByTag } from "./reference-library.mjs";
 //   const ref = resolveReference("characters.npc.grundir-veteran");
 //   // ref = { id, dir, card:{title,tags,engineGaps,status,body,sections}, images:[abs paths] }
 //
-// Node fs (build-orchestration/agent-time helper, not an in-engine runtime module). Pure read-only.
+// Node fs (build-orchestration/agent-time helper, not an in-engine runtime module). Historical
+// building leaves are read-only; new `buildings.*` scaffolds are prohibited. Owner: architecture
+// program migration. Sunset: remove the building compatibility reader only after every pre-2026-07-17
+// manifest/replay fixture has an archived exact board and no production/test import remains.
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -70,8 +73,8 @@ function dirForId(id) {
   return found;
 }
 
-/** Retrieve the reference for a dotted id: its card + reference image paths. Returns null if absent
- *  (the build path degrades to card-less/free authoring, same graceful contract as a missing asset). */
+/** Retrieve a compatibility reference card + image paths. Returns null if absent. The result is not
+ *  production-building geometry authority and must never enable unconstrained card-less authoring. */
 export function resolveReference(id) {
   const dir = dirForId(id);
   if (!dir) return null;
@@ -87,6 +90,7 @@ export function resolveReference(id) {
  *  planning only fills the gaps. Returns { created, dir, cardPath, images }. */
 export function scaffoldReference(spec) {
   const { id, title = id, tags = [], engineGaps = [], status = "stub", whatItIs = "", references = "", buildPath = "" } = spec;
+  if(id==="buildings"||id.startsWith("buildings."))throw new Error("historical buildings.* reference scaffolds are retired; use a pinned visual-design contract, source-neutral cues, and BuildingProgram");
   const dir = join(LIB, ...id.split("."));
   mkdirSync(dir, { recursive: true });
   const cardPath = join(dir, "card.md");

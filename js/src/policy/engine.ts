@@ -68,7 +68,7 @@ export interface PolicyContext {
 export interface QuotaState {
   key: string;
   limit: number;
-  windowMs: number;
+  windowTicks: number;
   /** hits already counted in the current window (BEFORE this call committed). */
   used: number;
   remaining: number;
@@ -114,7 +114,8 @@ export interface QuotaSpec {
   /** Counter scope: per session (default) or global across sessions. */
   perSession?: boolean;
   limit: number;
-  windowMs: number;
+  /** Deterministic simulation ticks in the rolling quota window. */
+  windowTicks: number;
 }
 
 /** A per-session resource budget. Any dimension left undefined is unbounded. */
@@ -246,7 +247,7 @@ export class PolicyEngine {
     // 4. quota (peek; commit only if the whole decision allows).
     const quota = this.quotaPeek(ctx);
     if (quota !== undefined && quota.remaining <= 0) {
-      return { ...base, allow: false, rule: "quota.exceeded", reason: `quota exhausted for '${quota.key}' (${quota.used}/${quota.limit} per ${quota.windowMs} ticks)`, quota };
+      return { ...base, allow: false, rule: "quota.exceeded", reason: `quota exhausted for '${quota.key}' (${quota.used}/${quota.limit} per ${quota.windowTicks} ticks)`, quota };
     }
     // 5. resource budget (peek).
     const ledger = this.budgets.get(ctx.sessionId);
@@ -407,24 +408,24 @@ export class PolicyEngine {
   private quotaPeek(ctx: PolicyContext): QuotaState | undefined {
     const match = this.matchingQuota(ctx);
     if (match === undefined) return undefined;
-    const used = this.windowHits(match.key, match.spec.windowMs, ctx.tick ?? 0).length;
-    return { key: match.key, limit: match.spec.limit, windowMs: match.spec.windowMs, used, remaining: Math.max(0, match.spec.limit - used) };
+    const used = this.windowHits(match.key, match.spec.windowTicks, ctx.tick ?? 0).length;
+    return { key: match.key, limit: match.spec.limit, windowTicks: match.spec.windowTicks, used, remaining: Math.max(0, match.spec.limit - used) };
   }
 
   private quotaCommit(ctx: PolicyContext): QuotaState | undefined {
     const match = this.matchingQuota(ctx);
     if (match === undefined) return undefined;
     const now = ctx.tick ?? 0;
-    const hits = this.windowHits(match.key, match.spec.windowMs, now);
+    const hits = this.windowHits(match.key, match.spec.windowTicks, now);
     hits.push(now);
     this.quotaHits.set(match.key, hits);
-    return { key: match.key, limit: match.spec.limit, windowMs: match.spec.windowMs, used: hits.length, remaining: Math.max(0, match.spec.limit - hits.length) };
+    return { key: match.key, limit: match.spec.limit, windowTicks: match.spec.windowTicks, used: hits.length, remaining: Math.max(0, match.spec.limit - hits.length) };
   }
 
   /** Prune hits older than the window (measured in deterministic TICKS) and return
    *  the live (in-window) hits. `nowTick` is the current simulation tick. */
-  private windowHits(key: string, windowMs: number, nowTick: number): number[] {
-    const cutoff = nowTick - windowMs;
+  private windowHits(key: string, windowTicks: number, nowTick: number): number[] {
+    const cutoff = nowTick - windowTicks;
     const hits = (this.quotaHits.get(key) ?? []).filter((t) => t > cutoff);
     this.quotaHits.set(key, hits);
     return hits;

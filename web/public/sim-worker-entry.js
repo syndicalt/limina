@@ -7494,11 +7494,11 @@ var Quaternion = class {
    * @param {Quaternion} quaternion - The quaternion to copy.
    * @return {Quaternion} A reference to this quaternion.
    */
-  copy(quaternion) {
-    this._x = quaternion.x;
-    this._y = quaternion.y;
-    this._z = quaternion.z;
-    this._w = quaternion.w;
+  copy(quaternion2) {
+    this._x = quaternion2.x;
+    this._y = quaternion2.y;
+    this._z = quaternion2.z;
+    this._w = quaternion2.w;
     this._onChangeCallback();
     return this;
   }
@@ -7862,8 +7862,8 @@ var Quaternion = class {
    * @param {Quaternion} quaternion - The quaternion to test for equality.
    * @return {boolean} Whether this quaternion is equal with the given one.
    */
-  equals(quaternion) {
-    return quaternion._x === this._x && quaternion._y === this._y && quaternion._z === this._z && quaternion._w === this._w;
+  equals(quaternion2) {
+    return quaternion2._x === this._x && quaternion2._y === this._y && quaternion2._z === this._z && quaternion2._w === this._w;
   }
   /**
    * Sets this quaternion's components from the given array.
@@ -11878,9 +11878,9 @@ var Matrix4 = class _Matrix4 {
    * @param {Vector3} scale - The scale vector.
    * @return {Matrix4} A reference to this matrix.
    */
-  compose(position, quaternion, scale2) {
+  compose(position, quaternion2, scale2) {
     const te22 = this.elements;
-    const x3 = quaternion._x, y22 = quaternion._y, z4 = quaternion._z, w5 = quaternion._w;
+    const x3 = quaternion2._x, y22 = quaternion2._y, z4 = quaternion2._z, w5 = quaternion2._w;
     const x22 = x3 + x3, y222 = y22 + y22, z22 = z4 + z4;
     const xx = x3 * x22, xy = x3 * y222, xz = x3 * z22;
     const yy = y22 * y222, yz = y22 * z22, zz = z4 * z22;
@@ -11917,7 +11917,7 @@ var Matrix4 = class _Matrix4 {
    * @param {Vector3} scale - The scale vector.
    * @return {Matrix4} A reference to this matrix.
    */
-  decompose(position, quaternion, scale2) {
+  decompose(position, quaternion2, scale2) {
     const te22 = this.elements;
     position.x = te22[12];
     position.y = te22[13];
@@ -11925,7 +11925,7 @@ var Matrix4 = class _Matrix4 {
     const det2 = this.determinant();
     if (det2 === 0) {
       scale2.set(1, 1, 1);
-      quaternion.identity();
+      quaternion2.identity();
       return this;
     }
     let sx = _v1$7.set(te22[0], te22[1], te22[2]).length();
@@ -11945,7 +11945,7 @@ var Matrix4 = class _Matrix4 {
     _m1$2.elements[8] *= invSZ;
     _m1$2.elements[9] *= invSZ;
     _m1$2.elements[10] *= invSZ;
-    quaternion.setFromRotationMatrix(_m1$2);
+    quaternion2.setFromRotationMatrix(_m1$2);
     scale2.x = sx;
     scale2.y = sy;
     scale2.z = sz;
@@ -12503,16 +12503,16 @@ var Object3D = class _Object3D extends EventDispatcher {
     this.up = _Object3D.DEFAULT_UP.clone();
     const position = new Vector3();
     const rotation = new Euler();
-    const quaternion = new Quaternion();
+    const quaternion2 = new Quaternion();
     const scale2 = new Vector3(1, 1, 1);
     function onRotationChange() {
-      quaternion.setFromEuler(rotation, false);
+      quaternion2.setFromEuler(rotation, false);
     }
     function onQuaternionChange() {
-      rotation.setFromQuaternion(quaternion, void 0, false);
+      rotation.setFromQuaternion(quaternion2, void 0, false);
     }
     rotation._onChange(onRotationChange);
-    quaternion._onChange(onQuaternionChange);
+    quaternion2._onChange(onQuaternionChange);
     Object.defineProperties(this, {
       /**
        * Represents the object's local position.
@@ -12547,7 +12547,7 @@ var Object3D = class _Object3D extends EventDispatcher {
       quaternion: {
         configurable: true,
         enumerable: true,
-        value: quaternion
+        value: quaternion2
       },
       /**
        * Represents the object's local scale.
@@ -12853,27 +12853,27 @@ var Object3D = class _Object3D extends EventDispatcher {
    * @param {Object3D} object - The 3D object to add.
    * @return {Object3D} A reference to this instance.
    */
-  add(object4) {
+  add(object5) {
     if (arguments.length > 1) {
       for (let i2 = 0; i2 < arguments.length; i2++) {
         this.add(arguments[i2]);
       }
       return this;
     }
-    if (object4 === this) {
-      error("Object3D.add: object can't be added as a child of itself.", object4);
+    if (object5 === this) {
+      error("Object3D.add: object can't be added as a child of itself.", object5);
       return this;
     }
-    if (object4 && object4.isObject3D) {
-      object4.removeFromParent();
-      object4.parent = this;
-      this.children.push(object4);
-      object4.dispatchEvent(_addedEvent);
-      _childaddedEvent.child = object4;
+    if (object5 && object5.isObject3D) {
+      object5.removeFromParent();
+      object5.parent = this;
+      this.children.push(object5);
+      object5.dispatchEvent(_addedEvent);
+      _childaddedEvent.child = object5;
       this.dispatchEvent(_childaddedEvent);
       _childaddedEvent.child = null;
     } else {
-      error("Object3D.add: object not an instance of THREE.Object3D.", object4);
+      error("Object3D.add: object not an instance of THREE.Object3D.", object5);
     }
     return this;
   }
@@ -12886,19 +12886,19 @@ var Object3D = class _Object3D extends EventDispatcher {
    * @param {Object3D} object - The 3D object to remove.
    * @return {Object3D} A reference to this instance.
    */
-  remove(object4) {
+  remove(object5) {
     if (arguments.length > 1) {
       for (let i2 = 0; i2 < arguments.length; i2++) {
         this.remove(arguments[i2]);
       }
       return this;
     }
-    const index = this.children.indexOf(object4);
+    const index = this.children.indexOf(object5);
     if (index !== -1) {
-      object4.parent = null;
+      object5.parent = null;
       this.children.splice(index, 1);
-      object4.dispatchEvent(_removedEvent);
-      _childremovedEvent.child = object4;
+      object5.dispatchEvent(_removedEvent);
+      _childremovedEvent.child = object5;
       this.dispatchEvent(_childremovedEvent);
       _childremovedEvent.child = null;
     }
@@ -12937,20 +12937,20 @@ var Object3D = class _Object3D extends EventDispatcher {
    * @param {Object3D} object - The 3D object to attach.
    * @return {Object3D} A reference to this instance.
    */
-  attach(object4) {
+  attach(object5) {
     this.updateWorldMatrix(true, false);
     _m1$1.copy(this.matrixWorld).invert();
-    if (object4.parent !== null) {
-      object4.parent.updateWorldMatrix(true, false);
-      _m1$1.multiply(object4.parent.matrixWorld);
+    if (object5.parent !== null) {
+      object5.parent.updateWorldMatrix(true, false);
+      _m1$1.multiply(object5.parent.matrixWorld);
     }
-    object4.applyMatrix4(_m1$1);
-    object4.removeFromParent();
-    object4.parent = this;
-    this.children.push(object4);
-    object4.updateWorldMatrix(false, true);
-    object4.dispatchEvent(_addedEvent);
-    _childaddedEvent.child = object4;
+    object5.applyMatrix4(_m1$1);
+    object5.removeFromParent();
+    object5.parent = this;
+    this.children.push(object5);
+    object5.updateWorldMatrix(false, true);
+    object5.dispatchEvent(_addedEvent);
+    _childaddedEvent.child = object5;
     this.dispatchEvent(_childaddedEvent);
     _childaddedEvent.child = null;
     return this;
@@ -12962,8 +12962,8 @@ var Object3D = class _Object3D extends EventDispatcher {
    * @param {number} id - The id.
    * @return {Object3D|undefined} The found 3D object. Returns `undefined` if no 3D object has been found.
    */
-  getObjectById(id4) {
-    return this.getObjectByProperty("id", id4);
+  getObjectById(id7) {
+    return this.getObjectByProperty("id", id7);
   }
   /**
    * Searches through the 3D object and its children, starting with the 3D object
@@ -12987,9 +12987,9 @@ var Object3D = class _Object3D extends EventDispatcher {
     if (this[name] === value) return this;
     for (let i2 = 0, l2 = this.children.length; i2 < l2; i2++) {
       const child = this.children[i2];
-      const object4 = child.getObjectByProperty(name, value);
-      if (object4 !== void 0) {
-        return object4;
+      const object5 = child.getObjectByProperty(name, value);
+      if (object5 !== void 0) {
+        return object5;
       }
     }
     return void 0;
@@ -13003,13 +13003,13 @@ var Object3D = class _Object3D extends EventDispatcher {
    * @param {Array<Object3D>} result - The method stores the result in this array.
    * @return {Array<Object3D>} The found 3D objects.
    */
-  getObjectsByProperty(name, value, result = []) {
-    if (this[name] === value) result.push(this);
+  getObjectsByProperty(name, value, result2 = []) {
+    if (this[name] === value) result2.push(this);
     const children = this.children;
     for (let i2 = 0, l2 = children.length; i2 < l2; i2++) {
-      children[i2].getObjectsByProperty(name, value, result);
+      children[i2].getObjectsByProperty(name, value, result2);
     }
-    return result;
+    return result2;
   }
   /**
    * Returns a vector representing the position of the 3D object in world space.
@@ -13210,61 +13210,61 @@ var Object3D = class _Object3D extends EventDispatcher {
         generator: "Object3D.toJSON"
       };
     }
-    const object4 = {};
-    object4.uuid = this.uuid;
-    object4.type = this.type;
-    if (this.name !== "") object4.name = this.name;
-    if (this.castShadow === true) object4.castShadow = true;
-    if (this.receiveShadow === true) object4.receiveShadow = true;
-    if (this.visible === false) object4.visible = false;
-    if (this.frustumCulled === false) object4.frustumCulled = false;
-    if (this.renderOrder !== 0) object4.renderOrder = this.renderOrder;
-    if (this.static !== false) object4.static = this.static;
-    if (Object.keys(this.userData).length > 0) object4.userData = this.userData;
-    object4.layers = this.layers.mask;
-    object4.matrix = this.matrix.toArray();
-    object4.up = this.up.toArray();
-    if (this.pivot !== null) object4.pivot = this.pivot.toArray();
-    if (this.matrixAutoUpdate === false) object4.matrixAutoUpdate = false;
-    if (this.morphTargetDictionary !== void 0) object4.morphTargetDictionary = Object.assign({}, this.morphTargetDictionary);
-    if (this.morphTargetInfluences !== void 0) object4.morphTargetInfluences = this.morphTargetInfluences.slice();
+    const object5 = {};
+    object5.uuid = this.uuid;
+    object5.type = this.type;
+    if (this.name !== "") object5.name = this.name;
+    if (this.castShadow === true) object5.castShadow = true;
+    if (this.receiveShadow === true) object5.receiveShadow = true;
+    if (this.visible === false) object5.visible = false;
+    if (this.frustumCulled === false) object5.frustumCulled = false;
+    if (this.renderOrder !== 0) object5.renderOrder = this.renderOrder;
+    if (this.static !== false) object5.static = this.static;
+    if (Object.keys(this.userData).length > 0) object5.userData = this.userData;
+    object5.layers = this.layers.mask;
+    object5.matrix = this.matrix.toArray();
+    object5.up = this.up.toArray();
+    if (this.pivot !== null) object5.pivot = this.pivot.toArray();
+    if (this.matrixAutoUpdate === false) object5.matrixAutoUpdate = false;
+    if (this.morphTargetDictionary !== void 0) object5.morphTargetDictionary = Object.assign({}, this.morphTargetDictionary);
+    if (this.morphTargetInfluences !== void 0) object5.morphTargetInfluences = this.morphTargetInfluences.slice();
     if (this.isInstancedMesh) {
-      object4.type = "InstancedMesh";
-      object4.count = this.count;
-      object4.instanceMatrix = this.instanceMatrix.toJSON();
-      if (this.instanceColor !== null) object4.instanceColor = this.instanceColor.toJSON();
+      object5.type = "InstancedMesh";
+      object5.count = this.count;
+      object5.instanceMatrix = this.instanceMatrix.toJSON();
+      if (this.instanceColor !== null) object5.instanceColor = this.instanceColor.toJSON();
     }
     if (this.isBatchedMesh) {
-      object4.type = "BatchedMesh";
-      object4.perObjectFrustumCulled = this.perObjectFrustumCulled;
-      object4.sortObjects = this.sortObjects;
-      object4.drawRanges = this._drawRanges;
-      object4.reservedRanges = this._reservedRanges;
-      object4.geometryInfo = this._geometryInfo.map((info) => ({
+      object5.type = "BatchedMesh";
+      object5.perObjectFrustumCulled = this.perObjectFrustumCulled;
+      object5.sortObjects = this.sortObjects;
+      object5.drawRanges = this._drawRanges;
+      object5.reservedRanges = this._reservedRanges;
+      object5.geometryInfo = this._geometryInfo.map((info) => ({
         ...info,
         boundingBox: info.boundingBox ? info.boundingBox.toJSON() : void 0,
         boundingSphere: info.boundingSphere ? info.boundingSphere.toJSON() : void 0
       }));
-      object4.instanceInfo = this._instanceInfo.map((info) => ({ ...info }));
-      object4.availableInstanceIds = this._availableInstanceIds.slice();
-      object4.availableGeometryIds = this._availableGeometryIds.slice();
-      object4.nextIndexStart = this._nextIndexStart;
-      object4.nextVertexStart = this._nextVertexStart;
-      object4.geometryCount = this._geometryCount;
-      object4.maxInstanceCount = this._maxInstanceCount;
-      object4.maxVertexCount = this._maxVertexCount;
-      object4.maxIndexCount = this._maxIndexCount;
-      object4.geometryInitialized = this._geometryInitialized;
-      object4.matricesTexture = this._matricesTexture.toJSON(meta4);
-      object4.indirectTexture = this._indirectTexture.toJSON(meta4);
+      object5.instanceInfo = this._instanceInfo.map((info) => ({ ...info }));
+      object5.availableInstanceIds = this._availableInstanceIds.slice();
+      object5.availableGeometryIds = this._availableGeometryIds.slice();
+      object5.nextIndexStart = this._nextIndexStart;
+      object5.nextVertexStart = this._nextVertexStart;
+      object5.geometryCount = this._geometryCount;
+      object5.maxInstanceCount = this._maxInstanceCount;
+      object5.maxVertexCount = this._maxVertexCount;
+      object5.maxIndexCount = this._maxIndexCount;
+      object5.geometryInitialized = this._geometryInitialized;
+      object5.matricesTexture = this._matricesTexture.toJSON(meta4);
+      object5.indirectTexture = this._indirectTexture.toJSON(meta4);
       if (this._colorsTexture !== null) {
-        object4.colorsTexture = this._colorsTexture.toJSON(meta4);
+        object5.colorsTexture = this._colorsTexture.toJSON(meta4);
       }
       if (this.boundingSphere !== null) {
-        object4.boundingSphere = this.boundingSphere.toJSON();
+        object5.boundingSphere = this.boundingSphere.toJSON();
       }
       if (this.boundingBox !== null) {
-        object4.boundingBox = this.boundingBox.toJSON();
+        object5.boundingBox = this.boundingBox.toJSON();
       }
     }
     function serialize(library, element3) {
@@ -13276,16 +13276,16 @@ var Object3D = class _Object3D extends EventDispatcher {
     if (this.isScene) {
       if (this.background) {
         if (this.background.isColor) {
-          object4.background = this.background.toJSON();
+          object5.background = this.background.toJSON();
         } else if (this.background.isTexture) {
-          object4.background = this.background.toJSON(meta4).uuid;
+          object5.background = this.background.toJSON(meta4).uuid;
         }
       }
       if (this.environment && this.environment.isTexture && this.environment.isRenderTargetTexture !== true) {
-        object4.environment = this.environment.toJSON(meta4).uuid;
+        object5.environment = this.environment.toJSON(meta4).uuid;
       }
     } else if (this.isMesh || this.isLine || this.isPoints) {
-      object4.geometry = serialize(meta4.geometries, this.geometry);
+      object5.geometry = serialize(meta4.geometries, this.geometry);
       const parameters = this.geometry.parameters;
       if (parameters !== void 0 && parameters.shapes !== void 0) {
         const shapes = parameters.shapes;
@@ -13300,11 +13300,11 @@ var Object3D = class _Object3D extends EventDispatcher {
       }
     }
     if (this.isSkinnedMesh) {
-      object4.bindMode = this.bindMode;
-      object4.bindMatrix = this.bindMatrix.toArray();
+      object5.bindMode = this.bindMode;
+      object5.bindMatrix = this.bindMatrix.toArray();
       if (this.skeleton !== void 0) {
         serialize(meta4.skeletons, this.skeleton);
-        object4.skeleton = this.skeleton.uuid;
+        object5.skeleton = this.skeleton.uuid;
       }
     }
     if (this.material !== void 0) {
@@ -13313,22 +13313,22 @@ var Object3D = class _Object3D extends EventDispatcher {
         for (let i2 = 0, l2 = this.material.length; i2 < l2; i2++) {
           uuids.push(serialize(meta4.materials, this.material[i2]));
         }
-        object4.material = uuids;
+        object5.material = uuids;
       } else {
-        object4.material = serialize(meta4.materials, this.material);
+        object5.material = serialize(meta4.materials, this.material);
       }
     }
     if (this.children.length > 0) {
-      object4.children = [];
+      object5.children = [];
       for (let i2 = 0; i2 < this.children.length; i2++) {
-        object4.children.push(this.children[i2].toJSON(meta4).object);
+        object5.children.push(this.children[i2].toJSON(meta4).object);
       }
     }
     if (this.animations.length > 0) {
-      object4.animations = [];
+      object5.animations = [];
       for (let i2 = 0; i2 < this.animations.length; i2++) {
         const animation = this.animations[i2];
-        object4.animations.push(serialize(meta4.animations, animation));
+        object5.animations.push(serialize(meta4.animations, animation));
       }
     }
     if (isRootObject) {
@@ -13349,7 +13349,7 @@ var Object3D = class _Object3D extends EventDispatcher {
       if (animations.length > 0) output3.animations = animations;
       if (nodes.length > 0) output3.nodes = nodes;
     }
-    output3.object = object4;
+    output3.object = object5;
     return output3;
     function extractFromCache(cache3) {
       const values = [];
@@ -15007,9 +15007,9 @@ var Box3 = class {
    * world-axis-aligned bounding box at the expense of more computation.
    * @return {Box3} A reference to this bounding box.
    */
-  setFromObject(object4, precise = false) {
+  setFromObject(object5, precise = false) {
     this.makeEmpty();
-    return this.expandByObject(object4, precise);
+    return this.expandByObject(object5, precise);
   }
   /**
    * Returns a new box with copied values from this instance.
@@ -15117,38 +15117,38 @@ var Box3 = class {
    * as little as necessary at the expense of more computation.
    * @return {Box3} A reference to this bounding box.
    */
-  expandByObject(object4, precise = false) {
-    object4.updateWorldMatrix(false, false);
-    const geometry = object4.geometry;
+  expandByObject(object5, precise = false) {
+    object5.updateWorldMatrix(false, false);
+    const geometry = object5.geometry;
     if (geometry !== void 0) {
       const positionAttribute = geometry.getAttribute("position");
-      if (precise === true && positionAttribute !== void 0 && object4.isInstancedMesh !== true) {
+      if (precise === true && positionAttribute !== void 0 && object5.isInstancedMesh !== true) {
         for (let i2 = 0, l2 = positionAttribute.count; i2 < l2; i2++) {
-          if (object4.isMesh === true) {
-            object4.getVertexPosition(i2, _vector$b);
+          if (object5.isMesh === true) {
+            object5.getVertexPosition(i2, _vector$b);
           } else {
             _vector$b.fromBufferAttribute(positionAttribute, i2);
           }
-          _vector$b.applyMatrix4(object4.matrixWorld);
+          _vector$b.applyMatrix4(object5.matrixWorld);
           this.expandByPoint(_vector$b);
         }
       } else {
-        if (object4.boundingBox !== void 0) {
-          if (object4.boundingBox === null) {
-            object4.computeBoundingBox();
+        if (object5.boundingBox !== void 0) {
+          if (object5.boundingBox === null) {
+            object5.computeBoundingBox();
           }
-          _box$4.copy(object4.boundingBox);
+          _box$4.copy(object5.boundingBox);
         } else {
           if (geometry.boundingBox === null) {
             geometry.computeBoundingBox();
           }
           _box$4.copy(geometry.boundingBox);
         }
-        _box$4.applyMatrix4(object4.matrixWorld);
+        _box$4.applyMatrix4(object5.matrixWorld);
         this.union(_box$4);
       }
     }
-    const children = object4.children;
+    const children = object5.children;
     for (let i2 = 0, l2 = children.length; i2 < l2; i2++) {
       this.expandByObject(children[i2], precise);
     }
@@ -18335,7 +18335,7 @@ var LOD = class extends Object3D {
    * @param {number} [hysteresis=0] - Threshold used to avoid flickering at LOD boundaries, as a fraction of distance.
    * @return {LOD} A reference to this instance.
    */
-  addLevel(object4, distance32 = 0, hysteresis = 0) {
+  addLevel(object5, distance32 = 0, hysteresis = 0) {
     distance32 = Math.abs(distance32);
     const levels = this.levels;
     let l2;
@@ -18344,8 +18344,8 @@ var LOD = class extends Object3D {
         break;
       }
     }
-    levels.splice(l2, 0, { distance: distance32, hysteresis, object: object4 });
-    this.add(object4);
+    levels.splice(l2, 0, { distance: distance32, hysteresis, object: object5 });
+    this.add(object5);
     return this;
   }
   /**
@@ -18948,9 +18948,9 @@ var Mesh = class extends Object3D {
   updateMorphTargets() {
     const geometry = this.geometry;
     const morphAttributes = geometry.morphAttributes;
-    const keys = Object.keys(morphAttributes);
-    if (keys.length > 0) {
-      const morphAttribute = morphAttributes[keys[0]];
+    const keys2 = Object.keys(morphAttributes);
+    if (keys2.length > 0) {
+      const morphAttribute = morphAttributes[keys2[0]];
       if (morphAttribute !== void 0) {
         this.morphTargetInfluences = [];
         this.morphTargetDictionary = {};
@@ -19100,7 +19100,7 @@ var Mesh = class extends Object3D {
     }
   }
 };
-function checkIntersection$1(object4, material, raycaster, ray, pA2, pB, pC, point3) {
+function checkIntersection$1(object5, material, raycaster, ray, pA2, pB, pC, point3) {
   let intersect2;
   if (material.side === BackSide) {
     intersect2 = ray.intersectTriangle(pC, pB, pA2, true, point3);
@@ -19109,20 +19109,20 @@ function checkIntersection$1(object4, material, raycaster, ray, pA2, pB, pC, poi
   }
   if (intersect2 === null) return null;
   _intersectionPointWorld.copy(point3);
-  _intersectionPointWorld.applyMatrix4(object4.matrixWorld);
+  _intersectionPointWorld.applyMatrix4(object5.matrixWorld);
   const distance32 = raycaster.ray.origin.distanceTo(_intersectionPointWorld);
   if (distance32 < raycaster.near || distance32 > raycaster.far) return null;
   return {
     distance: distance32,
     point: _intersectionPointWorld.clone(),
-    object: object4
+    object: object5
   };
 }
-function checkGeometryIntersection(object4, material, raycaster, ray, uv3, uv1, normal2, a2, b3, c2) {
-  object4.getVertexPosition(a2, _vA);
-  object4.getVertexPosition(b3, _vB);
-  object4.getVertexPosition(c2, _vC);
-  const intersection2 = checkIntersection$1(object4, material, raycaster, ray, _vA, _vB, _vC, _intersectionPoint);
+function checkGeometryIntersection(object5, material, raycaster, ray, uv3, uv1, normal2, a2, b3, c2) {
+  object5.getVertexPosition(a2, _vA);
+  object5.getVertexPosition(b3, _vB);
+  object5.getVertexPosition(c2, _vC);
+  const intersection2 = checkIntersection$1(object5, material, raycaster, ray, _vA, _vB, _vC, _intersectionPoint);
   if (intersection2) {
     const barycoord = new Vector3();
     Triangle.getBarycoord(_intersectionPoint, _vA, _vB, _vC, barycoord);
@@ -19699,8 +19699,8 @@ var InstancedMesh = class extends Mesh {
    * @param {number} index - The instance index.
    * @param {Mesh} object - The target object that is used to store the method's result.
    */
-  getMorphAt(index, object4) {
-    const objectInfluences = object4.morphTargetInfluences;
+  getMorphAt(index, object5) {
+    const objectInfluences = object5.morphTargetInfluences;
     const array32 = this.morphTexture.source.data.data;
     const len = objectInfluences.length + 1;
     const dataIndex = index * len + 1;
@@ -19768,8 +19768,8 @@ var InstancedMesh = class extends Mesh {
    * of a single instance.
    * @return {InstancedMesh} A reference to this instanced mesh.
    */
-  setMorphAt(index, object4) {
-    const objectInfluences = object4.morphTargetInfluences;
+  setMorphAt(index, object5) {
+    const objectInfluences = object5.morphTargetInfluences;
     const len = objectInfluences.length + 1;
     if (this.morphTexture === null) {
       this.morphTexture = new DataTexture(new Float32Array(len * this.count), len, this.count, RedFormat, FloatType);
@@ -20134,14 +20134,14 @@ var Frustum = class {
    * @param {Object3D} object - The 3D object to test.
    * @return {boolean} Whether the 3D object's bounding sphere is intersecting this frustum or not.
    */
-  intersectsObject(object4) {
-    if (object4.boundingSphere !== void 0) {
-      if (object4.boundingSphere === null) object4.computeBoundingSphere();
-      _sphere$3.copy(object4.boundingSphere).applyMatrix4(object4.matrixWorld);
+  intersectsObject(object5) {
+    if (object5.boundingSphere !== void 0) {
+      if (object5.boundingSphere === null) object5.computeBoundingSphere();
+      _sphere$3.copy(object5.boundingSphere).applyMatrix4(object5.matrixWorld);
     } else {
-      const geometry = object4.geometry;
+      const geometry = object5.geometry;
       if (geometry.boundingSphere === null) geometry.computeBoundingSphere();
-      _sphere$3.copy(geometry.boundingSphere).applyMatrix4(object4.matrixWorld);
+      _sphere$3.copy(geometry.boundingSphere).applyMatrix4(object5.matrixWorld);
     }
     return this.intersectsSphere(_sphere$3);
   }
@@ -20237,7 +20237,7 @@ var FrustumArray = class _FrustumArray {
    * @param {Object} cameraArray - An object with a cameras property containing an array of cameras.
    * @return {boolean} Whether the 3D object is visible in any camera.
    */
-  intersectsObject(object4, cameraArray) {
+  intersectsObject(object5, cameraArray) {
     if (!cameraArray.isArrayCamera || cameraArray.cameras.length === 0) {
       return false;
     }
@@ -20252,7 +20252,7 @@ var FrustumArray = class _FrustumArray {
         camera.coordinateSystem,
         camera.reversedDepth
       );
-      if (_frustum$1.intersectsObject(object4)) {
+      if (_frustum$1.intersectsObject(object5)) {
         return true;
       }
     }
@@ -21370,7 +21370,7 @@ var BatchedMesh = class extends Mesh {
     this._multiDrawCount = multiDrawCount;
     this._visibilityChanged = false;
   }
-  onBeforeShadow(renderer, object4, camera, shadowCamera, geometry, depthMaterial) {
+  onBeforeShadow(renderer, object5, camera, shadowCamera, geometry, depthMaterial) {
     this.onBeforeRender(renderer, null, shadowCamera, geometry, depthMaterial);
   }
 };
@@ -21528,9 +21528,9 @@ var Line = class extends Object3D {
   updateMorphTargets() {
     const geometry = this.geometry;
     const morphAttributes = geometry.morphAttributes;
-    const keys = Object.keys(morphAttributes);
-    if (keys.length > 0) {
-      const morphAttribute = morphAttributes[keys[0]];
+    const keys2 = Object.keys(morphAttributes);
+    if (keys2.length > 0) {
+      const morphAttribute = morphAttributes[keys2[0]];
       if (morphAttribute !== void 0) {
         this.morphTargetInfluences = [];
         this.morphTargetDictionary = {};
@@ -21543,25 +21543,25 @@ var Line = class extends Object3D {
     }
   }
 };
-function checkIntersection(object4, raycaster, ray, thresholdSq, a2, b3, i2) {
-  const positionAttribute = object4.geometry.attributes.position;
+function checkIntersection(object5, raycaster, ray, thresholdSq, a2, b3, i2) {
+  const positionAttribute = object5.geometry.attributes.position;
   _vStart.fromBufferAttribute(positionAttribute, a2);
   _vEnd.fromBufferAttribute(positionAttribute, b3);
   const distSq2 = ray.distanceSqToSegment(_vStart, _vEnd, _intersectPointOnRay, _intersectPointOnSegment);
   if (distSq2 > thresholdSq) return;
-  _intersectPointOnRay.applyMatrix4(object4.matrixWorld);
+  _intersectPointOnRay.applyMatrix4(object5.matrixWorld);
   const distance32 = raycaster.ray.origin.distanceTo(_intersectPointOnRay);
   if (distance32 < raycaster.near || distance32 > raycaster.far) return;
   return {
     distance: distance32,
     // What do we want? intersection point on the ray or on the segment??
     // point: raycaster.ray.at( distance ),
-    point: _intersectPointOnSegment.clone().applyMatrix4(object4.matrixWorld),
+    point: _intersectPointOnSegment.clone().applyMatrix4(object5.matrixWorld),
     index: i2,
     face: null,
     faceIndex: null,
     barycoord: null,
-    object: object4
+    object: object5
   };
 }
 var _start = /* @__PURE__ */ new Vector3();
@@ -21716,9 +21716,9 @@ var Points = class extends Object3D {
   updateMorphTargets() {
     const geometry = this.geometry;
     const morphAttributes = geometry.morphAttributes;
-    const keys = Object.keys(morphAttributes);
-    if (keys.length > 0) {
-      const morphAttribute = morphAttributes[keys[0]];
+    const keys2 = Object.keys(morphAttributes);
+    if (keys2.length > 0) {
+      const morphAttribute = morphAttributes[keys2[0]];
       if (morphAttribute !== void 0) {
         this.morphTargetInfluences = [];
         this.morphTargetDictionary = {};
@@ -21731,7 +21731,7 @@ var Points = class extends Object3D {
     }
   }
 };
-function testPoint(point3, index, localThresholdSq, matrixWorld, raycaster, intersects2, object4) {
+function testPoint(point3, index, localThresholdSq, matrixWorld, raycaster, intersects2, object5) {
   const rayPointDistanceSq = _ray.distanceSqToPoint(point3);
   if (rayPointDistanceSq < localThresholdSq) {
     const intersectPoint = new Vector3();
@@ -21747,7 +21747,7 @@ function testPoint(point3, index, localThresholdSq, matrixWorld, raycaster, inte
       face: null,
       faceIndex: null,
       barycoord: null,
-      object: object4
+      object: object5
     });
   }
 }
@@ -24674,16 +24674,16 @@ function eliminateHoles(data, holeIndices, outerNode, dim) {
   return outerNode;
 }
 function compareXYSlope(a2, b3) {
-  let result = a2.x - b3.x;
-  if (result === 0) {
-    result = a2.y - b3.y;
-    if (result === 0) {
+  let result2 = a2.x - b3.x;
+  if (result2 === 0) {
+    result2 = a2.y - b3.y;
+    if (result2 === 0) {
       const aSlope = (a2.next.y - a2.y) / (a2.next.x - a2.x);
       const bSlope = (b3.next.y - b3.y) / (b3.next.x - b3.x);
-      result = aSlope - bSlope;
+      result2 = aSlope - bSlope;
     }
   }
-  return result;
+  return result2;
 }
 function eliminateHole(hole, outerNode) {
   const bridge = findHoleBridge(hole, outerNode);
@@ -27494,21 +27494,21 @@ function getKeyframeOrder(times) {
     return times[i2] - times[j3];
   }
   const n22 = times.length;
-  const result = new Array(n22);
-  for (let i2 = 0; i2 !== n22; ++i2) result[i2] = i2;
-  result.sort(compareTime);
-  return result;
+  const result2 = new Array(n22);
+  for (let i2 = 0; i2 !== n22; ++i2) result2[i2] = i2;
+  result2.sort(compareTime);
+  return result2;
 }
 function sortedArray(values, stride, order) {
   const nValues = values.length;
-  const result = new values.constructor(nValues);
+  const result2 = new values.constructor(nValues);
   for (let i2 = 0, dstOffset = 0; dstOffset !== nValues; ++i2) {
     const srcOffset = order[i2] * stride;
     for (let j3 = 0; j3 !== stride; ++j3) {
-      result[dstOffset++] = values[srcOffset + j3];
+      result2[dstOffset++] = values[srcOffset + j3];
     }
   }
-  return result;
+  return result2;
 }
 function flattenJSON(jsonKeys, times, values, valuePropertyName) {
   let i2 = 1, key = jsonKeys[0];
@@ -27667,8 +27667,8 @@ var AnimationUtils = class {
    * @param {any} object - The object to check.
    * @return {boolean} Whether the given object is a typed array.
    */
-  static isTypedArray(object4) {
-    return isTypedArray(object4);
+  static isTypedArray(object5) {
+    return isTypedArray(object5);
   }
   /**
    * Returns an array by which times and values can be sorted.
@@ -27845,11 +27845,11 @@ var Interpolant = class {
    * @return {TypedArray} The result buffer.
    */
   copySampleValue_(index) {
-    const result = this.resultBuffer, values = this.sampleValues, stride = this.valueSize, offset = index * stride;
+    const result2 = this.resultBuffer, values = this.sampleValues, stride = this.valueSize, offset = index * stride;
     for (let i2 = 0; i2 !== stride; ++i2) {
-      result[i2] = values[offset + i2];
+      result2[i2] = values[offset + i2];
     }
-    return result;
+    return result2;
   }
   /**
    * Copies a sample value to the result buffer.
@@ -27934,15 +27934,15 @@ var CubicInterpolant = class extends Interpolant {
     this._offsetNext = iNext * stride;
   }
   interpolate_(i1, t0, t22, t1) {
-    const result = this.resultBuffer, values = this.sampleValues, stride = this.valueSize, o1 = i1 * stride, o0 = o1 - stride, oP = this._offsetPrev, oN = this._offsetNext, wP = this._weightPrev, wN = this._weightNext, p2 = (t22 - t0) / (t1 - t0), pp = p2 * p2, ppp = pp * p2;
+    const result2 = this.resultBuffer, values = this.sampleValues, stride = this.valueSize, o1 = i1 * stride, o0 = o1 - stride, oP = this._offsetPrev, oN = this._offsetNext, wP = this._weightPrev, wN = this._weightNext, p2 = (t22 - t0) / (t1 - t0), pp = p2 * p2, ppp = pp * p2;
     const sP = -wP * ppp + 2 * wP * pp - wP * p2;
     const s0 = (1 + wP) * ppp + (-1.5 - 2 * wP) * pp + (-0.5 + wP) * p2 + 1;
     const s1 = (-1 - wN) * ppp + (1.5 + wN) * pp + 0.5 * p2;
     const sN = wN * ppp - wN * pp;
     for (let i2 = 0; i2 !== stride; ++i2) {
-      result[i2] = sP * values[oP + i2] + s0 * values[o0 + i2] + s1 * values[o1 + i2] + sN * values[oN + i2];
+      result2[i2] = sP * values[oP + i2] + s0 * values[o0 + i2] + s1 * values[o1 + i2] + sN * values[oN + i2];
     }
-    return result;
+    return result2;
   }
 };
 var LinearInterpolant = class extends Interpolant {
@@ -27958,11 +27958,11 @@ var LinearInterpolant = class extends Interpolant {
     super(parameterPositions, sampleValues, sampleSize, resultBuffer);
   }
   interpolate_(i1, t0, t22, t1) {
-    const result = this.resultBuffer, values = this.sampleValues, stride = this.valueSize, offset1 = i1 * stride, offset0 = offset1 - stride, weight1 = (t22 - t0) / (t1 - t0), weight0 = 1 - weight1;
+    const result2 = this.resultBuffer, values = this.sampleValues, stride = this.valueSize, offset1 = i1 * stride, offset0 = offset1 - stride, weight1 = (t22 - t0) / (t1 - t0), weight0 = 1 - weight1;
     for (let i2 = 0; i2 !== stride; ++i2) {
-      result[i2] = values[offset0 + i2] * weight0 + values[offset1 + i2] * weight1;
+      result2[i2] = values[offset0 + i2] * weight0 + values[offset1 + i2] * weight1;
     }
-    return result;
+    return result2;
   }
 };
 var DiscreteInterpolant = class extends Interpolant {
@@ -27983,7 +27983,7 @@ var DiscreteInterpolant = class extends Interpolant {
 };
 var BezierInterpolant = class extends Interpolant {
   interpolate_(i1, t0, t22, t1) {
-    const result = this.resultBuffer;
+    const result2 = this.resultBuffer;
     const values = this.sampleValues;
     const stride = this.valueSize;
     const offset1 = i1 * stride;
@@ -27995,9 +27995,9 @@ var BezierInterpolant = class extends Interpolant {
       const weight1 = (t22 - t0) / (t1 - t0);
       const weight0 = 1 - weight1;
       for (let i2 = 0; i2 !== stride; ++i2) {
-        result[i2] = values[offset0 + i2] * weight0 + values[offset1 + i2] * weight1;
+        result2[i2] = values[offset0 + i2] * weight0 + values[offset1 + i2] * weight1;
       }
-      return result;
+      return result2;
     }
     const tangentStride = stride * 2;
     const i0 = i1 - 1;
@@ -28026,9 +28026,9 @@ var BezierInterpolant = class extends Interpolant {
         s2 = s2 - error210 / dbx;
         s2 = Math.max(0, Math.min(1, s2));
       }
-      result[i2] = oneMinusS3 * v0 + 3 * oneMinusS2 * s2 * c0y + 3 * oneMinusS * s22 * c1y + s3 * v1;
+      result2[i2] = oneMinusS3 * v0 + 3 * oneMinusS2 * s2 * c0y + 3 * oneMinusS * s22 * c1y + s3 * v1;
     }
-    return result;
+    return result2;
   }
 };
 var KeyframeTrack = class {
@@ -28081,8 +28081,8 @@ var KeyframeTrack = class {
    * @param {TypedArray} [result] - The result buffer.
    * @return {DiscreteInterpolant} The new interpolant.
    */
-  InterpolantFactoryMethodDiscrete(result) {
-    return new DiscreteInterpolant(this.times, this.values, this.getValueSize(), result);
+  InterpolantFactoryMethodDiscrete(result2) {
+    return new DiscreteInterpolant(this.times, this.values, this.getValueSize(), result2);
   }
   /**
    * Factory method for creating a new linear interpolant.
@@ -28091,8 +28091,8 @@ var KeyframeTrack = class {
    * @param {TypedArray} [result] - The result buffer.
    * @return {LinearInterpolant} The new interpolant.
    */
-  InterpolantFactoryMethodLinear(result) {
-    return new LinearInterpolant(this.times, this.values, this.getValueSize(), result);
+  InterpolantFactoryMethodLinear(result2) {
+    return new LinearInterpolant(this.times, this.values, this.getValueSize(), result2);
   }
   /**
    * Factory method for creating a new smooth interpolant.
@@ -28101,8 +28101,8 @@ var KeyframeTrack = class {
    * @param {TypedArray} [result] - The result buffer.
    * @return {CubicInterpolant} The new interpolant.
    */
-  InterpolantFactoryMethodSmooth(result) {
-    return new CubicInterpolant(this.times, this.values, this.getValueSize(), result);
+  InterpolantFactoryMethodSmooth(result2) {
+    return new CubicInterpolant(this.times, this.values, this.getValueSize(), result2);
   }
   /**
    * Factory method for creating a new Bezier interpolant.
@@ -28116,8 +28116,8 @@ var KeyframeTrack = class {
    * @param {TypedArray} [result] - The result buffer.
    * @return {BezierInterpolant} The new interpolant.
    */
-  InterpolantFactoryMethodBezier(result) {
-    const interpolant = new BezierInterpolant(this.times, this.values, this.getValueSize(), result);
+  InterpolantFactoryMethodBezier(result2) {
+    const interpolant = new BezierInterpolant(this.times, this.values, this.getValueSize(), result2);
     if (this.settings) {
       interpolant.settings = this.settings;
     }
@@ -28426,12 +28426,12 @@ var QuaternionLinearInterpolant = class extends Interpolant {
     super(parameterPositions, sampleValues, sampleSize, resultBuffer);
   }
   interpolate_(i1, t0, t22, t1) {
-    const result = this.resultBuffer, values = this.sampleValues, stride = this.valueSize, alpha = (t22 - t0) / (t1 - t0);
+    const result2 = this.resultBuffer, values = this.sampleValues, stride = this.valueSize, alpha = (t22 - t0) / (t1 - t0);
     let offset = i1 * stride;
     for (let end = offset + stride; offset !== end; offset += 4) {
-      Quaternion.slerpFlat(result, 0, values, offset - stride, values, offset, alpha);
+      Quaternion.slerpFlat(result2, 0, values, offset - stride, values, offset, alpha);
     }
-    return result;
+    return result2;
   }
 };
 var QuaternionKeyframeTrack = class extends KeyframeTrack {
@@ -28453,8 +28453,8 @@ var QuaternionKeyframeTrack = class extends KeyframeTrack {
    * @param {TypedArray} [result] - The result buffer.
    * @return {QuaternionLinearInterpolant} The new interpolant.
    */
-  InterpolantFactoryMethodLinear(result) {
-    return new QuaternionLinearInterpolant(this.times, this.values, this.getValueSize(), result);
+  InterpolantFactoryMethodLinear(result2) {
+    return new QuaternionLinearInterpolant(this.times, this.values, this.getValueSize(), result2);
   }
 };
 QuaternionKeyframeTrack.prototype.ValueTypeName = "quaternion";
@@ -29253,9 +29253,9 @@ var FileLoader = class extends Loader {
         case "blob":
           return response.blob();
         case "document":
-          return response.text().then((text2) => {
+          return response.text().then((text4) => {
             const parser = new DOMParser();
-            return parser.parseFromString(text2, mimeType);
+            return parser.parseFromString(text4, mimeType);
           });
         case "json":
           return response.json();
@@ -29350,9 +29350,9 @@ var AnimationLoader = class extends Loader {
     loader.setPath(this.path);
     loader.setRequestHeader(this.requestHeader);
     loader.setWithCredentials(this.withCredentials);
-    loader.load(url2, function(text2) {
+    loader.load(url2, function(text4) {
       try {
-        onLoad(scope.parse(JSON.parse(text2)));
+        onLoad(scope.parse(JSON.parse(text4)));
       } catch (e2) {
         if (onError) {
           onError(e2);
@@ -29939,15 +29939,15 @@ var LightShadow = class {
    * @see {@link ObjectLoader#parse}
    */
   toJSON() {
-    const object4 = {};
-    if (this.intensity !== 1) object4.intensity = this.intensity;
-    if (this.bias !== 0) object4.bias = this.bias;
-    if (this.normalBias !== 0) object4.normalBias = this.normalBias;
-    if (this.radius !== 1) object4.radius = this.radius;
-    if (this.mapSize.x !== 512 || this.mapSize.y !== 512) object4.mapSize = this.mapSize.toArray();
-    object4.camera = this.camera.toJSON(false).object;
-    delete object4.camera.matrix;
-    return object4;
+    const object5 = {};
+    if (this.intensity !== 1) object5.intensity = this.intensity;
+    if (this.bias !== 0) object5.bias = this.bias;
+    if (this.normalBias !== 0) object5.normalBias = this.normalBias;
+    if (this.radius !== 1) object5.radius = this.radius;
+    if (this.mapSize.x !== 512 || this.mapSize.y !== 512) object5.mapSize = this.mapSize.toArray();
+    object5.camera = this.camera.toJSON(false).object;
+    delete object5.camera.matrix;
+    return object5;
   }
 };
 var _position$2 = /* @__PURE__ */ new Vector3();
@@ -30863,9 +30863,9 @@ var MaterialLoader = class _MaterialLoader extends Loader {
     loader.setPath(scope.path);
     loader.setRequestHeader(scope.requestHeader);
     loader.setWithCredentials(scope.withCredentials);
-    loader.load(url2, function(text2) {
+    loader.load(url2, function(text4) {
       try {
-        onLoad(scope.parse(JSON.parse(text2)));
+        onLoad(scope.parse(JSON.parse(text4)));
       } catch (e2) {
         if (onError) {
           onError(e2);
@@ -31192,9 +31192,9 @@ var BufferGeometryLoader = class extends Loader {
     loader.setPath(scope.path);
     loader.setRequestHeader(scope.requestHeader);
     loader.setWithCredentials(scope.withCredentials);
-    loader.load(url2, function(text2) {
+    loader.load(url2, function(text4) {
       try {
-        onLoad(scope.parse(JSON.parse(text2)));
+        onLoad(scope.parse(JSON.parse(text4)));
       } catch (e2) {
         if (onError) {
           onError(e2);
@@ -31322,10 +31322,10 @@ var ObjectLoader = class extends Loader {
     loader.setPath(this.path);
     loader.setRequestHeader(this.requestHeader);
     loader.setWithCredentials(this.withCredentials);
-    loader.load(url2, function(text2) {
+    loader.load(url2, function(text4) {
       let json2 = null;
       try {
-        json2 = JSON.parse(text2);
+        json2 = JSON.parse(text4);
       } catch (e2) {
         if (onError !== void 0) onError(e2);
         error("ObjectLoader: Can't parse " + url2 + ".", e2.message);
@@ -31356,10 +31356,10 @@ var ObjectLoader = class extends Loader {
     loader.setPath(this.path);
     loader.setRequestHeader(this.requestHeader);
     loader.setWithCredentials(this.withCredentials);
-    const text2 = await loader.loadAsync(url2, onProgress);
+    const text4 = await loader.loadAsync(url2, onProgress);
     let json2;
     try {
-      json2 = JSON.parse(text2);
+      json2 = JSON.parse(text4);
     } catch (e2) {
       throw new Error("ObjectLoader: Can't parse " + url2 + ". " + e2.message);
     }
@@ -31382,14 +31382,14 @@ var ObjectLoader = class extends Loader {
     const shapes = this.parseShapes(json2.shapes);
     const geometries = this.parseGeometries(json2.geometries, shapes);
     const images = this.parseImages(json2.images, function() {
-      if (onLoad !== void 0) onLoad(object4);
+      if (onLoad !== void 0) onLoad(object5);
     });
     const textures = this.parseTextures(json2.textures, images);
     const materials = this.parseMaterials(json2.materials, textures);
-    const object4 = this.parseObject(json2.object, geometries, materials, textures, animations);
-    const skeletons = this.parseSkeletons(json2.skeletons, object4);
-    this.bindSkeletons(object4, skeletons);
-    this.bindLightTargets(object4);
+    const object5 = this.parseObject(json2.object, geometries, materials, textures, animations);
+    const skeletons = this.parseSkeletons(json2.skeletons, object5);
+    this.bindSkeletons(object5, skeletons);
+    this.bindLightTargets(object5);
     if (onLoad !== void 0) {
       let hasImages = false;
       for (const uuid3 in images) {
@@ -31398,9 +31398,9 @@ var ObjectLoader = class extends Loader {
           break;
         }
       }
-      if (hasImages === false) onLoad(object4);
+      if (hasImages === false) onLoad(object5);
     }
-    return object4;
+    return object5;
   }
   /**
    * Async version of {@link ObjectLoader#parse}.
@@ -31415,11 +31415,11 @@ var ObjectLoader = class extends Loader {
     const images = await this.parseImagesAsync(json2.images);
     const textures = this.parseTextures(json2.textures, images);
     const materials = this.parseMaterials(json2.materials, textures);
-    const object4 = this.parseObject(json2.object, geometries, materials, textures, animations);
-    const skeletons = this.parseSkeletons(json2.skeletons, object4);
-    this.bindSkeletons(object4, skeletons);
-    this.bindLightTargets(object4);
-    return object4;
+    const object5 = this.parseObject(json2.object, geometries, materials, textures, animations);
+    const skeletons = this.parseSkeletons(json2.skeletons, object5);
+    this.bindSkeletons(object5, skeletons);
+    this.bindLightTargets(object5);
+    return object5;
   }
   /**
    * Registers the given geometry at the internal
@@ -31443,10 +31443,10 @@ var ObjectLoader = class extends Loader {
     }
     return shapes;
   }
-  parseSkeletons(json2, object4) {
+  parseSkeletons(json2, object5) {
     const skeletons = {};
     const bones = {};
-    object4.traverse(function(child) {
+    object5.traverse(function(child) {
       if (child.isBone) bones[child.uuid] = child;
     });
     if (json2 !== void 0) {
@@ -31684,7 +31684,7 @@ var ObjectLoader = class extends Loader {
     return textures;
   }
   parseObject(data, geometries, materials, textures, animations) {
-    let object4;
+    let object5;
     function getGeometry(name) {
       if (geometries[name] === void 0) {
         warn("ObjectLoader: Undefined geometry", name);
@@ -31718,82 +31718,82 @@ var ObjectLoader = class extends Loader {
     let geometry, material;
     switch (data.type) {
       case "Scene":
-        object4 = new Scene();
+        object5 = new Scene();
         if (data.background !== void 0) {
           if (Number.isInteger(data.background)) {
-            object4.background = new Color(data.background);
+            object5.background = new Color(data.background);
           } else {
-            object4.background = getTexture(data.background);
+            object5.background = getTexture(data.background);
           }
         }
         if (data.environment !== void 0) {
-          object4.environment = getTexture(data.environment);
+          object5.environment = getTexture(data.environment);
         }
         if (data.fog !== void 0) {
           if (data.fog.type === "Fog") {
-            object4.fog = new Fog(data.fog.color, data.fog.near, data.fog.far);
+            object5.fog = new Fog(data.fog.color, data.fog.near, data.fog.far);
           } else if (data.fog.type === "FogExp2") {
-            object4.fog = new FogExp2(data.fog.color, data.fog.density);
+            object5.fog = new FogExp2(data.fog.color, data.fog.density);
           }
           if (data.fog.name !== "") {
-            object4.fog.name = data.fog.name;
+            object5.fog.name = data.fog.name;
           }
         }
-        if (data.backgroundBlurriness !== void 0) object4.backgroundBlurriness = data.backgroundBlurriness;
-        if (data.backgroundIntensity !== void 0) object4.backgroundIntensity = data.backgroundIntensity;
-        if (data.backgroundRotation !== void 0) object4.backgroundRotation.fromArray(data.backgroundRotation);
-        if (data.environmentIntensity !== void 0) object4.environmentIntensity = data.environmentIntensity;
-        if (data.environmentRotation !== void 0) object4.environmentRotation.fromArray(data.environmentRotation);
+        if (data.backgroundBlurriness !== void 0) object5.backgroundBlurriness = data.backgroundBlurriness;
+        if (data.backgroundIntensity !== void 0) object5.backgroundIntensity = data.backgroundIntensity;
+        if (data.backgroundRotation !== void 0) object5.backgroundRotation.fromArray(data.backgroundRotation);
+        if (data.environmentIntensity !== void 0) object5.environmentIntensity = data.environmentIntensity;
+        if (data.environmentRotation !== void 0) object5.environmentRotation.fromArray(data.environmentRotation);
         break;
       case "PerspectiveCamera":
-        object4 = new PerspectiveCamera(data.fov, data.aspect, data.near, data.far);
-        if (data.focus !== void 0) object4.focus = data.focus;
-        if (data.zoom !== void 0) object4.zoom = data.zoom;
-        if (data.filmGauge !== void 0) object4.filmGauge = data.filmGauge;
-        if (data.filmOffset !== void 0) object4.filmOffset = data.filmOffset;
-        if (data.view !== void 0) object4.view = Object.assign({}, data.view);
+        object5 = new PerspectiveCamera(data.fov, data.aspect, data.near, data.far);
+        if (data.focus !== void 0) object5.focus = data.focus;
+        if (data.zoom !== void 0) object5.zoom = data.zoom;
+        if (data.filmGauge !== void 0) object5.filmGauge = data.filmGauge;
+        if (data.filmOffset !== void 0) object5.filmOffset = data.filmOffset;
+        if (data.view !== void 0) object5.view = Object.assign({}, data.view);
         break;
       case "OrthographicCamera":
-        object4 = new OrthographicCamera(data.left, data.right, data.top, data.bottom, data.near, data.far);
-        if (data.zoom !== void 0) object4.zoom = data.zoom;
-        if (data.view !== void 0) object4.view = Object.assign({}, data.view);
+        object5 = new OrthographicCamera(data.left, data.right, data.top, data.bottom, data.near, data.far);
+        if (data.zoom !== void 0) object5.zoom = data.zoom;
+        if (data.view !== void 0) object5.view = Object.assign({}, data.view);
         break;
       case "AmbientLight":
-        object4 = new AmbientLight(data.color, data.intensity);
+        object5 = new AmbientLight(data.color, data.intensity);
         break;
       case "DirectionalLight":
-        object4 = new DirectionalLight(data.color, data.intensity);
-        object4.target = data.target || "";
+        object5 = new DirectionalLight(data.color, data.intensity);
+        object5.target = data.target || "";
         break;
       case "PointLight":
-        object4 = new PointLight(data.color, data.intensity, data.distance, data.decay);
+        object5 = new PointLight(data.color, data.intensity, data.distance, data.decay);
         break;
       case "RectAreaLight":
-        object4 = new RectAreaLight(data.color, data.intensity, data.width, data.height);
+        object5 = new RectAreaLight(data.color, data.intensity, data.width, data.height);
         break;
       case "SpotLight":
-        object4 = new SpotLight(data.color, data.intensity, data.distance, data.angle, data.penumbra, data.decay);
-        object4.target = data.target || "";
+        object5 = new SpotLight(data.color, data.intensity, data.distance, data.angle, data.penumbra, data.decay);
+        object5.target = data.target || "";
         break;
       case "HemisphereLight":
-        object4 = new HemisphereLight(data.color, data.groundColor, data.intensity);
+        object5 = new HemisphereLight(data.color, data.groundColor, data.intensity);
         break;
       case "LightProbe":
         const sh = new SphericalHarmonics3().fromArray(data.sh);
-        object4 = new LightProbe(sh, data.intensity);
+        object5 = new LightProbe(sh, data.intensity);
         break;
       case "SkinnedMesh":
         geometry = getGeometry(data.geometry);
         material = getMaterial(data.material);
-        object4 = new SkinnedMesh(geometry, material);
-        if (data.bindMode !== void 0) object4.bindMode = data.bindMode;
-        if (data.bindMatrix !== void 0) object4.bindMatrix.fromArray(data.bindMatrix);
-        if (data.skeleton !== void 0) object4.skeleton = data.skeleton;
+        object5 = new SkinnedMesh(geometry, material);
+        if (data.bindMode !== void 0) object5.bindMode = data.bindMode;
+        if (data.bindMatrix !== void 0) object5.bindMatrix.fromArray(data.bindMatrix);
+        if (data.skeleton !== void 0) object5.skeleton = data.skeleton;
         break;
       case "Mesh":
         geometry = getGeometry(data.geometry);
         material = getMaterial(data.material);
-        object4 = new Mesh(geometry, material);
+        object5 = new Mesh(geometry, material);
         break;
       case "InstancedMesh":
         geometry = getGeometry(data.geometry);
@@ -31801,20 +31801,20 @@ var ObjectLoader = class extends Loader {
         const count = data.count;
         const instanceMatrix = data.instanceMatrix;
         const instanceColor = data.instanceColor;
-        object4 = new InstancedMesh(geometry, material, count);
-        object4.instanceMatrix = new InstancedBufferAttribute(new Float32Array(instanceMatrix.array), 16);
-        if (instanceColor !== void 0) object4.instanceColor = new InstancedBufferAttribute(new Float32Array(instanceColor.array), instanceColor.itemSize);
+        object5 = new InstancedMesh(geometry, material, count);
+        object5.instanceMatrix = new InstancedBufferAttribute(new Float32Array(instanceMatrix.array), 16);
+        if (instanceColor !== void 0) object5.instanceColor = new InstancedBufferAttribute(new Float32Array(instanceColor.array), instanceColor.itemSize);
         break;
       case "BatchedMesh":
         geometry = getGeometry(data.geometry);
         material = getMaterial(data.material);
-        object4 = new BatchedMesh(data.maxInstanceCount, data.maxVertexCount, data.maxIndexCount, material);
-        object4.geometry = geometry;
-        object4.perObjectFrustumCulled = data.perObjectFrustumCulled;
-        object4.sortObjects = data.sortObjects;
-        object4._drawRanges = data.drawRanges;
-        object4._reservedRanges = data.reservedRanges;
-        object4._geometryInfo = data.geometryInfo.map((info) => {
+        object5 = new BatchedMesh(data.maxInstanceCount, data.maxVertexCount, data.maxIndexCount, material);
+        object5.geometry = geometry;
+        object5.perObjectFrustumCulled = data.perObjectFrustumCulled;
+        object5.sortObjects = data.sortObjects;
+        object5._drawRanges = data.drawRanges;
+        object5._reservedRanges = data.reservedRanges;
+        object5._geometryInfo = data.geometryInfo.map((info) => {
           let box = null;
           let sphere = null;
           if (info.boundingBox !== void 0) {
@@ -31829,117 +31829,117 @@ var ObjectLoader = class extends Loader {
             boundingSphere: sphere
           };
         });
-        object4._instanceInfo = data.instanceInfo;
-        object4._availableInstanceIds = data._availableInstanceIds;
-        object4._availableGeometryIds = data._availableGeometryIds;
-        object4._nextIndexStart = data.nextIndexStart;
-        object4._nextVertexStart = data.nextVertexStart;
-        object4._geometryCount = data.geometryCount;
-        object4._maxInstanceCount = data.maxInstanceCount;
-        object4._maxVertexCount = data.maxVertexCount;
-        object4._maxIndexCount = data.maxIndexCount;
-        object4._geometryInitialized = data.geometryInitialized;
-        object4._matricesTexture = getTexture(data.matricesTexture.uuid);
-        object4._indirectTexture = getTexture(data.indirectTexture.uuid);
+        object5._instanceInfo = data.instanceInfo;
+        object5._availableInstanceIds = data._availableInstanceIds;
+        object5._availableGeometryIds = data._availableGeometryIds;
+        object5._nextIndexStart = data.nextIndexStart;
+        object5._nextVertexStart = data.nextVertexStart;
+        object5._geometryCount = data.geometryCount;
+        object5._maxInstanceCount = data.maxInstanceCount;
+        object5._maxVertexCount = data.maxVertexCount;
+        object5._maxIndexCount = data.maxIndexCount;
+        object5._geometryInitialized = data.geometryInitialized;
+        object5._matricesTexture = getTexture(data.matricesTexture.uuid);
+        object5._indirectTexture = getTexture(data.indirectTexture.uuid);
         if (data.colorsTexture !== void 0) {
-          object4._colorsTexture = getTexture(data.colorsTexture.uuid);
+          object5._colorsTexture = getTexture(data.colorsTexture.uuid);
         }
         if (data.boundingSphere !== void 0) {
-          object4.boundingSphere = new Sphere().fromJSON(data.boundingSphere);
+          object5.boundingSphere = new Sphere().fromJSON(data.boundingSphere);
         }
         if (data.boundingBox !== void 0) {
-          object4.boundingBox = new Box3().fromJSON(data.boundingBox);
+          object5.boundingBox = new Box3().fromJSON(data.boundingBox);
         }
         break;
       case "LOD":
-        object4 = new LOD();
+        object5 = new LOD();
         break;
       case "Line":
-        object4 = new Line(getGeometry(data.geometry), getMaterial(data.material));
+        object5 = new Line(getGeometry(data.geometry), getMaterial(data.material));
         break;
       case "LineLoop":
-        object4 = new LineLoop(getGeometry(data.geometry), getMaterial(data.material));
+        object5 = new LineLoop(getGeometry(data.geometry), getMaterial(data.material));
         break;
       case "LineSegments":
-        object4 = new LineSegments(getGeometry(data.geometry), getMaterial(data.material));
+        object5 = new LineSegments(getGeometry(data.geometry), getMaterial(data.material));
         break;
       case "PointCloud":
       case "Points":
-        object4 = new Points(getGeometry(data.geometry), getMaterial(data.material));
+        object5 = new Points(getGeometry(data.geometry), getMaterial(data.material));
         break;
       case "Sprite":
-        object4 = new Sprite(getMaterial(data.material));
+        object5 = new Sprite(getMaterial(data.material));
         break;
       case "Group":
-        object4 = new Group();
+        object5 = new Group();
         break;
       case "Bone":
-        object4 = new Bone();
+        object5 = new Bone();
         break;
       default:
-        object4 = new Object3D();
+        object5 = new Object3D();
     }
-    object4.uuid = data.uuid;
-    if (data.name !== void 0) object4.name = data.name;
+    object5.uuid = data.uuid;
+    if (data.name !== void 0) object5.name = data.name;
     if (data.matrix !== void 0) {
-      object4.matrix.fromArray(data.matrix);
-      if (data.matrixAutoUpdate !== void 0) object4.matrixAutoUpdate = data.matrixAutoUpdate;
-      if (object4.matrixAutoUpdate) object4.matrix.decompose(object4.position, object4.quaternion, object4.scale);
+      object5.matrix.fromArray(data.matrix);
+      if (data.matrixAutoUpdate !== void 0) object5.matrixAutoUpdate = data.matrixAutoUpdate;
+      if (object5.matrixAutoUpdate) object5.matrix.decompose(object5.position, object5.quaternion, object5.scale);
     } else {
-      if (data.position !== void 0) object4.position.fromArray(data.position);
-      if (data.rotation !== void 0) object4.rotation.fromArray(data.rotation);
-      if (data.quaternion !== void 0) object4.quaternion.fromArray(data.quaternion);
-      if (data.scale !== void 0) object4.scale.fromArray(data.scale);
+      if (data.position !== void 0) object5.position.fromArray(data.position);
+      if (data.rotation !== void 0) object5.rotation.fromArray(data.rotation);
+      if (data.quaternion !== void 0) object5.quaternion.fromArray(data.quaternion);
+      if (data.scale !== void 0) object5.scale.fromArray(data.scale);
     }
-    if (data.up !== void 0) object4.up.fromArray(data.up);
-    if (data.pivot !== void 0) object4.pivot = new Vector3().fromArray(data.pivot);
-    if (data.morphTargetDictionary !== void 0) object4.morphTargetDictionary = Object.assign({}, data.morphTargetDictionary);
-    if (data.morphTargetInfluences !== void 0) object4.morphTargetInfluences = data.morphTargetInfluences.slice();
-    if (data.castShadow !== void 0) object4.castShadow = data.castShadow;
-    if (data.receiveShadow !== void 0) object4.receiveShadow = data.receiveShadow;
+    if (data.up !== void 0) object5.up.fromArray(data.up);
+    if (data.pivot !== void 0) object5.pivot = new Vector3().fromArray(data.pivot);
+    if (data.morphTargetDictionary !== void 0) object5.morphTargetDictionary = Object.assign({}, data.morphTargetDictionary);
+    if (data.morphTargetInfluences !== void 0) object5.morphTargetInfluences = data.morphTargetInfluences.slice();
+    if (data.castShadow !== void 0) object5.castShadow = data.castShadow;
+    if (data.receiveShadow !== void 0) object5.receiveShadow = data.receiveShadow;
     if (data.shadow) {
-      if (data.shadow.intensity !== void 0) object4.shadow.intensity = data.shadow.intensity;
-      if (data.shadow.bias !== void 0) object4.shadow.bias = data.shadow.bias;
-      if (data.shadow.normalBias !== void 0) object4.shadow.normalBias = data.shadow.normalBias;
-      if (data.shadow.radius !== void 0) object4.shadow.radius = data.shadow.radius;
-      if (data.shadow.mapSize !== void 0) object4.shadow.mapSize.fromArray(data.shadow.mapSize);
-      if (data.shadow.camera !== void 0) object4.shadow.camera = this.parseObject(data.shadow.camera);
+      if (data.shadow.intensity !== void 0) object5.shadow.intensity = data.shadow.intensity;
+      if (data.shadow.bias !== void 0) object5.shadow.bias = data.shadow.bias;
+      if (data.shadow.normalBias !== void 0) object5.shadow.normalBias = data.shadow.normalBias;
+      if (data.shadow.radius !== void 0) object5.shadow.radius = data.shadow.radius;
+      if (data.shadow.mapSize !== void 0) object5.shadow.mapSize.fromArray(data.shadow.mapSize);
+      if (data.shadow.camera !== void 0) object5.shadow.camera = this.parseObject(data.shadow.camera);
     }
-    if (data.visible !== void 0) object4.visible = data.visible;
-    if (data.frustumCulled !== void 0) object4.frustumCulled = data.frustumCulled;
-    if (data.renderOrder !== void 0) object4.renderOrder = data.renderOrder;
-    if (data.static !== void 0) object4.static = data.static;
-    if (data.userData !== void 0) object4.userData = data.userData;
-    if (data.layers !== void 0) object4.layers.mask = data.layers;
+    if (data.visible !== void 0) object5.visible = data.visible;
+    if (data.frustumCulled !== void 0) object5.frustumCulled = data.frustumCulled;
+    if (data.renderOrder !== void 0) object5.renderOrder = data.renderOrder;
+    if (data.static !== void 0) object5.static = data.static;
+    if (data.userData !== void 0) object5.userData = data.userData;
+    if (data.layers !== void 0) object5.layers.mask = data.layers;
     if (data.children !== void 0) {
       const children = data.children;
       for (let i2 = 0; i2 < children.length; i2++) {
-        object4.add(this.parseObject(children[i2], geometries, materials, textures, animations));
+        object5.add(this.parseObject(children[i2], geometries, materials, textures, animations));
       }
     }
     if (data.animations !== void 0) {
       const objectAnimations = data.animations;
       for (let i2 = 0; i2 < objectAnimations.length; i2++) {
         const uuid3 = objectAnimations[i2];
-        object4.animations.push(animations[uuid3]);
+        object5.animations.push(animations[uuid3]);
       }
     }
     if (data.type === "LOD") {
-      if (data.autoUpdate !== void 0) object4.autoUpdate = data.autoUpdate;
+      if (data.autoUpdate !== void 0) object5.autoUpdate = data.autoUpdate;
       const levels = data.levels;
       for (let l2 = 0; l2 < levels.length; l2++) {
         const level = levels[l2];
-        const child = object4.getObjectByProperty("uuid", level.object);
+        const child = object5.getObjectByProperty("uuid", level.object);
         if (child !== void 0) {
-          object4.addLevel(child, level.distance, level.hysteresis);
+          object5.addLevel(child, level.distance, level.hysteresis);
         }
       }
     }
-    return object4;
+    return object5;
   }
-  bindSkeletons(object4, skeletons) {
+  bindSkeletons(object5, skeletons) {
     if (Object.keys(skeletons).length === 0) return;
-    object4.traverse(function(child) {
+    object5.traverse(function(child) {
       if (child.isSkinnedMesh === true && child.skeleton !== void 0) {
         const skeleton = skeletons[child.skeleton];
         if (skeleton === void 0) {
@@ -31950,11 +31950,11 @@ var ObjectLoader = class extends Loader {
       }
     });
   }
-  bindLightTargets(object4) {
-    object4.traverse(function(child) {
+  bindLightTargets(object5) {
+    object5.traverse(function(child) {
       if (child.isDirectionalLight || child.isSpotLight) {
         const uuid3 = child.target;
-        const target = object4.getObjectByProperty("uuid", uuid3);
+        const target = object5.getObjectByProperty("uuid", uuid3);
         if (target !== void 0) {
           child.target = target;
         } else {
@@ -33518,8 +33518,8 @@ var PropertyBinding = class _PropertyBinding {
           if (childNode.name === nodeName || childNode.uuid === nodeName) {
             return childNode;
           }
-          const result = searchNodeSubtree(childNode.children);
-          if (result) return result;
+          const result2 = searchNodeSubtree(childNode.children);
+          if (result2) return result2;
         }
         return null;
       };
@@ -33832,14 +33832,14 @@ var AnimationObjectGroup = class {
     const objects = this._objects, indicesByUUID = this._indicesByUUID, paths = this._paths, parsedPaths = this._parsedPaths, bindings = this._bindings, nBindings = bindings.length;
     let knownObject = void 0, nObjects = objects.length, nCachedObjects = this.nCachedObjects_;
     for (let i2 = 0, n22 = arguments.length; i2 !== n22; ++i2) {
-      const object4 = arguments[i2], uuid3 = object4.uuid;
+      const object5 = arguments[i2], uuid3 = object5.uuid;
       let index = indicesByUUID[uuid3];
       if (index === void 0) {
         index = nObjects++;
         indicesByUUID[uuid3] = index;
-        objects.push(object4);
+        objects.push(object5);
         for (let j3 = 0, m2 = nBindings; j3 !== m2; ++j3) {
-          bindings[j3].push(new PropertyBinding(object4, paths[j3], parsedPaths[j3]));
+          bindings[j3].push(new PropertyBinding(object5, paths[j3], parsedPaths[j3]));
         }
       } else if (index < nCachedObjects) {
         knownObject = objects[index];
@@ -33847,13 +33847,13 @@ var AnimationObjectGroup = class {
         indicesByUUID[lastCachedObject.uuid] = index;
         objects[index] = lastCachedObject;
         indicesByUUID[uuid3] = firstActiveIndex;
-        objects[firstActiveIndex] = object4;
+        objects[firstActiveIndex] = object5;
         for (let j3 = 0, m2 = nBindings; j3 !== m2; ++j3) {
           const bindingsForPath = bindings[j3], lastCached = bindingsForPath[firstActiveIndex];
           let binding = bindingsForPath[index];
           bindingsForPath[index] = lastCached;
           if (binding === void 0) {
-            binding = new PropertyBinding(object4, paths[j3], parsedPaths[j3]);
+            binding = new PropertyBinding(object5, paths[j3], parsedPaths[j3]);
           }
           bindingsForPath[firstActiveIndex] = binding;
         }
@@ -33872,13 +33872,13 @@ var AnimationObjectGroup = class {
     const objects = this._objects, indicesByUUID = this._indicesByUUID, bindings = this._bindings, nBindings = bindings.length;
     let nCachedObjects = this.nCachedObjects_;
     for (let i2 = 0, n22 = arguments.length; i2 !== n22; ++i2) {
-      const object4 = arguments[i2], uuid3 = object4.uuid, index = indicesByUUID[uuid3];
+      const object5 = arguments[i2], uuid3 = object5.uuid, index = indicesByUUID[uuid3];
       if (index !== void 0 && index >= nCachedObjects) {
         const lastCachedIndex = nCachedObjects++, firstActiveObject = objects[lastCachedIndex];
         indicesByUUID[firstActiveObject.uuid] = index;
         objects[index] = firstActiveObject;
         indicesByUUID[uuid3] = lastCachedIndex;
-        objects[lastCachedIndex] = object4;
+        objects[lastCachedIndex] = object5;
         for (let j3 = 0, m2 = nBindings; j3 !== m2; ++j3) {
           const bindingsForPath = bindings[j3], firstActive = bindingsForPath[lastCachedIndex], binding = bindingsForPath[index];
           bindingsForPath[index] = firstActive;
@@ -33897,7 +33897,7 @@ var AnimationObjectGroup = class {
     const objects = this._objects, indicesByUUID = this._indicesByUUID, bindings = this._bindings, nBindings = bindings.length;
     let nCachedObjects = this.nCachedObjects_, nObjects = objects.length;
     for (let i2 = 0, n22 = arguments.length; i2 !== n22; ++i2) {
-      const object4 = arguments[i2], uuid3 = object4.uuid, index = indicesByUUID[uuid3];
+      const object5 = arguments[i2], uuid3 = object5.uuid, index = indicesByUUID[uuid3];
       if (index !== void 0) {
         delete indicesByUUID[uuid3];
         if (index < nCachedObjects) {
@@ -33943,8 +33943,8 @@ var AnimationObjectGroup = class {
     parsedPaths.push(parsedPath);
     bindings.push(bindingsForPath);
     for (let i2 = nCachedObjects, n22 = objects.length; i2 !== n22; ++i2) {
-      const object4 = objects[i2];
-      bindingsForPath[i2] = new PropertyBinding(object4, path2, parsedPath);
+      const object5 = objects[i2];
+      bindingsForPath[i2] = new PropertyBinding(object5, path2, parsedPath);
     }
     return bindingsForPath;
   }
@@ -35233,8 +35233,8 @@ var Raycaster = class {
    * @param {Array<Raycaster~Intersection>} [intersects=[]] The target array that holds the result of the method.
    * @return {Array<Raycaster~Intersection>} An array holding the intersection points.
    */
-  intersectObject(object4, recursive = true, intersects2 = []) {
-    intersect(object4, this, intersects2, recursive);
+  intersectObject(object5, recursive = true, intersects2 = []) {
+    intersect(object5, this, intersects2, recursive);
     intersects2.sort(ascSort);
     return intersects2;
   }
@@ -35259,14 +35259,14 @@ var Raycaster = class {
 function ascSort(a2, b3) {
   return a2.distance - b3.distance;
 }
-function intersect(object4, raycaster, intersects2, recursive) {
+function intersect(object5, raycaster, intersects2, recursive) {
   let propagate = true;
-  if (object4.layers.test(raycaster.layers)) {
-    const result = object4.raycast(raycaster, intersects2);
-    if (result === false) propagate = false;
+  if (object5.layers.test(raycaster.layers)) {
+    const result2 = object5.raycast(raycaster, intersects2);
+    if (result2 === false) propagate = false;
   }
   if (propagate === true && recursive === true) {
-    const children = object4.children;
+    const children = object5.children;
     for (let i2 = 0, l2 = children.length; i2 < l2; i2++) {
       intersect(children[i2], raycaster, intersects2, true);
     }
@@ -36138,8 +36138,8 @@ var SkeletonHelper = class extends LineSegments {
    * @param {Object3D} object -  Usually an instance of {@link SkinnedMesh}. However, any 3D object
    * can be used if it represents a hierarchy of bones (see {@link Bone}).
    */
-  constructor(object4) {
-    const bones = getBoneList(object4);
+  constructor(object5) {
+    const bones = getBoneList(object5);
     const geometry = new BufferGeometry();
     const vertices = [];
     const colors = [];
@@ -36158,9 +36158,9 @@ var SkeletonHelper = class extends LineSegments {
     super(geometry, material);
     this.isSkeletonHelper = true;
     this.type = "SkeletonHelper";
-    this.root = object4;
+    this.root = object5;
     this.bones = bones;
-    this.matrix = object4.matrixWorld;
+    this.matrix = object5.matrixWorld;
     this.matrixAutoUpdate = false;
     const color1 = new Color(255);
     const color22 = new Color(65280);
@@ -36212,13 +36212,13 @@ var SkeletonHelper = class extends LineSegments {
     this.material.dispose();
   }
 };
-function getBoneList(object4) {
+function getBoneList(object5) {
   const boneList = [];
-  if (object4.isBone === true) {
-    boneList.push(object4);
+  if (object5.isBone === true) {
+    boneList.push(object5);
   }
-  for (let i2 = 0; i2 < object4.children.length; i2++) {
-    boneList.push(...getBoneList(object4.children[i2]));
+  for (let i2 = 0; i2 < object5.children.length; i2++) {
+    boneList.push(...getBoneList(object5.children[i2]));
   }
   return boneList;
 }
@@ -36549,13 +36549,13 @@ var CameraHelper = class extends LineSegments {
       addPoint(a2);
       addPoint(b3);
     }
-    function addPoint(id4) {
+    function addPoint(id7) {
       vertices.push(0, 0, 0);
       colors.push(0, 0, 0);
-      if (pointMap[id4] === void 0) {
-        pointMap[id4] = [];
+      if (pointMap[id7] === void 0) {
+        pointMap[id7] = [];
       }
-      pointMap[id4].push(vertices.length / 3 - 1);
+      pointMap[id7].push(vertices.length / 3 - 1);
     }
     geometry.setAttribute("position", new Float32BufferAttribute(vertices, 3));
     geometry.setAttribute("color", new Float32BufferAttribute(colors, 3));
@@ -36713,14 +36713,14 @@ var BoxHelper = class extends LineSegments {
    * @param {Object3D} [object] - The 3D object to show the world-axis-aligned bounding box.
    * @param {number|Color|string} [color=0xffff00] - The box's color.
    */
-  constructor(object4, color3 = 16776960) {
+  constructor(object5, color3 = 16776960) {
     const indices = new Uint16Array([0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7]);
     const positions = new Float32Array(8 * 3);
     const geometry = new BufferGeometry();
     geometry.setIndex(new BufferAttribute(indices, 1));
     geometry.setAttribute("position", new BufferAttribute(positions, 3));
     super(geometry, new LineBasicMaterial({ color: color3, toneMapped: false }));
-    this.object = object4;
+    this.object = object5;
     this.type = "BoxHelper";
     this.matrixAutoUpdate = false;
     this.update();
@@ -36771,8 +36771,8 @@ var BoxHelper = class extends LineSegments {
    * @param {Object3D} object - The 3D object to create the helper for.
    * @return {BoxHelper} A reference to this instance.
    */
-  setFromObject(object4) {
-    this.object = object4;
+  setFromObject(object5) {
+    this.object = object5;
     this.update();
     return this;
   }
@@ -37254,9 +37254,9 @@ var Controls = class extends EventDispatcher {
    * @param {Object3D} object - The object that is managed by the controls.
    * @param {?HTMLElement} domElement - The HTML element used for event listeners.
    */
-  constructor(object4, domElement = null) {
+  constructor(object5, domElement = null) {
     super();
-    this.object = object4;
+    this.object = object5;
     this.domElement = domElement;
     this.enabled = true;
     this.state = -1;
@@ -37611,16 +37611,16 @@ var NodeMaterialObserver = class {
   getRenderObjectData(renderObject) {
     let data = this.renderObjects.get(renderObject);
     if (data === void 0) {
-      const { geometry, object: object4 } = renderObject;
+      const { geometry, object: object5 } = renderObject;
       data = {
         geometryId: geometry.id,
-        worldMatrix: object4.matrixWorld.clone()
+        worldMatrix: object5.matrixWorld.clone()
       };
-      if (object4.center) {
-        data.center = object4.center.clone();
+      if (object5.center) {
+        data.center = object5.center.clone();
       }
-      if (object4.morphTargetInfluences) {
-        data.morphTargetInfluences = object4.morphTargetInfluences.slice();
+      if (object5.morphTargetInfluences) {
+        data.morphTargetInfluences = object5.morphTargetInfluences.slice();
       }
       if (renderObject.bundle !== null) {
         data.version = renderObject.bundle.version;
@@ -37729,10 +37729,10 @@ var NodeMaterialObserver = class {
    * @return {boolean} Whether the given render object has changed its state or not.
    */
   equals(renderObject, lightsData, renderId) {
-    const { object: object4, material, geometry } = renderObject;
+    const { object: object5, material, geometry } = renderObject;
     const renderObjectData = this.getRenderObjectData(renderObject);
-    if (renderObjectData.worldMatrix.equals(object4.matrixWorld) !== true) {
-      renderObjectData.worldMatrix.copy(object4.matrixWorld);
+    if (renderObjectData.worldMatrix.equals(object5.matrixWorld) !== true) {
+      renderObjectData.worldMatrix.copy(object5.matrixWorld);
       return false;
     }
     const materialData = this.getMaterialData(renderObject.material);
@@ -37832,8 +37832,8 @@ var NodeMaterialObserver = class {
     if (renderObjectData.morphTargetInfluences) {
       let morphChanged = false;
       for (let i2 = 0; i2 < renderObjectData.morphTargetInfluences.length; i2++) {
-        if (renderObjectData.morphTargetInfluences[i2] !== object4.morphTargetInfluences[i2]) {
-          renderObjectData.morphTargetInfluences[i2] = object4.morphTargetInfluences[i2];
+        if (renderObjectData.morphTargetInfluences[i2] !== object5.morphTargetInfluences[i2]) {
+          renderObjectData.morphTargetInfluences[i2] = object5.morphTargetInfluences[i2];
           morphChanged = true;
         }
       }
@@ -37847,8 +37847,8 @@ var NodeMaterialObserver = class {
       }
     }
     if (renderObjectData.center) {
-      if (renderObjectData.center.equals(object4.center) === false) {
-        renderObjectData.center.copy(object4.center);
+      if (renderObjectData.center.equals(object5.center) === false) {
+        renderObjectData.center.copy(object5.center);
         return true;
       }
     }
@@ -38127,11 +38127,11 @@ function getValueFromType(type, ...params) {
   }
   return null;
 }
-function getDataFromObject(object4) {
-  let data = dataFromObject.get(object4);
+function getDataFromObject(object5) {
+  let data = dataFromObject.get(object5);
   if (data === void 0) {
     data = {};
-    dataFromObject.set(object4, data);
+    dataFromObject.set(object5, data);
   }
   return data;
 }
@@ -38379,21 +38379,21 @@ var Node = class _Node extends EventDispatcher {
     const children = [];
     ignores.add(this);
     for (const property3 of Object.getOwnPropertyNames(this)) {
-      const object4 = this[property3];
-      if (property3.startsWith("_") === true || ignores.has(object4)) continue;
-      if (Array.isArray(object4) === true) {
-        for (let i2 = 0; i2 < object4.length; i2++) {
-          const child = object4[i2];
+      const object5 = this[property3];
+      if (property3.startsWith("_") === true || ignores.has(object5)) continue;
+      if (Array.isArray(object5) === true) {
+        for (let i2 = 0; i2 < object5.length; i2++) {
+          const child = object5[i2];
           if (child && child.isNode === true) {
             children.push({ property: property3, index: i2, childNode: child });
           }
         }
-      } else if (object4 && object4.isNode === true) {
-        children.push({ property: property3, childNode: object4 });
-      } else if (object4 && Object.getPrototypeOf(object4) === Object.prototype) {
-        for (const subProperty in object4) {
+      } else if (object5 && object5.isNode === true) {
+        children.push({ property: property3, childNode: object5 });
+      } else if (object5 && Object.getPrototypeOf(object5) === Object.prototype) {
+        for (const subProperty in object5) {
           if (subProperty.startsWith("_") === true) continue;
-          const child = object4[subProperty];
+          const child = object5[subProperty];
           if (child && child.isNode === true) {
             children.push({ property: property3, index: subProperty, childNode: child });
           }
@@ -38685,7 +38685,7 @@ var Node = class _Node extends EventDispatcher {
       builder.setBuildStage(previousBuildStage);
     }
     builder.addChain(this);
-    let result = null;
+    let result2 = null;
     const buildStage = builder.getBuildStage();
     if (buildStage === "setup") {
       builder.addNode(this);
@@ -38706,7 +38706,7 @@ var Node = class _Node extends EventDispatcher {
         }
         builder.addSequentialNode(this);
       }
-      result = properties.outputNode;
+      result2 = properties.outputNode;
     } else if (buildStage === "analyze") {
       this.analyze(builder, output3);
     } else if (buildStage === "generate") {
@@ -38714,30 +38714,30 @@ var Node = class _Node extends EventDispatcher {
       if (isGenerateOnce) {
         const type = this.getNodeType(builder);
         const nodeData2 = builder.getDataFromNode(this);
-        result = nodeData2.snippet;
-        if (result === void 0) {
+        result2 = nodeData2.snippet;
+        if (result2 === void 0) {
           if (nodeData2.generated === void 0) {
             nodeData2.generated = true;
-            result = this.generate(builder) || "";
-            nodeData2.snippet = result;
+            result2 = this.generate(builder) || "";
+            nodeData2.snippet = result2;
           } else {
             warn("Node: Recursion detected.", this);
-            result = "/* Recursion detected. */";
+            result2 = "/* Recursion detected. */";
           }
         } else if (nodeData2.flowCodes !== void 0 && builder.context.nodeBlock !== void 0) {
           builder.addFlowCodeHierarchy(this, builder.context.nodeBlock);
         }
-        result = builder.format(result, type, output3);
+        result2 = builder.format(result2, type, output3);
       } else {
-        result = this.generate(builder, output3) || "";
+        result2 = this.generate(builder, output3) || "";
       }
-      if (result === "" && output3 !== null && output3 !== "void" && output3 !== "OutputType") {
+      if (result2 === "" && output3 !== null && output3 !== "void" && output3 !== "OutputType") {
         error(`TSL: Invalid generated code, expected a "${output3}".`);
-        result = builder.generateConst(output3);
+        result2 = builder.generateConst(output3);
       }
     }
     builder.removeChain(this);
-    return result;
+    return result2;
   }
   /**
    * Returns the child nodes as a JSON object.
@@ -39586,7 +39586,7 @@ var ShaderCallNodeInternal = class extends Node {
     const previousFnCall = builder.fnCall;
     builder.subBuildFn = subBuild3;
     builder.fnCall = this;
-    let result = null;
+    let result2 = null;
     if (shaderNode.layout) {
       let functionNodesCacheMap = nodeBuilderFunctionsCacheMap.get(builder.constructor);
       if (functionNodesCacheMap === void 0) {
@@ -39600,7 +39600,7 @@ var ShaderCallNodeInternal = class extends Node {
       }
       builder.addInclude(functionNode);
       const inputs = rawInputs ? getLayoutParameters(rawInputs) : null;
-      result = nodeObject(functionNode.call(inputs));
+      result2 = nodeObject(functionNode.call(inputs));
     } else {
       const secureNodeBuilder = new Proxy(builder, {
         get: (target, property3, receiver) => {
@@ -39619,14 +39619,14 @@ var ShaderCallNodeInternal = class extends Node {
       const hasParameters = Array.isArray(rawInputs) ? rawInputs.length > 0 : rawInputs !== null;
       const jsFunc = shaderNode.jsFunc;
       const outputNode = hasParameters || jsFunc.length > 1 ? jsFunc(inputs, secureNodeBuilder) : jsFunc(secureNodeBuilder);
-      result = nodeObject(outputNode);
+      result2 = nodeObject(outputNode);
     }
     builder.subBuildFn = previousSubBuildFn;
     builder.fnCall = previousFnCall;
     if (shaderNode.once) {
-      properties[subBuildProperty] = result;
+      properties[subBuildProperty] = result2;
     }
-    return result;
+    return result2;
   }
   setupOutput(builder) {
     builder.addStack();
@@ -39641,7 +39641,7 @@ var ShaderCallNodeInternal = class extends Node {
     return properties[subBuildOutput];
   }
   build(builder, output3 = null) {
-    let result = null;
+    let result2 = null;
     const buildStage = builder.getBuildStage();
     const properties = builder.getNodeProperties(this);
     const subBuildOutput = builder.getSubBuildOutput(this);
@@ -39664,14 +39664,14 @@ var ShaderCallNodeInternal = class extends Node {
           }
         }
       }
-      result = properties[subBuildOutput];
+      result2 = properties[subBuildOutput];
     } else if (buildStage === "analyze") {
       outputNode.build(builder, output3);
     } else if (buildStage === "generate") {
-      result = outputNode.build(builder, output3) || "";
+      result2 = outputNode.build(builder, output3) || "";
     }
     builder.fnCall = previousFnCall;
-    return result;
+    return result2;
   }
 };
 function getLayoutParameters(params) {
@@ -41731,14 +41731,14 @@ var ReferenceBaseNode = class extends Node {
    * @param {?Object} [object=null] - The object the property belongs to.
    * @param {?number} [count=null] - When the linked property is an array-like, this parameter defines its length.
    */
-  constructor(property3, uniformType, object4 = null, count = null) {
+  constructor(property3, uniformType, object5 = null, count = null) {
     super();
     this.property = property3;
     this.uniformType = uniformType;
-    this.object = object4;
+    this.object = object5;
     this.count = count;
     this.properties = property3.split(".");
-    this.reference = object4;
+    this.reference = object5;
     this.node = null;
     this.group = null;
     this.updateType = NodeUpdateType.OBJECT;
@@ -41796,9 +41796,9 @@ var ReferenceBaseNode = class extends Node {
    * @param {Object} [object=this.reference] - The object to retrieve the property value from.
    * @return {any} The value.
    */
-  getValueFromReference(object4 = this.reference) {
+  getValueFromReference(object5 = this.reference) {
     const { properties } = this;
-    let value = object4[properties[0]];
+    let value = object5[properties[0]];
     for (let i2 = 1; i2 < properties.length; i2++) {
       value = value[properties[i2]];
     }
@@ -41846,7 +41846,7 @@ var ReferenceBaseNode = class extends Node {
     }
   }
 };
-var reference$1 = (name, type, object4) => new ReferenceBaseNode(name, type, object4);
+var reference$1 = (name, type, object5) => new ReferenceBaseNode(name, type, object5);
 var RendererReferenceNode = class extends ReferenceBaseNode {
   static get type() {
     return "RendererReferenceNode";
@@ -41984,7 +41984,7 @@ var BufferAttributeNode = class extends InputNode {
    * @return {string} The hash.
    */
   getHash(builder) {
-    let id4;
+    let id7;
     if (this.bufferStride === 0 && this.bufferOffset === 0) {
       let bufferData = builder.globalCache.getData(this.value);
       if (bufferData === void 0) {
@@ -41993,11 +41993,11 @@ var BufferAttributeNode = class extends InputNode {
         };
         builder.globalCache.setData(this.value, bufferData);
       }
-      id4 = bufferData.node.id;
+      id7 = bufferData.node.id;
     } else {
-      id4 = this.id;
+      id7 = this.id;
     }
-    return String(id4);
+    return String(id7);
   }
   /**
    * This method is overwritten since the node type is inferred from
@@ -42241,13 +42241,13 @@ var ComputeNode = class extends Node {
     if (this.count !== null && this.countNode === null) {
       this.countNode = uniform(this.count, "uint").onObjectUpdate(() => this.count);
     }
-    const result = this.computeNode.build(builder);
-    if (result) {
+    const result2 = this.computeNode.build(builder);
+    if (result2) {
       const properties = builder.getNodeProperties(this);
-      properties.outputComputeNode = result.outputNode;
-      result.outputNode = null;
+      properties.outputComputeNode = result2.outputNode;
+      result2.outputNode = null;
     }
-    return result;
+    return result2;
   }
   generate(builder, output3) {
     const { shaderStage } = builder;
@@ -43921,29 +43921,29 @@ var Object3DNode = class _Object3DNode extends Node {
    * @param {NodeFrame} frame - The current node frame.
    */
   update(frame2) {
-    const object4 = this.object3d;
+    const object5 = this.object3d;
     const uniformNode = this.uniformNode;
     const scope = this.scope;
     if (scope === _Object3DNode.WORLD_MATRIX) {
-      uniformNode.value = object4.matrixWorld;
+      uniformNode.value = object5.matrixWorld;
     } else if (scope === _Object3DNode.POSITION) {
       uniformNode.value = uniformNode.value || new Vector3();
-      uniformNode.value.setFromMatrixPosition(object4.matrixWorld);
+      uniformNode.value.setFromMatrixPosition(object5.matrixWorld);
     } else if (scope === _Object3DNode.SCALE) {
       uniformNode.value = uniformNode.value || new Vector3();
-      uniformNode.value.setFromMatrixScale(object4.matrixWorld);
+      uniformNode.value.setFromMatrixScale(object5.matrixWorld);
     } else if (scope === _Object3DNode.DIRECTION) {
       uniformNode.value = uniformNode.value || new Vector3();
-      object4.getWorldDirection(uniformNode.value);
+      object5.getWorldDirection(uniformNode.value);
     } else if (scope === _Object3DNode.VIEW_POSITION) {
       const camera = frame2.camera;
       uniformNode.value = uniformNode.value || new Vector3();
-      uniformNode.value.setFromMatrixPosition(object4.matrixWorld);
+      uniformNode.value.setFromMatrixPosition(object5.matrixWorld);
       uniformNode.value.applyMatrix4(camera.matrixWorldInverse);
     } else if (scope === _Object3DNode.RADIUS) {
       const geometry = frame2.object.geometry;
       if (geometry.boundingSphere === null) geometry.computeBoundingSphere();
-      _sphere2.copy(geometry.boundingSphere).applyMatrix4(object4.matrixWorld);
+      _sphere2.copy(geometry.boundingSphere).applyMatrix4(object5.matrixWorld);
       uniformNode.value = _sphere2.radius;
     }
   }
@@ -44015,25 +44015,25 @@ var modelPosition = /* @__PURE__ */ nodeImmutable(ModelNode, ModelNode.POSITION)
 var modelScale = /* @__PURE__ */ nodeImmutable(ModelNode, ModelNode.SCALE);
 var modelViewPosition = /* @__PURE__ */ nodeImmutable(ModelNode, ModelNode.VIEW_POSITION);
 var modelRadius = /* @__PURE__ */ nodeImmutable(ModelNode, ModelNode.RADIUS);
-var modelNormalMatrix = /* @__PURE__ */ uniform(new Matrix3()).onObjectUpdate(({ object: object4 }, self2) => self2.value.getNormalMatrix(object4.matrixWorld));
-var modelWorldMatrixInverse = /* @__PURE__ */ uniform(new Matrix4()).onObjectUpdate(({ object: object4 }, self2) => self2.value.copy(object4.matrixWorld).invert());
+var modelNormalMatrix = /* @__PURE__ */ uniform(new Matrix3()).onObjectUpdate(({ object: object5 }, self2) => self2.value.getNormalMatrix(object5.matrixWorld));
+var modelWorldMatrixInverse = /* @__PURE__ */ uniform(new Matrix4()).onObjectUpdate(({ object: object5 }, self2) => self2.value.copy(object5.matrixWorld).invert());
 var modelViewMatrix = /* @__PURE__ */ Fn((builder) => {
   return builder.context.modelViewMatrix || mediumpModelViewMatrix;
 }).once()().toVar("modelViewMatrix");
 var mediumpModelViewMatrix = /* @__PURE__ */ cameraViewMatrix.mul(modelWorldMatrix);
 var highpModelViewMatrix = /* @__PURE__ */ Fn((builder) => {
   builder.context.isHighPrecisionModelViewMatrix = true;
-  return uniform("mat4").onObjectUpdate(({ object: object4, camera }) => {
-    return object4.modelViewMatrix.multiplyMatrices(camera.matrixWorldInverse, object4.matrixWorld);
+  return uniform("mat4").onObjectUpdate(({ object: object5, camera }) => {
+    return object5.modelViewMatrix.multiplyMatrices(camera.matrixWorldInverse, object5.matrixWorld);
   });
 }).once()().toVar("highpModelViewMatrix");
 var highpModelNormalViewMatrix = /* @__PURE__ */ Fn((builder) => {
   const isHighPrecisionModelViewMatrix = builder.context.isHighPrecisionModelViewMatrix;
-  return uniform("mat3").onObjectUpdate(({ object: object4, camera }) => {
+  return uniform("mat3").onObjectUpdate(({ object: object5, camera }) => {
     if (isHighPrecisionModelViewMatrix !== true) {
-      object4.modelViewMatrix.multiplyMatrices(camera.matrixWorldInverse, object4.matrixWorld);
+      object5.modelViewMatrix.multiplyMatrices(camera.matrixWorldInverse, object5.matrixWorld);
     }
-    return object4.normalMatrix.getNormalMatrix(object4.modelViewMatrix);
+    return object5.normalMatrix.getNormalMatrix(object5.modelViewMatrix);
   });
 }).once()().toVar("highpModelNormalViewMatrix");
 var clipSpace = /* @__PURE__ */ Fn((builder) => {
@@ -44337,14 +44337,14 @@ var ReferenceNode = class extends Node {
    * @param {?Object} [object=null] - The object the property belongs to.
    * @param {?number} [count=null] - When the linked property is an array-like, this parameter defines its length.
    */
-  constructor(property3, uniformType, object4 = null, count = null) {
+  constructor(property3, uniformType, object5 = null, count = null) {
     super();
     this.property = property3;
     this.uniformType = uniformType;
-    this.object = object4;
+    this.object = object5;
     this.count = count;
     this.properties = property3.split(".");
-    this.reference = object4;
+    this.reference = object5;
     this.node = null;
     this.group = null;
     this.name = null;
@@ -44436,9 +44436,9 @@ var ReferenceNode = class extends Node {
    * @param {Object} [object=this.reference] - The object to retrieve the property value from.
    * @return {any} The value.
    */
-  getValueFromReference(object4 = this.reference) {
+  getValueFromReference(object5 = this.reference) {
     const { properties } = this;
-    let value = object4[properties[0]];
+    let value = object5[properties[0]];
     for (let i2 = 1; i2 < properties.length; i2++) {
       value = value[properties[i2]];
     }
@@ -44487,8 +44487,8 @@ var ReferenceNode = class extends Node {
     }
   }
 };
-var reference = (name, type, object4) => new ReferenceNode(name, type, object4);
-var referenceBuffer = (name, type, count, object4) => new ReferenceNode(name, type, object4, count);
+var reference = (name, type, object5) => new ReferenceNode(name, type, object5);
+var referenceBuffer = (name, type, count, object5) => new ReferenceNode(name, type, object5, count);
 var MaterialReferenceNode = class extends ReferenceNode {
   static get type() {
     return "MaterialReferenceNode";
@@ -45085,7 +45085,7 @@ var StorageBufferNode = class extends BufferNode {
    * @return {string} The hash.
    */
   getHash(builder) {
-    let id4;
+    let id7;
     if (this.bufferCount === 0) {
       let bufferData = builder.globalCache.getData(this.value);
       if (bufferData === void 0) {
@@ -45094,11 +45094,11 @@ var StorageBufferNode = class extends BufferNode {
         };
         builder.globalCache.setData(this.value, bufferData);
       }
-      id4 = bufferData.node.id;
+      id7 = bufferData.node.id;
     } else {
-      id4 = this.id;
+      id7 = this.id;
     }
-    return String(id4);
+    return String(id7);
   }
   /**
    * Overwrites the default implementation to return a fixed value `'indirectStorageBuffer'` or `'storageBuffer'`.
@@ -45432,10 +45432,10 @@ var BatchNode = class extends Node {
         this.batchingIdNode = drawIndex;
       }
     }
-    const getIndirectIndex = Fn(([id4]) => {
+    const getIndirectIndex = Fn(([id7]) => {
       const size2 = int(textureSize(textureLoad(this.batchMesh._indirectTexture), 0).x).toConst();
-      const x22 = int(id4).mod(size2).toConst();
-      const y32 = int(id4).div(size2).toConst();
+      const x22 = int(id7).mod(size2).toConst();
+      const y32 = int(id7).div(size2).toConst();
       return textureLoad(this.batchMesh._indirectTexture, ivec2(x22, y32)).x;
     }).setLayout({
       name: "getIndirectIndex",
@@ -45458,9 +45458,9 @@ var BatchNode = class extends Node {
     );
     const colorsTexture = this.batchMesh._colorsTexture;
     if (colorsTexture !== null) {
-      const getBatchingColor = Fn(([id4]) => {
+      const getBatchingColor = Fn(([id7]) => {
         const size2 = int(textureSize(textureLoad(colorsTexture), 0).x).toConst();
-        const j22 = id4;
+        const j22 = id7;
         const x22 = j22.mod(size2).toConst();
         const y32 = j22.div(size2).toConst();
         return textureLoad(colorsTexture, ivec2(x22, y32)).rgb;
@@ -46456,13 +46456,13 @@ var VertexColorNode = class extends AttributeNode {
   generate(builder) {
     const attributeName = this.getAttributeName(builder);
     const geometryAttribute = builder.hasGeometryAttribute(attributeName);
-    let result;
+    let result2;
     if (geometryAttribute === true) {
-      result = super.generate(builder);
+      result2 = super.generate(builder);
     } else {
-      result = builder.generateConst(this.nodeType, new Vector4(1, 1, 1, 1));
+      result2 = builder.generateConst(this.nodeType, new Vector4(1, 1, 1, 1));
     }
-    return result;
+    return result2;
   }
   serialize(data) {
     super.serialize(data);
@@ -46589,9 +46589,9 @@ var NodeMaterial = class extends Material {
     const children = [];
     for (const property3 of Object.getOwnPropertyNames(this)) {
       if (property3.startsWith("_") === true) continue;
-      const object4 = this[property3];
-      if (object4 && object4.isNode === true) {
-        children.push({ property: property3, childNode: object4 });
+      const object5 = this[property3];
+      if (object5 && object5.isNode === true) {
+        children.push({ property: property3, childNode: object5 });
       }
     }
     return children;
@@ -46703,16 +46703,16 @@ var NodeMaterial = class extends Material {
   setupClipping(builder) {
     if (builder.clippingContext === null) return null;
     const { unionPlanes, intersectionPlanes } = builder.clippingContext;
-    let result = null;
+    let result2 = null;
     if (unionPlanes.length > 0 || intersectionPlanes.length > 0) {
       const samples = builder.renderer.currentSamples;
       if (this.alphaToCoverage && samples > 1) {
-        result = clippingAlpha();
+        result2 = clippingAlpha();
       } else {
         builder.stack.addToStack(clipping());
       }
     }
-    return result;
+    return result2;
   }
   /**
    * Setups the hardware clipping if available on the current device.
@@ -46791,12 +46791,12 @@ var NodeMaterial = class extends Material {
    * @return {Node<vec3>} The position in local space.
    */
   setupPosition(builder) {
-    const { object: object4, geometry } = builder;
+    const { object: object5, geometry } = builder;
     if (geometry.morphAttributes.position || geometry.morphAttributes.normal || geometry.morphAttributes.color) {
-      morphReference(object4).toStack();
+      morphReference(object5).toStack();
     }
-    if (object4.isSkinnedMesh === true) {
-      skinning(object4).toStack();
+    if (object5.isSkinnedMesh === true) {
+      skinning(object5).toStack();
     }
     if (this.displacementMap) {
       const displacementMap = materialReference("displacementMap", "texture");
@@ -46804,11 +46804,11 @@ var NodeMaterial = class extends Material {
       const displacementBias = materialReference("displacementBias", "float");
       positionLocal.addAssign(normalLocal.normalize().mul(displacementMap.x.mul(displacementScale).add(displacementBias)));
     }
-    if (object4.isBatchedMesh) {
-      batch(object4).toStack();
+    if (object5.isBatchedMesh) {
+      batch(object5).toStack();
     }
-    if (object4.isInstancedMesh && object4.instanceMatrix && object4.instanceMatrix.isInstancedBufferAttribute === true) {
-      instancedMesh(object4).toStack();
+    if (object5.isInstancedMesh && object5.instanceMatrix && object5.instanceMatrix.isInstancedBufferAttribute === true) {
+      instancedMesh(object5).toStack();
     }
     if (this.positionNode !== null) {
       positionLocal.assign(subBuild(this.positionNode, "POSITION", "vec3"));
@@ -46822,7 +46822,7 @@ var NodeMaterial = class extends Material {
    * @param {BufferGeometry} geometry - The geometry.
    */
   setupDiffuseColor(builder) {
-    const { object: object4, geometry } = builder;
+    const { object: object5, geometry } = builder;
     if (this.maskNode !== null) {
       bool(this.maskNode).not().discard();
     }
@@ -46830,11 +46830,11 @@ var NodeMaterial = class extends Material {
     if (this.vertexColors === true && geometry.hasAttribute("color")) {
       colorNode = colorNode.mul(vertexColor());
     }
-    if (object4.instanceColor) {
+    if (object5.instanceColor) {
       const instanceColor = varyingProperty("vec3", "vInstanceColor");
       colorNode = instanceColor.mul(colorNode);
     }
-    if (object4.isBatchedMesh && object4._colorsTexture) {
+    if (object5.isBatchedMesh && object5._colorsTexture) {
       const batchColor = varyingProperty("vec3", "vBatchColor");
       colorNode = batchColor.mul(colorNode);
     }
@@ -48736,7 +48736,7 @@ var LTC_Evaluate = /* @__PURE__ */ Fn(({ N: N22, V: V3, P: P3, mInv, p0, p1, p2,
   const v1 = p1.sub(p0).toVar();
   const v22 = p3.sub(p0).toVar();
   const lightNormal = v1.cross(v22);
-  const result = vec3().toVar();
+  const result2 = vec3().toVar();
   If(lightNormal.dot(P3.sub(p0)).greaterThanEqual(0), () => {
     const T1 = V3.sub(N22.mul(V3.dot(N22))).normalize();
     const T22 = N22.cross(T1).negate();
@@ -48750,9 +48750,9 @@ var LTC_Evaluate = /* @__PURE__ */ Fn(({ N: N22, V: V3, P: P3, mInv, p0, p1, p2,
     vectorFormFactor.addAssign(LTC_EdgeVectorFormFactor({ v1: coords1, v2: coords2 }));
     vectorFormFactor.addAssign(LTC_EdgeVectorFormFactor({ v1: coords2, v2: coords3 }));
     vectorFormFactor.addAssign(LTC_EdgeVectorFormFactor({ v1: coords3, v2: coords0 }));
-    result.assign(vec3(LTC_ClippedSphereFormFactor({ f: vectorFormFactor })));
+    result2.assign(vec3(LTC_ClippedSphereFormFactor({ f: vectorFormFactor })));
   });
-  return result;
+  return result2;
 }).setLayout({
   name: "LTC_Evaluate",
   type: "vec3",
@@ -48771,7 +48771,7 @@ var LTC_Evaluate_Volume = /* @__PURE__ */ Fn(({ P: P3, p0, p1, p2, p3 }) => {
   const v1 = p1.sub(p0).toVar();
   const v22 = p3.sub(p0).toVar();
   const lightNormal = v1.cross(v22);
-  const result = vec3().toVar();
+  const result2 = vec3().toVar();
   If(lightNormal.dot(P3.sub(p0)).greaterThanEqual(0), () => {
     const coords0 = p0.sub(P3).normalize().toVar();
     const coords1 = p1.sub(P3).normalize().toVar();
@@ -48782,9 +48782,9 @@ var LTC_Evaluate_Volume = /* @__PURE__ */ Fn(({ P: P3, p0, p1, p2, p3 }) => {
     vectorFormFactor.addAssign(LTC_EdgeVectorFormFactor({ v1: coords1, v2: coords2 }));
     vectorFormFactor.addAssign(LTC_EdgeVectorFormFactor({ v1: coords2, v2: coords3 }));
     vectorFormFactor.addAssign(LTC_EdgeVectorFormFactor({ v1: coords3, v2: coords0 }));
-    result.assign(vec3(LTC_ClippedSphereFormFactor({ f: vectorFormFactor.abs() })));
+    result2.assign(vec3(LTC_ClippedSphereFormFactor({ f: vectorFormFactor.abs() })));
   });
-  return result;
+  return result2;
 }).setLayout({
   name: "LTC_Evaluate",
   type: "vec3",
@@ -50951,7 +50951,7 @@ var SpriteNodeMaterial = class extends NodeMaterial {
    * @return {Node<vec3>} The position in view space.
    */
   setupPositionView(builder) {
-    const { object: object4, camera } = builder;
+    const { object: object5, camera } = builder;
     const { positionNode, rotationNode, scaleNode, sizeAttenuation } = this;
     const mvPosition = modelViewMatrix.mul(vec3(positionNode || 0));
     let scale2 = vec2(modelWorldMatrix[0].xyz.length(), modelWorldMatrix[1].xyz.length());
@@ -50962,8 +50962,8 @@ var SpriteNodeMaterial = class extends NodeMaterial {
       scale2 = scale2.mul(mvPosition.z.negate());
     }
     let alignedPosition = positionGeometry.xy;
-    if (object4.center && object4.center.isVector2 === true) {
-      const center = reference$1("center", "vec2", object4);
+    if (object5.center && object5.center.isVector2 === true) {
+      const center = reference$1("center", "vec2", object5);
       alignedPosition = alignedPosition.sub(center.sub(0.5));
     }
     alignedPosition = alignedPosition.mul(scale2);
@@ -51322,8 +51322,8 @@ var ChainMap = class {
    * @param {Array<Object>} keys - List of keys.
    * @return {WeakMap} The weak map.
    */
-  _getWeakMap(keys) {
-    const length3 = keys.length;
+  _getWeakMap(keys2) {
+    const length3 = keys2.length;
     let weakMap = this.weakMaps[length3];
     if (weakMap === void 0) {
       weakMap = /* @__PURE__ */ new WeakMap();
@@ -51337,13 +51337,13 @@ var ChainMap = class {
    * @param {Array<Object>} keys - List of keys.
    * @return {any} The value. Returns `undefined` if no value was found.
    */
-  get(keys) {
-    let map2 = this._getWeakMap(keys);
-    for (let i2 = 0; i2 < keys.length - 1; i2++) {
-      map2 = map2.get(keys[i2]);
+  get(keys2) {
+    let map2 = this._getWeakMap(keys2);
+    for (let i2 = 0; i2 < keys2.length - 1; i2++) {
+      map2 = map2.get(keys2[i2]);
       if (map2 === void 0) return void 0;
     }
-    return map2.get(keys[keys.length - 1]);
+    return map2.get(keys2[keys2.length - 1]);
   }
   /**
    * Sets the value for the given keys.
@@ -51352,14 +51352,14 @@ var ChainMap = class {
    * @param {any} value - The value to set.
    * @return {ChainMap} A reference to this Chain Map.
    */
-  set(keys, value) {
-    let map2 = this._getWeakMap(keys);
-    for (let i2 = 0; i2 < keys.length - 1; i2++) {
-      const key = keys[i2];
+  set(keys2, value) {
+    let map2 = this._getWeakMap(keys2);
+    for (let i2 = 0; i2 < keys2.length - 1; i2++) {
+      const key = keys2[i2];
       if (map2.has(key) === false) map2.set(key, /* @__PURE__ */ new WeakMap());
       map2 = map2.get(key);
     }
-    map2.set(keys[keys.length - 1], value);
+    map2.set(keys2[keys2.length - 1], value);
     return this;
   }
   /**
@@ -51368,18 +51368,18 @@ var ChainMap = class {
    * @param {Array<Object>} keys - The keys.
    * @return {boolean} Returns `true` if the value has been removed successfully and `false` if the value has not be found.
    */
-  delete(keys) {
-    let map2 = this._getWeakMap(keys);
-    for (let i2 = 0; i2 < keys.length - 1; i2++) {
-      map2 = map2.get(keys[i2]);
+  delete(keys2) {
+    let map2 = this._getWeakMap(keys2);
+    for (let i2 = 0; i2 < keys2.length - 1; i2++) {
+      map2 = map2.get(keys2[i2]);
       if (map2 === void 0) return false;
     }
-    return map2.delete(keys[keys.length - 1]);
+    return map2.delete(keys2[keys2.length - 1]);
   }
 };
 var _id$a = 0;
 function getKeys(obj) {
-  const keys = Object.keys(obj);
+  const keys2 = Object.keys(obj);
   let proto2 = Object.getPrototypeOf(obj);
   while (proto2) {
     const descriptors = Object.getOwnPropertyDescriptors(proto2);
@@ -51387,13 +51387,13 @@ function getKeys(obj) {
       if (descriptors[key] !== void 0) {
         const descriptor = descriptors[key];
         if (descriptor && typeof descriptor.get === "function") {
-          keys.push(key);
+          keys2.push(key);
         }
       }
     }
     proto2 = Object.getPrototypeOf(proto2);
   }
-  return keys;
+  return keys2;
 }
 var RenderObject = class {
   /**
@@ -51410,18 +51410,18 @@ var RenderObject = class {
    * @param {RenderContext} renderContext - The render context.
    * @param {ClippingContext} clippingContext - The clipping context.
    */
-  constructor(nodes, geometries, renderer, object4, material, scene, camera, lightsNode, renderContext, clippingContext) {
+  constructor(nodes, geometries, renderer, object5, material, scene, camera, lightsNode, renderContext, clippingContext) {
     this.id = _id$a++;
     this._nodes = nodes;
     this._geometries = geometries;
     this.renderer = renderer;
-    this.object = object4;
+    this.object = object5;
     this.material = material;
     this.scene = scene;
     this.camera = camera;
     this.lightsNode = lightsNode;
     this.context = renderContext;
-    this.geometry = object4.geometry;
+    this.geometry = object5.geometry;
     this.version = material.version;
     this.drawRange = null;
     this.attributes = null;
@@ -51604,7 +51604,7 @@ var RenderObject = class {
    * @return {?{vertexCount: number, firstVertex: number, instanceCount: number, firstInstance: number}} The draw parameters.
    */
   getDrawParameters() {
-    const { object: object4, material, geometry, group, drawRange } = this;
+    const { object: object5, material, geometry, group, drawRange } = this;
     const drawParams = this.drawParams || (this.drawParams = {
       vertexCount: 0,
       firstVertex: 0,
@@ -51616,14 +51616,14 @@ var RenderObject = class {
     let instanceCount = 1;
     if (geometry.isInstancedBufferGeometry === true) {
       instanceCount = geometry.instanceCount;
-    } else if (object4.count !== void 0) {
-      instanceCount = Math.max(0, object4.count);
+    } else if (object5.count !== void 0) {
+      instanceCount = Math.max(0, object5.count);
     }
     if (instanceCount === 0) return null;
     drawParams.instanceCount = instanceCount;
-    if (object4.isBatchedMesh === true) return drawParams;
+    if (object5.isBatchedMesh === true) return drawParams;
     let rangeFactor = 1;
-    if (material.wireframe === true && !object4.isPoints && !object4.isLineSegments && !object4.isLine && !object4.isLineLoop) {
+    if (material.wireframe === true && !object5.isPoints && !object5.isLineSegments && !object5.isLine && !object5.isLineLoop) {
       rangeFactor = 2;
     }
     let firstVertex = drawRange.start * rangeFactor;
@@ -51686,7 +51686,7 @@ var RenderObject = class {
    * @return {number} The material cache key.
    */
   getMaterialCacheKey() {
-    const { object: object4, material, renderer } = this;
+    const { object: object5, material, renderer } = this;
     let cacheKey = material.customProgramCacheKey();
     for (const property3 of getKeys(material)) {
       if (/^(is[A-Z]|_)|^(visible|version|uuid|name|opacity|userData)$/.test(property3)) continue;
@@ -51719,23 +51719,23 @@ var RenderObject = class {
       valueKey + ",";
     }
     cacheKey += this.clippingContextCacheKey + ",";
-    if (object4.geometry) {
+    if (object5.geometry) {
       cacheKey += this.getGeometryCacheKey();
     }
-    if (object4.skeleton) {
-      cacheKey += object4.skeleton.bones.length + ",";
+    if (object5.skeleton) {
+      cacheKey += object5.skeleton.bones.length + ",";
     }
-    if (object4.isBatchedMesh) {
-      cacheKey += object4._matricesTexture.uuid + ",";
-      if (object4._colorsTexture !== null) {
-        cacheKey += object4._colorsTexture.uuid + ",";
+    if (object5.isBatchedMesh) {
+      cacheKey += object5._matricesTexture.uuid + ",";
+      if (object5._colorsTexture !== null) {
+        cacheKey += object5._colorsTexture.uuid + ",";
       }
     }
-    if (object4.isInstancedMesh || object4.count > 1 || Array.isArray(object4.morphTargetInfluences)) {
-      cacheKey += object4.uuid + ",";
+    if (object5.isInstancedMesh || object5.count > 1 || Array.isArray(object5.morphTargetInfluences)) {
+      cacheKey += object5.uuid + ",";
     }
     cacheKey += this.context.id + ",";
-    cacheKey += object4.receiveShadow + ",";
+    cacheKey += object5.receiveShadow + ",";
     return hashString(cacheKey);
   }
   /**
@@ -51850,26 +51850,26 @@ var RenderObjects = class {
    * @param {string} [passId] - An optional ID for identifying the pass.
    * @return {RenderObject} The render object.
    */
-  get(object4, material, scene, camera, lightsNode, renderContext, clippingContext, passId) {
+  get(object5, material, scene, camera, lightsNode, renderContext, clippingContext, passId) {
     const chainMap = this.getChainMap(passId);
-    _chainKeys$3[0] = object4;
+    _chainKeys$3[0] = object5;
     _chainKeys$3[1] = material;
     _chainKeys$3[2] = renderContext;
     _chainKeys$3[3] = lightsNode;
     let renderObject = chainMap.get(_chainKeys$3);
     if (renderObject === void 0) {
-      renderObject = this.createRenderObject(this.nodes, this.geometries, this.renderer, object4, material, scene, camera, lightsNode, renderContext, clippingContext, passId);
+      renderObject = this.createRenderObject(this.nodes, this.geometries, this.renderer, object5, material, scene, camera, lightsNode, renderContext, clippingContext, passId);
       chainMap.set(_chainKeys$3, renderObject);
     } else {
       renderObject.camera = camera;
       renderObject.updateClipping(clippingContext);
       if (renderObject.needsGeometryUpdate) {
-        renderObject.setGeometry(object4.geometry);
+        renderObject.setGeometry(object5.geometry);
       }
       if (renderObject.version !== material.version || renderObject.needsUpdate) {
         if (renderObject.initialCacheKey !== renderObject.getCacheKey()) {
           renderObject.dispose();
-          renderObject = this.get(object4, material, scene, camera, lightsNode, renderContext, clippingContext, passId);
+          renderObject = this.get(object5, material, scene, camera, lightsNode, renderContext, clippingContext, passId);
         } else {
           renderObject.version = material.version;
         }
@@ -51912,9 +51912,9 @@ var RenderObjects = class {
    * @param {string} [passId] - An optional ID for identifying the pass.
    * @return {RenderObject} The render object.
    */
-  createRenderObject(nodes, geometries, renderer, object4, material, scene, camera, lightsNode, renderContext, clippingContext, passId) {
+  createRenderObject(nodes, geometries, renderer, object5, material, scene, camera, lightsNode, renderContext, clippingContext, passId) {
     const chainMap = this.getChainMap(passId);
-    const renderObject = new RenderObject(nodes, geometries, renderer, object4, material, scene, camera, lightsNode, renderContext, clippingContext);
+    const renderObject = new RenderObject(nodes, geometries, renderer, object5, material, scene, camera, lightsNode, renderContext, clippingContext);
     renderObject.onDispose = () => {
       this.pipelines.delete(renderObject);
       this.bindings.deleteForRender(renderObject);
@@ -51937,11 +51937,11 @@ var DataMap = class {
    * @param {Object} object - The object.
    * @return {Object} The dictionary.
    */
-  get(object4) {
-    let map2 = this.data.get(object4);
+  get(object5) {
+    let map2 = this.data.get(object5);
     if (map2 === void 0) {
       map2 = {};
-      this.data.set(object4, map2);
+      this.data.set(object5, map2);
     }
     return map2;
   }
@@ -51951,11 +51951,11 @@ var DataMap = class {
    * @param {Object} object - The object.
    * @return {?Object} The deleted dictionary.
    */
-  delete(object4) {
+  delete(object5) {
     let map2 = null;
-    if (this.data.has(object4)) {
-      map2 = this.data.get(object4);
-      this.data.delete(object4);
+    if (this.data.has(object5)) {
+      map2 = this.data.get(object5);
+      this.data.delete(object5);
     }
     return map2;
   }
@@ -51965,8 +51965,8 @@ var DataMap = class {
    * @param {Object} object - The object to test.
    * @return {boolean} Whether a dictionary is defined or not.
    */
-  has(object4) {
-    return this.data.has(object4);
+  has(object5) {
+    return this.data.has(object5);
   }
   /**
    * Frees internal resources.
@@ -52297,15 +52297,15 @@ var Info = class {
    * @param {number} count - The vertex or index count.
    * @param {number} instanceCount - The instance count.
    */
-  update(object4, count, instanceCount) {
+  update(object5, count, instanceCount) {
     this.render.drawCalls++;
-    if (object4.isMesh || object4.isSprite) {
+    if (object5.isMesh || object5.isSprite) {
       this.render.triangles += instanceCount * (count / 3);
-    } else if (object4.isPoints) {
+    } else if (object5.isPoints) {
       this.render.points += instanceCount * count;
-    } else if (object4.isLineSegments) {
+    } else if (object5.isLineSegments) {
       this.render.lines += instanceCount * (count / 2);
-    } else if (object4.isLine) {
+    } else if (object5.isLine) {
       this.render.lines += instanceCount * (count - 1);
     } else {
       error("WebGPUInfo: Unknown object type.");
@@ -52719,8 +52719,8 @@ var Pipelines = class extends DataMap {
    * @param {RenderObject} object - The render object.
    * @return {?Object} The deleted dictionary.
    */
-  delete(object4) {
-    const pipeline = this.get(object4).pipeline;
+  delete(object5) {
+    const pipeline = this.get(object5).pipeline;
     if (pipeline) {
       pipeline.usedTimes--;
       if (pipeline.usedTimes === 0) this._releasePipeline(pipeline);
@@ -52734,7 +52734,7 @@ var Pipelines = class extends DataMap {
         if (pipeline.fragmentProgram.usedTimes === 0) this._releaseProgram(pipeline.fragmentProgram);
       }
     }
-    return super.delete(object4);
+    return super.delete(object5);
   }
   /**
    * Frees internal resources.
@@ -53147,28 +53147,28 @@ var RenderList = class {
    * @param {ClippingContext} clippingContext - The current clipping context.
    * @return {Object} The render item.
    */
-  getNextRenderItem(object4, geometry, material, groupOrder, z4, group, clippingContext) {
+  getNextRenderItem(object5, geometry, material, groupOrder, z4, group, clippingContext) {
     let renderItem = this.renderItems[this.renderItemsIndex];
     if (renderItem === void 0) {
       renderItem = {
-        id: object4.id,
-        object: object4,
+        id: object5.id,
+        object: object5,
         geometry,
         material,
         groupOrder,
-        renderOrder: object4.renderOrder,
+        renderOrder: object5.renderOrder,
         z: z4,
         group,
         clippingContext
       };
       this.renderItems[this.renderItemsIndex] = renderItem;
     } else {
-      renderItem.id = object4.id;
-      renderItem.object = object4;
+      renderItem.id = object5.id;
+      renderItem.object = object5;
       renderItem.geometry = geometry;
       renderItem.material = material;
       renderItem.groupOrder = groupOrder;
-      renderItem.renderOrder = object4.renderOrder;
+      renderItem.renderOrder = object5.renderOrder;
       renderItem.z = z4;
       renderItem.group = group;
       renderItem.clippingContext = clippingContext;
@@ -53188,9 +53188,9 @@ var RenderList = class {
    * @param {?number} group - {?Object} group - Only relevant for objects using multiple materials. This represents a group entry from the respective `BufferGeometry`.
    * @param {ClippingContext} clippingContext - The current clipping context.
    */
-  push(object4, geometry, material, groupOrder, z4, group, clippingContext) {
-    const renderItem = this.getNextRenderItem(object4, geometry, material, groupOrder, z4, group, clippingContext);
-    if (object4.occlusionTest === true) this.occlusionQueryCount++;
+  push(object5, geometry, material, groupOrder, z4, group, clippingContext) {
+    const renderItem = this.getNextRenderItem(object5, geometry, material, groupOrder, z4, group, clippingContext);
+    if (object5.occlusionTest === true) this.occlusionQueryCount++;
     if (material.transparent === true || material.transmission > 0 || material.transmissionNode && material.transmissionNode.isNode || material.backdropNode && material.backdropNode.isNode) {
       if (needsDoublePass(material)) this.transparentDoublePass.push(renderItem);
       this.transparent.push(renderItem);
@@ -53210,8 +53210,8 @@ var RenderList = class {
    * @param {?number} group - {?Object} group - Only relevant for objects using multiple materials. This represents a group entry from the respective `BufferGeometry`.
    * @param {ClippingContext} clippingContext - The current clipping context.
    */
-  unshift(object4, geometry, material, groupOrder, z4, group, clippingContext) {
-    const renderItem = this.getNextRenderItem(object4, geometry, material, groupOrder, z4, group, clippingContext);
+  unshift(object5, geometry, material, groupOrder, z4, group, clippingContext) {
+    const renderItem = this.getNextRenderItem(object5, geometry, material, groupOrder, z4, group, clippingContext);
     if (material.transparent === true || material.transmission > 0 || material.transmissionNode && material.transmissionNode.isNode || material.backdropNode && material.backdropNode.isNode) {
       if (needsDoublePass(material)) this.transparentDoublePass.unshift(renderItem);
       this.transparent.unshift(renderItem);
@@ -54012,15 +54012,15 @@ var StackNode = class extends Node {
     for (const node of newNodes) {
       buildNode(node);
     }
-    let result;
+    let result2;
     if (this.hasOutput(builder)) {
-      result = this.outputNode.build(builder, ...params);
+      result2 = this.outputNode.build(builder, ...params);
     } else {
-      result = super.build(builder, ...params);
+      result2 = super.build(builder, ...params);
     }
     setCurrentStack(previousStack);
     builder.removeActiveStack(this);
-    return result;
+    return result2;
   }
 };
 var stack = /* @__PURE__ */ nodeProxy(StackNode).setParameterLength(0, 1);
@@ -54601,8 +54601,8 @@ var countOneBits = /* @__PURE__ */ nodeProxyIntent(BitcountNode, BitcountNode.CO
 var hash = /* @__PURE__ */ Fn(([seed]) => {
   const state = seed.toUint().mul(747796405).add(2891336453);
   const word = state.shiftRight(state.shiftRight(28).add(4)).bitXor(state).mul(277803737);
-  const result = word.shiftRight(22).bitXor(word);
-  return result.toFloat().mul(1 / 2 ** 32);
+  const result2 = word.shiftRight(22).bitXor(word);
+  return result2.toFloat().mul(1 / 2 ** 32);
 });
 var parabola = (x3, k3) => pow(mul(4, x3.mul(sub(1, x3))), k3);
 var gain = (x3, k3) => x3.lessThan(0.5) ? parabola(x3.mul(2), k3).div(2) : sub(1, parabola(mul(sub(1, x3), 2), k3).div(2));
@@ -55855,8 +55855,8 @@ var VelocityNode = class extends TempNode {
    *
    * @param {NodeFrame} frame - A reference to the current node frame.
    */
-  update({ frameId: frameId3, camera, object: object4 }) {
-    const previousModelMatrix = getPreviousMatrix(object4);
+  update({ frameId: frameId3, camera, object: object5 }) {
+    const previousModelMatrix = getPreviousMatrix(object5);
     this.previousModelWorldMatrix.value.copy(previousModelMatrix);
     const cameraData = getData(camera);
     if (cameraData.frameId !== frameId3) {
@@ -55883,8 +55883,8 @@ var VelocityNode = class extends TempNode {
    *
    * @param {NodeFrame} frame - A reference to the current node frame.
    */
-  updateAfter({ object: object4 }) {
-    getPreviousMatrix(object4).copy(object4.matrixWorld);
+  updateAfter({ object: object5 }) {
+    getPreviousMatrix(object5).copy(object5.matrixWorld);
   }
   /**
    * Implements the velocity computation based on the previous and current vertex data.
@@ -55903,20 +55903,20 @@ var VelocityNode = class extends TempNode {
     return velocity3;
   }
 };
-function getData(object4) {
-  let objectData = _objectData.get(object4);
+function getData(object5) {
+  let objectData = _objectData.get(object5);
   if (objectData === void 0) {
     objectData = {};
-    _objectData.set(object4, objectData);
+    _objectData.set(object5, objectData);
   }
   return objectData;
 }
-function getPreviousMatrix(object4, index = 0) {
-  const objectData = getData(object4);
+function getPreviousMatrix(object5, index = 0) {
+  const objectData = getData(object5);
   let matrix = objectData[index];
   if (matrix === void 0) {
     objectData[index] = matrix = new Matrix4();
-    objectData[index].copy(object4.matrixWorld);
+    objectData[index].copy(object5.matrixWorld);
   }
   return matrix;
 }
@@ -56507,14 +56507,14 @@ var ToonOutlinePassNode = class extends PassNode {
   updateBefore(frame2) {
     const { renderer } = frame2;
     const currentRenderObjectFunction = renderer.getRenderObjectFunction();
-    renderer.setRenderObjectFunction((object4, scene, camera, geometry, material, group, lightsNode, clippingContext) => {
+    renderer.setRenderObjectFunction((object5, scene, camera, geometry, material, group, lightsNode, clippingContext) => {
       if (material.isMeshToonMaterial || material.isMeshToonNodeMaterial) {
         if (material.wireframe === false) {
           const outlineMaterial = this._getOutlineMaterial(material);
-          renderer.renderObject(object4, scene, camera, geometry, outlineMaterial, group, lightsNode, clippingContext);
+          renderer.renderObject(object5, scene, camera, geometry, outlineMaterial, group, lightsNode, clippingContext);
         }
       }
-      renderer.renderObject(object4, scene, camera, geometry, material, group, lightsNode, clippingContext);
+      renderer.renderObject(object5, scene, camera, geometry, material, group, lightsNode, clippingContext);
     });
     super.updateBefore(frame2);
     renderer.setRenderObjectFunction(currentRenderObjectFunction);
@@ -56930,9 +56930,9 @@ var RangeNode = class extends Node {
     return output3;
   }
   setup(builder) {
-    const object4 = builder.object;
+    const object5 = builder.object;
     let output3 = null;
-    if (object4.count > 1) {
+    if (object5.count > 1) {
       const minNode = this.getConstNode(this.minNode);
       const maxNode = this.getConstNode(this.maxNode);
       const minValue = minNode.value;
@@ -56950,7 +56950,7 @@ var RangeNode = class extends Node {
       else if (maxValue.isColor) max.set(maxValue.r, maxValue.g, maxValue.b, 1);
       else max.set(maxValue.x, maxValue.y, maxValue.z || 0, maxValue.w || 0);
       const stride = 4;
-      const length3 = stride * object4.count;
+      const length3 = stride * object5.count;
       const array32 = new Float32Array(length3);
       for (let i2 = 0; i2 < length3; i2++) {
         const index = i2 % stride;
@@ -56959,9 +56959,9 @@ var RangeNode = class extends Node {
         array32[i2] = MathUtils.lerp(minElementValue, maxElementValue, Math.random());
       }
       const nodeType = this.getNodeType(builder);
-      const uniformBufferSize = object4.count * 4 * 4;
+      const uniformBufferSize = object5.count * 4 * 4;
       if (uniformBufferSize <= builder.getUniformBufferLimit()) {
-        output3 = buffer(array32, "vec4", object4.count).element(instanceIndex).convert(nodeType);
+        output3 = buffer(array32, "vec4", object5.count).element(instanceIndex).convert(nodeType);
       } else {
         const bufferAttribute3 = new InstancedBufferAttribute(array32, 4);
         builder.geometry.setAttribute("__range" + this.id, bufferAttribute3);
@@ -57445,9 +57445,9 @@ var lightTargetDirection = (light) => cameraViewMatrix.transformDirection(lightP
 var sortLights = (lights3) => {
   return lights3.sort((a2, b3) => a2.id - b3.id);
 };
-var getLightNodeById = (id4, lightNodes) => {
+var getLightNodeById = (id7, lightNodes) => {
   for (const lightNode of lightNodes) {
-    if (lightNode.isAnalyticLightNode && lightNode.light.id === id4) {
+    if (lightNode.isAnalyticLightNode && lightNode.light.id === id7) {
       return lightNode;
     }
   }
@@ -57898,14 +57898,14 @@ var getShadowRenderObjectFunction = (renderer, shadow3, shadowType, useVelocity)
   _shadowRenderObjectKeys[1] = shadow3;
   let renderObjectFunction = _shadowRenderObjectLibrary.get(_shadowRenderObjectKeys);
   if (renderObjectFunction === void 0 || (renderObjectFunction.shadowType !== shadowType || renderObjectFunction.useVelocity !== useVelocity)) {
-    renderObjectFunction = (object4, scene, _camera3, geometry, material, group, ...params) => {
-      if (object4.castShadow === true || object4.receiveShadow && shadowType === VSMShadowMap) {
+    renderObjectFunction = (object5, scene, _camera3, geometry, material, group, ...params) => {
+      if (object5.castShadow === true || object5.receiveShadow && shadowType === VSMShadowMap) {
         if (useVelocity) {
-          getDataFromObject(object4).useVelocity = true;
+          getDataFromObject(object5).useVelocity = true;
         }
-        object4.onBeforeShadow(renderer, object4, _camera3, shadow3.camera, geometry, scene.overrideMaterial, group);
-        renderer.renderObject(object4, scene, _camera3, geometry, material, group, ...params);
-        object4.onAfterShadow(renderer, object4, _camera3, shadow3.camera, geometry, scene.overrideMaterial, group);
+        object5.onBeforeShadow(renderer, object5, _camera3, shadow3.camera, geometry, scene.overrideMaterial, group);
+        renderer.renderObject(object5, scene, _camera3, geometry, material, group, ...params);
+        object5.onAfterShadow(renderer, object5, _camera3, shadow3.camera, geometry, scene.overrideMaterial, group);
       }
     };
     renderObjectFunction.shadowType = shadowType;
@@ -58112,8 +58112,8 @@ var ShadowNode = class extends ShadowBaseNode {
     if (!renderer.highPrecision || builder.material.receivedShadowPositionNode || builder.context.shadowPositionWorld) {
       shadowPosition = shadowMatrix.mul(shadowPositionWorld.add(shadowNormalBias));
     } else {
-      const highpShadowModelMatrix = uniform("mat4").onObjectUpdate(({ object: object4 }, self2) => {
-        return self2.value.multiplyMatrices(shadowMatrix.value, object4.matrixWorld);
+      const highpShadowModelMatrix = uniform("mat4").onObjectUpdate(({ object: object5 }, self2) => {
+        return self2.value.multiplyMatrices(shadowMatrix.value, object5.matrixWorld);
       });
       shadowPosition = highpShadowModelMatrix.mul(positionLocal).add(shadowMatrix.mul(vec4(shadowNormalBias, 0)));
     }
@@ -58368,7 +58368,7 @@ var pointShadowFilter = /* @__PURE__ */ Fn(({ filterFn, depthTexture, shadowCoor
   const shadowCameraNear = uniform("float").setGroup(renderGroup).onRenderUpdate(() => shadow3.camera.near);
   const shadowCameraFar = uniform("float").setGroup(renderGroup).onRenderUpdate(() => shadow3.camera.far);
   const bias = reference("bias", "float", shadow3).setGroup(renderGroup);
-  const result = float(1).toVar();
+  const result2 = float(1).toVar();
   If(viewZ.sub(shadowCameraFar).lessThanEqual(0).and(viewZ.sub(shadowCameraNear).greaterThanEqual(0)), () => {
     let dp;
     if (builder.renderer.reversedDepthBuffer) {
@@ -58379,9 +58379,9 @@ var pointShadowFilter = /* @__PURE__ */ Fn(({ filterFn, depthTexture, shadowCoor
       dp.addAssign(bias);
     }
     const bd3D = shadowPosition.normalize();
-    result.assign(filterFn({ depthTexture, bd3D, dp, shadow: shadow3 }));
+    result2.assign(filterFn({ depthTexture, bd3D, dp, shadow: shadow3 }));
   });
-  return result;
+  return result2;
 });
 var PointShadowNode = class extends ShadowNode {
   static get type() {
@@ -58712,8 +58712,8 @@ var checker = /* @__PURE__ */ Fn(([coord = uv$1()]) => {
   const uv3 = coord.mul(2);
   const cx = uv3.x.floor();
   const cy = uv3.y.floor();
-  const result = cx.add(cy).mod(2);
-  return result.sign();
+  const result2 = cx.add(cy).mod(2);
+  return result2.sign();
 });
 var shapeCircle = Fn(([coord = uv$1()], { renderer, material }) => {
   const len2 = lengthSq(coord.mul(2).sub(1));
@@ -59172,11 +59172,11 @@ var mx_hash_vec3_0 = /* @__PURE__ */ Fn(([x_immutable, y_immutable]) => {
   const y22 = int(y_immutable).toVar();
   const x3 = int(x_immutable).toVar();
   const h2 = uint(mx_hash_int(x3, y22)).toVar();
-  const result = uvec3().toVar();
-  result.x.assign(h2.bitAnd(int(255)));
-  result.y.assign(h2.shiftRight(int(8)).bitAnd(int(255)));
-  result.z.assign(h2.shiftRight(int(16)).bitAnd(int(255)));
-  return result;
+  const result2 = uvec3().toVar();
+  result2.x.assign(h2.bitAnd(int(255)));
+  result2.y.assign(h2.shiftRight(int(8)).bitAnd(int(255)));
+  result2.z.assign(h2.shiftRight(int(16)).bitAnd(int(255)));
+  return result2;
 }).setLayout({
   name: "mx_hash_vec3_0",
   type: "uvec3",
@@ -59190,11 +59190,11 @@ var mx_hash_vec3_1 = /* @__PURE__ */ Fn(([x_immutable, y_immutable, z_immutable]
   const y22 = int(y_immutable).toVar();
   const x3 = int(x_immutable).toVar();
   const h2 = uint(mx_hash_int(x3, y22, z4)).toVar();
-  const result = uvec3().toVar();
-  result.x.assign(h2.bitAnd(int(255)));
-  result.y.assign(h2.shiftRight(int(8)).bitAnd(int(255)));
-  result.z.assign(h2.shiftRight(int(16)).bitAnd(int(255)));
-  return result;
+  const result2 = uvec3().toVar();
+  result2.x.assign(h2.bitAnd(int(255)));
+  result2.y.assign(h2.shiftRight(int(8)).bitAnd(int(255)));
+  result2.z.assign(h2.shiftRight(int(16)).bitAnd(int(255)));
+  return result2;
 }).setLayout({
   name: "mx_hash_vec3_1",
   type: "uvec3",
@@ -59212,8 +59212,8 @@ var mx_perlin_noise_float_0 = /* @__PURE__ */ Fn(([p_immutable]) => {
   const fy = float(mx_floorfrac(p2.y, Y3)).toVar();
   const u22 = float(mx_fade(fx)).toVar();
   const v3 = float(mx_fade(fy)).toVar();
-  const result = float(mx_bilerp(mx_gradient_float(mx_hash_int(X22, Y3), fx, fy), mx_gradient_float(mx_hash_int(X22.add(int(1)), Y3), fx.sub(1), fy), mx_gradient_float(mx_hash_int(X22, Y3.add(int(1))), fx, fy.sub(1)), mx_gradient_float(mx_hash_int(X22.add(int(1)), Y3.add(int(1))), fx.sub(1), fy.sub(1)), u22, v3)).toVar();
-  return mx_gradient_scale2d(result);
+  const result2 = float(mx_bilerp(mx_gradient_float(mx_hash_int(X22, Y3), fx, fy), mx_gradient_float(mx_hash_int(X22.add(int(1)), Y3), fx.sub(1), fy), mx_gradient_float(mx_hash_int(X22, Y3.add(int(1))), fx, fy.sub(1)), mx_gradient_float(mx_hash_int(X22.add(int(1)), Y3.add(int(1))), fx.sub(1), fy.sub(1)), u22, v3)).toVar();
+  return mx_gradient_scale2d(result2);
 }).setLayout({
   name: "mx_perlin_noise_float_0",
   type: "float",
@@ -59230,8 +59230,8 @@ var mx_perlin_noise_float_1 = /* @__PURE__ */ Fn(([p_immutable]) => {
   const u22 = float(mx_fade(fx)).toVar();
   const v3 = float(mx_fade(fy)).toVar();
   const w5 = float(mx_fade(fz)).toVar();
-  const result = float(mx_trilerp(mx_gradient_float(mx_hash_int(X22, Y3, Z3), fx, fy, fz), mx_gradient_float(mx_hash_int(X22.add(int(1)), Y3, Z3), fx.sub(1), fy, fz), mx_gradient_float(mx_hash_int(X22, Y3.add(int(1)), Z3), fx, fy.sub(1), fz), mx_gradient_float(mx_hash_int(X22.add(int(1)), Y3.add(int(1)), Z3), fx.sub(1), fy.sub(1), fz), mx_gradient_float(mx_hash_int(X22, Y3, Z3.add(int(1))), fx, fy, fz.sub(1)), mx_gradient_float(mx_hash_int(X22.add(int(1)), Y3, Z3.add(int(1))), fx.sub(1), fy, fz.sub(1)), mx_gradient_float(mx_hash_int(X22, Y3.add(int(1)), Z3.add(int(1))), fx, fy.sub(1), fz.sub(1)), mx_gradient_float(mx_hash_int(X22.add(int(1)), Y3.add(int(1)), Z3.add(int(1))), fx.sub(1), fy.sub(1), fz.sub(1)), u22, v3, w5)).toVar();
-  return mx_gradient_scale3d(result);
+  const result2 = float(mx_trilerp(mx_gradient_float(mx_hash_int(X22, Y3, Z3), fx, fy, fz), mx_gradient_float(mx_hash_int(X22.add(int(1)), Y3, Z3), fx.sub(1), fy, fz), mx_gradient_float(mx_hash_int(X22, Y3.add(int(1)), Z3), fx, fy.sub(1), fz), mx_gradient_float(mx_hash_int(X22.add(int(1)), Y3.add(int(1)), Z3), fx.sub(1), fy.sub(1), fz), mx_gradient_float(mx_hash_int(X22, Y3, Z3.add(int(1))), fx, fy, fz.sub(1)), mx_gradient_float(mx_hash_int(X22.add(int(1)), Y3, Z3.add(int(1))), fx.sub(1), fy, fz.sub(1)), mx_gradient_float(mx_hash_int(X22, Y3.add(int(1)), Z3.add(int(1))), fx, fy.sub(1), fz.sub(1)), mx_gradient_float(mx_hash_int(X22.add(int(1)), Y3.add(int(1)), Z3.add(int(1))), fx.sub(1), fy.sub(1), fz.sub(1)), u22, v3, w5)).toVar();
+  return mx_gradient_scale3d(result2);
 }).setLayout({
   name: "mx_perlin_noise_float_1",
   type: "float",
@@ -59247,8 +59247,8 @@ var mx_perlin_noise_vec3_0 = /* @__PURE__ */ Fn(([p_immutable]) => {
   const fy = float(mx_floorfrac(p2.y, Y3)).toVar();
   const u22 = float(mx_fade(fx)).toVar();
   const v3 = float(mx_fade(fy)).toVar();
-  const result = vec3(mx_bilerp(mx_gradient_vec3(mx_hash_vec3(X22, Y3), fx, fy), mx_gradient_vec3(mx_hash_vec3(X22.add(int(1)), Y3), fx.sub(1), fy), mx_gradient_vec3(mx_hash_vec3(X22, Y3.add(int(1))), fx, fy.sub(1)), mx_gradient_vec3(mx_hash_vec3(X22.add(int(1)), Y3.add(int(1))), fx.sub(1), fy.sub(1)), u22, v3)).toVar();
-  return mx_gradient_scale2d(result);
+  const result2 = vec3(mx_bilerp(mx_gradient_vec3(mx_hash_vec3(X22, Y3), fx, fy), mx_gradient_vec3(mx_hash_vec3(X22.add(int(1)), Y3), fx.sub(1), fy), mx_gradient_vec3(mx_hash_vec3(X22, Y3.add(int(1))), fx, fy.sub(1)), mx_gradient_vec3(mx_hash_vec3(X22.add(int(1)), Y3.add(int(1))), fx.sub(1), fy.sub(1)), u22, v3)).toVar();
+  return mx_gradient_scale2d(result2);
 }).setLayout({
   name: "mx_perlin_noise_vec3_0",
   type: "vec3",
@@ -59265,8 +59265,8 @@ var mx_perlin_noise_vec3_1 = /* @__PURE__ */ Fn(([p_immutable]) => {
   const u22 = float(mx_fade(fx)).toVar();
   const v3 = float(mx_fade(fy)).toVar();
   const w5 = float(mx_fade(fz)).toVar();
-  const result = vec3(mx_trilerp(mx_gradient_vec3(mx_hash_vec3(X22, Y3, Z3), fx, fy, fz), mx_gradient_vec3(mx_hash_vec3(X22.add(int(1)), Y3, Z3), fx.sub(1), fy, fz), mx_gradient_vec3(mx_hash_vec3(X22, Y3.add(int(1)), Z3), fx, fy.sub(1), fz), mx_gradient_vec3(mx_hash_vec3(X22.add(int(1)), Y3.add(int(1)), Z3), fx.sub(1), fy.sub(1), fz), mx_gradient_vec3(mx_hash_vec3(X22, Y3, Z3.add(int(1))), fx, fy, fz.sub(1)), mx_gradient_vec3(mx_hash_vec3(X22.add(int(1)), Y3, Z3.add(int(1))), fx.sub(1), fy, fz.sub(1)), mx_gradient_vec3(mx_hash_vec3(X22, Y3.add(int(1)), Z3.add(int(1))), fx, fy.sub(1), fz.sub(1)), mx_gradient_vec3(mx_hash_vec3(X22.add(int(1)), Y3.add(int(1)), Z3.add(int(1))), fx.sub(1), fy.sub(1), fz.sub(1)), u22, v3, w5)).toVar();
-  return mx_gradient_scale3d(result);
+  const result2 = vec3(mx_trilerp(mx_gradient_vec3(mx_hash_vec3(X22, Y3, Z3), fx, fy, fz), mx_gradient_vec3(mx_hash_vec3(X22.add(int(1)), Y3, Z3), fx.sub(1), fy, fz), mx_gradient_vec3(mx_hash_vec3(X22, Y3.add(int(1)), Z3), fx, fy.sub(1), fz), mx_gradient_vec3(mx_hash_vec3(X22.add(int(1)), Y3.add(int(1)), Z3), fx.sub(1), fy.sub(1), fz), mx_gradient_vec3(mx_hash_vec3(X22, Y3, Z3.add(int(1))), fx, fy, fz.sub(1)), mx_gradient_vec3(mx_hash_vec3(X22.add(int(1)), Y3, Z3.add(int(1))), fx.sub(1), fy, fz.sub(1)), mx_gradient_vec3(mx_hash_vec3(X22, Y3.add(int(1)), Z3.add(int(1))), fx, fy.sub(1), fz.sub(1)), mx_gradient_vec3(mx_hash_vec3(X22.add(int(1)), Y3.add(int(1)), Z3.add(int(1))), fx.sub(1), fy.sub(1), fz.sub(1)), u22, v3, w5)).toVar();
+  return mx_gradient_scale3d(result2);
 }).setLayout({
   name: "mx_perlin_noise_vec3_1",
   type: "vec3",
@@ -59382,14 +59382,14 @@ var mx_fractal_noise_float$1 = /* @__PURE__ */ Fn(([p_immutable, octaves_immutab
   const lacunarity = float(lacunarity_immutable).toVar();
   const octaves = int(octaves_immutable).toVar();
   const p2 = vec3(p_immutable).toVar();
-  const result = float(0).toVar();
+  const result2 = float(0).toVar();
   const amplitude = float(1).toVar();
   Loop(octaves, () => {
-    result.addAssign(amplitude.mul(mx_perlin_noise_float(p2)));
+    result2.addAssign(amplitude.mul(mx_perlin_noise_float(p2)));
     amplitude.mulAssign(diminish);
     p2.mulAssign(lacunarity);
   });
-  return result;
+  return result2;
 }).setLayout({
   name: "mx_fractal_noise_float",
   type: "float",
@@ -59405,14 +59405,14 @@ var mx_fractal_noise_vec3$1 = /* @__PURE__ */ Fn(([p_immutable, octaves_immutabl
   const lacunarity = float(lacunarity_immutable).toVar();
   const octaves = int(octaves_immutable).toVar();
   const p2 = vec3(p_immutable).toVar();
-  const result = vec3(0).toVar();
+  const result2 = vec3(0).toVar();
   const amplitude = float(1).toVar();
   Loop(octaves, () => {
-    result.addAssign(amplitude.mul(mx_perlin_noise_vec3(p2)));
+    result2.addAssign(amplitude.mul(mx_perlin_noise_vec3(p2)));
     amplitude.mulAssign(diminish);
     p2.mulAssign(lacunarity);
   });
-  return result;
+  return result2;
 }).setLayout({
   name: "mx_fractal_noise_vec3",
   type: "vec3",
@@ -59749,24 +59749,24 @@ var mx_unifiednoise2d$1 = /* @__PURE__ */ Fn(([
   const lacunarity = float(lacunarity_immutable).toVar();
   const diminish = float(diminish_immutable).toVar();
   const p2 = texcoord.mul(freq).add(offset);
-  const result = float(0).toVar();
+  const result2 = float(0).toVar();
   If(noiseType.equal(int(0)), () => {
-    result.assign(mx_perlin_noise_vec3(p2));
+    result2.assign(mx_perlin_noise_vec3(p2));
   });
   If(noiseType.equal(int(1)), () => {
-    result.assign(mx_cell_noise_vec3(p2));
+    result2.assign(mx_cell_noise_vec3(p2));
   });
   If(noiseType.equal(int(2)), () => {
-    result.assign(mx_worley_noise_vec3$1(p2, jitter, int(0)));
+    result2.assign(mx_worley_noise_vec3$1(p2, jitter, int(0)));
   });
   If(noiseType.equal(int(3)), () => {
-    result.assign(mx_fractal_noise_vec3$1(vec3(p2, 0), octaves, lacunarity, diminish));
+    result2.assign(mx_fractal_noise_vec3$1(vec3(p2, 0), octaves, lacunarity, diminish));
   });
-  result.assign(result.mul(outmax.sub(outmin)).add(outmin));
+  result2.assign(result2.mul(outmax.sub(outmin)).add(outmin));
   If(clampoutput, () => {
-    result.assign(clamp2(result, outmin, outmax));
+    result2.assign(clamp2(result2, outmin, outmax));
   });
-  return result;
+  return result2;
 }).setLayout({
   name: "mx_unifiednoise2d",
   type: "float",
@@ -59809,24 +59809,24 @@ var mx_unifiednoise3d$1 = /* @__PURE__ */ Fn(([
   const lacunarity = float(lacunarity_immutable).toVar();
   const diminish = float(diminish_immutable).toVar();
   const p2 = position.mul(freq).add(offset);
-  const result = float(0).toVar();
+  const result2 = float(0).toVar();
   If(noiseType.equal(int(0)), () => {
-    result.assign(mx_perlin_noise_vec3(p2));
+    result2.assign(mx_perlin_noise_vec3(p2));
   });
   If(noiseType.equal(int(1)), () => {
-    result.assign(mx_cell_noise_vec3(p2));
+    result2.assign(mx_cell_noise_vec3(p2));
   });
   If(noiseType.equal(int(2)), () => {
-    result.assign(mx_worley_noise_vec3$1(p2, jitter, int(0)));
+    result2.assign(mx_worley_noise_vec3$1(p2, jitter, int(0)));
   });
   If(noiseType.equal(int(3)), () => {
-    result.assign(mx_fractal_noise_vec3$1(p2, octaves, lacunarity, diminish));
+    result2.assign(mx_fractal_noise_vec3$1(p2, octaves, lacunarity, diminish));
   });
-  result.assign(result.mul(outmax.sub(outmin)).add(outmin));
+  result2.assign(result2.mul(outmax.sub(outmin)).add(outmin));
   If(clampoutput, () => {
-    result.assign(clamp2(result, outmin, outmax));
+    result2.assign(clamp2(result2, outmin, outmax));
   });
-  return result;
+  return result2;
 }).setLayout({
   name: "mx_unifiednoise3d",
   type: "float",
@@ -59847,9 +59847,9 @@ var mx_unifiednoise3d$1 = /* @__PURE__ */ Fn(([
 var mx_hsvtorgb = /* @__PURE__ */ Fn(([hsv]) => {
   const s2 = hsv.y;
   const v3 = hsv.z;
-  const result = vec3().toVar();
+  const result2 = vec3().toVar();
   If(s2.lessThan(1e-4), () => {
-    result.assign(vec3(v3, v3, v3));
+    result2.assign(vec3(v3, v3, v3));
   }).Else(() => {
     let h2 = hsv.x;
     h2 = h2.sub(floor(h2)).mul(6).toVar();
@@ -59859,20 +59859,20 @@ var mx_hsvtorgb = /* @__PURE__ */ Fn(([hsv]) => {
     const q3 = v3.mul(s2.mul(f2).oneMinus());
     const t22 = v3.mul(s2.mul(f2.oneMinus()).oneMinus());
     If(hi.equal(int(0)), () => {
-      result.assign(vec3(v3, t22, p2));
+      result2.assign(vec3(v3, t22, p2));
     }).ElseIf(hi.equal(int(1)), () => {
-      result.assign(vec3(q3, v3, p2));
+      result2.assign(vec3(q3, v3, p2));
     }).ElseIf(hi.equal(int(2)), () => {
-      result.assign(vec3(p2, v3, t22));
+      result2.assign(vec3(p2, v3, t22));
     }).ElseIf(hi.equal(int(3)), () => {
-      result.assign(vec3(p2, q3, v3));
+      result2.assign(vec3(p2, q3, v3));
     }).ElseIf(hi.equal(int(4)), () => {
-      result.assign(vec3(t22, p2, v3));
+      result2.assign(vec3(t22, p2, v3));
     }).Else(() => {
-      result.assign(vec3(v3, p2, q3));
+      result2.assign(vec3(v3, p2, q3));
     });
   });
-  return result;
+  return result2;
 }).setLayout({
   name: "mx_hsvtorgb",
   type: "vec3",
@@ -60055,16 +60055,16 @@ var getParallaxCorrectNormal = /* @__PURE__ */ Fn(([normal2, cubeSize, cubePos])
 });
 var getShIrradianceAt = /* @__PURE__ */ Fn(([normal2, shCoefficients]) => {
   const x3 = normal2.x, y22 = normal2.y, z4 = normal2.z;
-  let result = shCoefficients.element(0).mul(0.886227);
-  result = result.add(shCoefficients.element(1).mul(2 * 0.511664).mul(y22));
-  result = result.add(shCoefficients.element(2).mul(2 * 0.511664).mul(z4));
-  result = result.add(shCoefficients.element(3).mul(2 * 0.511664).mul(x3));
-  result = result.add(shCoefficients.element(4).mul(2 * 0.429043).mul(x3).mul(y22));
-  result = result.add(shCoefficients.element(5).mul(2 * 0.429043).mul(y22).mul(z4));
-  result = result.add(shCoefficients.element(6).mul(z4.mul(z4).mul(0.743125).sub(0.247708)));
-  result = result.add(shCoefficients.element(7).mul(2 * 0.429043).mul(x3).mul(z4));
-  result = result.add(shCoefficients.element(8).mul(0.429043).mul(mul(x3, x3).sub(mul(y22, y22))));
-  return result;
+  let result2 = shCoefficients.element(0).mul(0.886227);
+  result2 = result2.add(shCoefficients.element(1).mul(2 * 0.511664).mul(y22));
+  result2 = result2.add(shCoefficients.element(2).mul(2 * 0.511664).mul(z4));
+  result2 = result2.add(shCoefficients.element(3).mul(2 * 0.511664).mul(x3));
+  result2 = result2.add(shCoefficients.element(4).mul(2 * 0.429043).mul(x3).mul(y22));
+  result2 = result2.add(shCoefficients.element(5).mul(2 * 0.429043).mul(y22).mul(z4));
+  result2 = result2.add(shCoefficients.element(6).mul(z4.mul(z4).mul(0.743125).sub(0.247708)));
+  result2 = result2.add(shCoefficients.element(7).mul(2 * 0.429043).mul(x3).mul(z4));
+  result2 = result2.add(shCoefficients.element(8).mul(0.429043).mul(mul(x3, x3).sub(mul(y22, y22))));
+  return result2;
 });
 var TSL = /* @__PURE__ */ Object.freeze({
   __proto__: null,
@@ -61427,10 +61427,10 @@ var NodeBuilder = class {
    * @param {Renderer} renderer - The current renderer.
    * @param {NodeParser} parser - A reference to a node parser.
    */
-  constructor(object4, renderer, parser) {
-    this.object = object4;
-    this.material = object4 && object4.material || null;
-    this.geometry = object4 && object4.geometry || null;
+  constructor(object5, renderer, parser) {
+    this.object = object5;
+    this.material = object5 && object5.material || null;
+    this.geometry = object5 && object5.geometry || null;
     this.renderer = renderer;
     this.parser = parser;
     this.scene = null;
@@ -62509,9 +62509,9 @@ var NodeBuilder = class {
     if (nodeVar === void 0) {
       const idNS = readOnly ? "_const" : "_var";
       const vars = this.vars[shaderStage] || (this.vars[shaderStage] = []);
-      const id4 = this.vars[idNS] || (this.vars[idNS] = 0);
+      const id7 = this.vars[idNS] || (this.vars[idNS] = 0);
       if (name === null) {
-        name = (readOnly ? "nodeConst" : "nodeVar") + id4;
+        name = (readOnly ? "nodeConst" : "nodeVar") + id7;
         this.vars[idNS]++;
       }
       if (subBuildVariable !== "variable") {
@@ -62802,9 +62802,9 @@ var NodeBuilder = class {
   flowBuildStage(node, buildStage, output3 = null) {
     const previousBuildStage = this.getBuildStage();
     this.setBuildStage(buildStage);
-    const result = node.build(this, output3);
+    const result2 = node.build(this, output3);
     this.setBuildStage(previousBuildStage);
-    return result;
+    return result2;
   }
   /**
    * Runs the node flow through all the steps of creation, 'setup', 'analyze', 'generate'.
@@ -62902,7 +62902,7 @@ var NodeBuilder = class {
     this.cache = this.globalCache;
     this.tab = "	";
     this.context = context3;
-    let result = null;
+    let result2 = null;
     if (this.buildStage === "generate") {
       const flowData = this.flowChildNode(node, output3);
       if (propertyName !== null) {
@@ -62910,15 +62910,15 @@ var NodeBuilder = class {
 `;
       }
       this.flowCode[shaderStage] = this.flowCode[shaderStage] + flowData.code;
-      result = flowData;
+      result2 = flowData;
     } else {
-      result = node.build(this);
+      result2 = node.build(this);
     }
     this.setShaderStage(previousShaderStage);
     this.cache = previousCache;
     this.tab = previousTab;
     this.context = previousContext;
-    return result;
+    return result2;
   }
   /**
    * Returns an array holding all node attributes of this node builder.
@@ -63128,19 +63128,19 @@ var NodeBuilder = class {
     } else {
       subBuild3 = this.subBuildFn;
     }
-    let result;
+    let result2;
     if (subBuild3) {
-      result = property3 ? subBuild3 + "_" + property3 : subBuild3;
+      result2 = property3 ? subBuild3 + "_" + property3 : subBuild3;
     } else {
-      result = property3;
+      result2 = property3;
     }
-    return result;
+    return result2;
   }
   /**
    * Prebuild the node builder.
    */
   prebuild() {
-    const { object: object4, renderer, material } = this;
+    const { object: object5, renderer, material } = this;
     if (renderer.contextNode.isContextNode === true) {
       this.context = { ...this.context, ...renderer.contextNode.getFlowContextData() };
     } else {
@@ -63161,7 +63161,7 @@ var NodeBuilder = class {
       }
       nodeMaterial.build(this);
     } else {
-      this.addFlow("compute", object4);
+      this.addFlow("compute", object5);
     }
   }
   /**
@@ -64083,11 +64083,11 @@ var NodeManager = class extends DataMap {
    * @return {Promise<NodeBuilderState>} A promise that resolves to the node builder state.
    */
   getForRenderAsync(renderObject) {
-    const result = this.getForRender(renderObject, true);
-    if (result.then) {
-      return result;
+    const result2 = this.getForRender(renderObject, true);
+    if (result2.then) {
+      return result2;
     }
-    return Promise.resolve(result);
+    return Promise.resolve(result2);
   }
   /**
    * Returns nodeBuilderState if ready, null if pending async build.
@@ -64143,17 +64143,17 @@ var NodeManager = class extends DataMap {
    * @param {any} object - The object to delete.
    * @return {?Object} The deleted dictionary.
    */
-  delete(object4) {
-    if (object4.isRenderObject) {
-      const nodeBuilderState = this.get(object4).nodeBuilderState;
+  delete(object5) {
+    if (object5.isRenderObject) {
+      const nodeBuilderState = this.get(object5).nodeBuilderState;
       if (nodeBuilderState !== void 0) {
         nodeBuilderState.usedTimes--;
         if (nodeBuilderState.usedTimes === 0) {
-          this.nodeBuilderCache.delete(this.getForRenderCacheKey(object4));
+          this.nodeBuilderCache.delete(this.getForRenderCacheKey(object5));
         }
       }
     }
-    return super.delete(object4);
+    return super.delete(object5);
   }
   /**
    * Returns a node builder state for the given compute node.
@@ -64335,12 +64335,12 @@ var NodeManager = class extends DataMap {
    * @param {boolean} [forceUpdate=false] - Whether an update should be enforced or not.
    * @return {Node} The node representation.
    */
-  getCacheNode(type, object4, callback, forceUpdate = false) {
+  getCacheNode(type, object5, callback, forceUpdate = false) {
     const nodeCache = this.cacheLib[type] || (this.cacheLib[type] = /* @__PURE__ */ new WeakMap());
-    let node = nodeCache.get(object4);
+    let node = nodeCache.get(object5);
     if (node === void 0 || forceUpdate) {
       node = callback();
-      nodeCache.set(object4, node);
+      nodeCache.set(object5, node);
     }
     return node;
   }
@@ -64405,11 +64405,11 @@ var NodeManager = class extends DataMap {
       delete sceneData.environment;
     }
   }
-  getNodeFrame(renderer = this.renderer, scene = null, object4 = null, camera = null, material = null) {
+  getNodeFrame(renderer = this.renderer, scene = null, object5 = null, camera = null, material = null) {
     const nodeFrame = this.nodeFrame;
     nodeFrame.renderer = renderer;
     nodeFrame.scene = scene;
-    nodeFrame.object = object4;
+    nodeFrame.object = object5;
     nodeFrame.camera = camera;
     nodeFrame.material = material;
     return nodeFrame;
@@ -65094,7 +65094,7 @@ var XRManager = class extends EventDispatcher {
    * @param {Object} [attributes={}] - Allows to configure the layer's render target.
    * @return {Mesh} A mesh representing the quadratic XR layer. This mesh should be added to the XR scene.
    */
-  createQuadLayer(width, height, translation, quaternion, pixelwidth, pixelheight, rendercall, attributes = {}) {
+  createQuadLayer(width, height, translation, quaternion2, pixelwidth, pixelheight, rendercall, attributes = {}) {
     const geometry = new PlaneGeometry(width, height);
     const renderTarget = new XRRenderTarget(
       pixelwidth,
@@ -65126,13 +65126,13 @@ var XRManager = class extends EventDispatcher {
     material.map.repeat.y = -1;
     const plane = new Mesh(geometry, material);
     plane.position.copy(translation);
-    plane.quaternion.copy(quaternion);
+    plane.quaternion.copy(quaternion2);
     const layer = {
       type: "quad",
       width,
       height,
       translation,
-      quaternion,
+      quaternion: quaternion2,
       pixelwidth,
       pixelheight,
       plane,
@@ -65172,7 +65172,7 @@ var XRManager = class extends EventDispatcher {
    * @param {Object} [attributes={}] - Allows to configure the layer's render target.
    * @return {Mesh} A mesh representing the cylindrical XR layer. This mesh should be added to the XR scene.
    */
-  createCylinderLayer(radius, centralAngle, aspectratio, translation, quaternion, pixelwidth, pixelheight, rendercall, attributes = {}) {
+  createCylinderLayer(radius, centralAngle, aspectratio, translation, quaternion2, pixelwidth, pixelheight, rendercall, attributes = {}) {
     const geometry = new CylinderGeometry(radius, radius, radius * centralAngle / aspectratio, 64, 64, true, Math.PI - centralAngle / 2, centralAngle);
     const renderTarget = new XRRenderTarget(
       pixelwidth,
@@ -65204,14 +65204,14 @@ var XRManager = class extends EventDispatcher {
     material.map.repeat.y = -1;
     const plane = new Mesh(geometry, material);
     plane.position.copy(translation);
-    plane.quaternion.copy(quaternion);
+    plane.quaternion.copy(quaternion2);
     const layer = {
       type: "cylinder",
       radius,
       centralAngle,
       aspectratio,
       translation,
-      quaternion,
+      quaternion: quaternion2,
       pixelwidth,
       pixelheight,
       plane,
@@ -66059,12 +66059,12 @@ var Renderer = class {
     this.debug = {
       checkShaderErrors: true,
       onShaderError: null,
-      getShaderAsync: async (scene, camera, object4) => {
+      getShaderAsync: async (scene, camera, object5) => {
         await this.compileAsync(scene, camera);
         const renderList = this._renderLists.get(scene, camera);
         const renderContext = this._renderContexts.get(this._renderTarget, this._mrt);
-        const material = scene.overrideMaterial || object4.material;
-        const renderObject = this._objects.get(object4, material, scene, camera, renderList.lightsNode, renderContext, renderContext.clippingContext);
+        const material = scene.overrideMaterial || object5.material;
+        const renderObject = this._objects.get(object5, material, scene, camera, renderList.lightsNode, renderContext, renderContext.clippingContext);
         const { fragmentShader, vertexShader } = renderObject.getNodeBuilderState();
         return { fragmentShader, vertexShader };
       }
@@ -66184,9 +66184,9 @@ var Renderer = class {
     renderList.begin();
     this._projectObject(scene, camera, 0, renderList, renderContext.clippingContext);
     if (targetScene !== scene) {
-      targetScene.traverseVisible(function(object4) {
-        if (object4.isLight && object4.layers.test(camera.layers)) {
-          renderList.pushLight(object4);
+      targetScene.traverseVisible(function(object5) {
+        if (object5.isLight && object5.layers.test(camera.layers)) {
+          renderList.pushLight(object5);
         }
       });
     }
@@ -67014,9 +67014,9 @@ Reason: ${info.reason}`;
    * @param {Object3D} object - The 3D object to test.
    * @return {boolean} Whether the 3D object is fully occluded or not.
    */
-  isOccluded(object4) {
+  isOccluded(object5) {
     const renderContext = this._currentRenderContext;
-    return renderContext && this.backend.isOccluded(renderContext, object4);
+    return renderContext && this.backend.isOccluded(renderContext, object5);
   }
   /**
    * Performs a manual clear operation. This method ignores `autoClear` properties.
@@ -67557,37 +67557,37 @@ Reason: ${info.reason}`;
    * @param {RenderList} renderList - The current render list.
    * @param {ClippingContext} clippingContext - The current clipping context.
    */
-  _projectObject(object4, camera, groupOrder, renderList, clippingContext) {
-    if (object4.visible === false) return;
-    const visible = object4.layers.test(camera.layers);
+  _projectObject(object5, camera, groupOrder, renderList, clippingContext) {
+    if (object5.visible === false) return;
+    const visible = object5.layers.test(camera.layers);
     if (visible) {
-      if (object4.isGroup) {
-        groupOrder = object4.renderOrder;
-        if (object4.isClippingGroup && object4.enabled) clippingContext = clippingContext.getGroupContext(object4);
-      } else if (object4.isLOD) {
-        if (object4.autoUpdate === true) object4.update(camera);
-      } else if (object4.isLight) {
-        renderList.pushLight(object4);
-      } else if (object4.isSprite) {
+      if (object5.isGroup) {
+        groupOrder = object5.renderOrder;
+        if (object5.isClippingGroup && object5.enabled) clippingContext = clippingContext.getGroupContext(object5);
+      } else if (object5.isLOD) {
+        if (object5.autoUpdate === true) object5.update(camera);
+      } else if (object5.isLight) {
+        renderList.pushLight(object5);
+      } else if (object5.isSprite) {
         const frustum = camera.isArrayCamera ? _frustumArray2 : _frustum2;
-        if (!object4.frustumCulled || frustum.intersectsSprite(object4, camera)) {
+        if (!object5.frustumCulled || frustum.intersectsSprite(object5, camera)) {
           if (this.sortObjects === true) {
-            _vector42.setFromMatrixPosition(object4.matrixWorld).applyMatrix4(_projScreenMatrix2);
+            _vector42.setFromMatrixPosition(object5.matrixWorld).applyMatrix4(_projScreenMatrix2);
           }
-          const { geometry, material } = object4;
+          const { geometry, material } = object5;
           if (material.visible) {
-            renderList.push(object4, geometry, material, groupOrder, _vector42.z, null, clippingContext);
+            renderList.push(object5, geometry, material, groupOrder, _vector42.z, null, clippingContext);
           }
         }
-      } else if (object4.isLineLoop) {
+      } else if (object5.isLineLoop) {
         error("Renderer: Objects of type THREE.LineLoop are not supported. Please use THREE.Line or THREE.LineSegments.");
-      } else if (object4.isMesh || object4.isLine || object4.isPoints) {
+      } else if (object5.isMesh || object5.isLine || object5.isPoints) {
         const frustum = camera.isArrayCamera ? _frustumArray2 : _frustum2;
-        if (!object4.frustumCulled || frustum.intersectsObject(object4, camera)) {
-          const { geometry, material } = object4;
+        if (!object5.frustumCulled || frustum.intersectsObject(object5, camera)) {
+          const { geometry, material } = object5;
           if (this.sortObjects === true) {
             if (geometry.boundingSphere === null) geometry.computeBoundingSphere();
-            _vector42.copy(geometry.boundingSphere.center).applyMatrix4(object4.matrixWorld).applyMatrix4(_projScreenMatrix2);
+            _vector42.copy(geometry.boundingSphere.center).applyMatrix4(object5.matrixWorld).applyMatrix4(_projScreenMatrix2);
           }
           if (Array.isArray(material)) {
             const groups = geometry.groups;
@@ -67595,27 +67595,27 @@ Reason: ${info.reason}`;
               const group = groups[i2];
               const groupMaterial = material[group.materialIndex];
               if (groupMaterial && groupMaterial.visible) {
-                renderList.push(object4, geometry, groupMaterial, groupOrder, _vector42.z, group, clippingContext);
+                renderList.push(object5, geometry, groupMaterial, groupOrder, _vector42.z, group, clippingContext);
               }
             }
           } else if (material.visible) {
-            renderList.push(object4, geometry, material, groupOrder, _vector42.z, null, clippingContext);
+            renderList.push(object5, geometry, material, groupOrder, _vector42.z, null, clippingContext);
           }
         }
       }
     }
-    if (object4.isBundleGroup === true && this.backend.beginBundle !== void 0) {
+    if (object5.isBundleGroup === true && this.backend.beginBundle !== void 0) {
       const baseRenderList = renderList;
-      renderList = this._renderLists.get(object4, camera);
+      renderList = this._renderLists.get(object5, camera);
       renderList.begin();
       baseRenderList.pushBundle({
-        bundleGroup: object4,
+        bundleGroup: object5,
         camera,
         renderList
       });
       renderList.finish();
     }
-    const children = object4.children;
+    const children = object5.children;
     for (let i2 = 0, l2 = children.length; i2 < l2; i2++) {
       this._projectObject(children[i2], camera, groupOrder, renderList, clippingContext);
     }
@@ -67672,8 +67672,8 @@ Reason: ${info.reason}`;
    */
   _renderObjects(renderList, camera, scene, lightsNode, passId = null) {
     for (let i2 = 0, il = renderList.length; i2 < il; i2++) {
-      const { object: object4, geometry, material, group, clippingContext } = renderList[i2];
-      this._currentRenderObjectFunction(object4, scene, camera, geometry, material, group, lightsNode, clippingContext, passId);
+      const { object: object5, geometry, material, group, clippingContext } = renderList[i2];
+      this._currentRenderObjectFunction(object5, scene, camera, geometry, material, group, lightsNode, clippingContext, passId);
     }
   }
   /**
@@ -67755,13 +67755,13 @@ Reason: ${info.reason}`;
    * @param {?ClippingContext} clippingContext - The clipping context.
    * @param {?string} [passId=null] - An optional ID for identifying the pass.
    */
-  renderObject(object4, scene, camera, geometry, material, group, lightsNode, clippingContext = null, passId = null) {
+  renderObject(object5, scene, camera, geometry, material, group, lightsNode, clippingContext = null, passId = null) {
     let materialOverride = false;
     let materialColorNode;
     let materialDepthNode;
     let materialPositionNode;
     let materialSide;
-    object4.onBeforeRender(this, scene, camera, geometry, material, group);
+    object5.onBeforeRender(this, scene, camera, geometry, material, group);
     if (material.allowOverride === true && scene.overrideMaterial !== null) {
       const overrideMaterial = scene.overrideMaterial;
       materialOverride = true;
@@ -67790,12 +67790,12 @@ Reason: ${info.reason}`;
     }
     if (material.transparent === true && material.side === DoubleSide && material.forceSinglePass === false) {
       material.side = BackSide;
-      this._handleObjectFunction(object4, material, scene, camera, lightsNode, group, clippingContext, "backSide");
+      this._handleObjectFunction(object5, material, scene, camera, lightsNode, group, clippingContext, "backSide");
       material.side = FrontSide;
-      this._handleObjectFunction(object4, material, scene, camera, lightsNode, group, clippingContext, passId);
+      this._handleObjectFunction(object5, material, scene, camera, lightsNode, group, clippingContext, passId);
       material.side = DoubleSide;
     } else {
-      this._handleObjectFunction(object4, material, scene, camera, lightsNode, group, clippingContext, passId);
+      this._handleObjectFunction(object5, material, scene, camera, lightsNode, group, clippingContext, passId);
     }
     if (materialOverride) {
       scene.overrideMaterial.colorNode = materialColorNode;
@@ -67803,7 +67803,7 @@ Reason: ${info.reason}`;
       scene.overrideMaterial.positionNode = materialPositionNode;
       scene.overrideMaterial.side = materialSide;
     }
-    object4.onAfterRender(this, scene, camera, geometry, material, group);
+    object5.onAfterRender(this, scene, camera, geometry, material, group);
   }
   /**
    * Checks if the given compatibility is supported by the selected backend.
@@ -67831,9 +67831,9 @@ Reason: ${info.reason}`;
    * @param {ClippingContext} clippingContext - The clipping context.
    * @param {string} [passId] - An optional ID for identifying the pass.
    */
-  _renderObjectDirect(object4, material, scene, camera, lightsNode, group, clippingContext, passId) {
-    const renderObject = this._objects.get(object4, material, scene, camera, lightsNode, this._currentRenderContext, clippingContext, passId);
-    renderObject.drawRange = object4.geometry.drawRange;
+  _renderObjectDirect(object5, material, scene, camera, lightsNode, group, clippingContext, passId) {
+    const renderObject = this._objects.get(object5, material, scene, camera, lightsNode, this._currentRenderContext, clippingContext, passId);
+    renderObject.drawRange = object5.geometry.drawRange;
     renderObject.group = group;
     if (this._currentRenderBundle !== null) {
       const renderBundleData = this.backend.get(this._currentRenderBundle);
@@ -67867,10 +67867,10 @@ Reason: ${info.reason}`;
    * @param {ClippingContext} clippingContext - The clipping context.
    * @param {string} [passId] - An optional ID for identifying the pass.
    */
-  _createObjectPipeline(object4, material, scene, camera, lightsNode, group, clippingContext, passId) {
+  _createObjectPipeline(object5, material, scene, camera, lightsNode, group, clippingContext, passId) {
     if (this._compilationPromises !== null) {
       this._compilationPromises.push({
-        object: object4,
+        object: object5,
         material,
         scene,
         camera,
@@ -67882,8 +67882,8 @@ Reason: ${info.reason}`;
       });
       return;
     }
-    const renderObject = this._objects.get(object4, material, scene, camera, lightsNode, this._currentRenderContext, clippingContext, passId);
-    renderObject.drawRange = object4.geometry.drawRange;
+    const renderObject = this._objects.get(object5, material, scene, camera, lightsNode, this._currentRenderContext, clippingContext, passId);
+    renderObject.drawRange = object5.geometry.drawRange;
     renderObject.group = group;
     this._nodes.updateBefore(renderObject);
     this._geometries.updateForRender(renderObject);
@@ -68633,8 +68633,8 @@ var GLSLNodeBuilder = class extends NodeBuilder {
    * @param {Object3D} object - The 3D object.
    * @param {Renderer} renderer - The renderer.
    */
-  constructor(object4, renderer) {
-    super(object4, renderer, new GLSLNodeParser());
+  constructor(object5, renderer) {
+    super(object5, renderer, new GLSLNodeParser());
     this.uniformGroups = {};
     this.transforms = [];
     this.extensions = {};
@@ -69345,10 +69345,10 @@ ${flowData.code}
    * @return {boolean} Whether the requested feature is supported or not.
    */
   isAvailable(name) {
-    let result = supports$1[name];
-    if (result === void 0) {
+    let result2 = supports$1[name];
+    if (result2 === void 0) {
       let extensionName;
-      result = false;
+      result2 = false;
       switch (name) {
         case "float32Filterable":
           extensionName = "OES_texture_float_linear";
@@ -69361,12 +69361,12 @@ ${flowData.code}
         const extensions = this.renderer.backend.extensions;
         if (extensions.has(extensionName)) {
           extensions.get(extensionName);
-          result = true;
+          result2 = true;
         }
       }
-      supports$1[name] = result;
+      supports$1[name] = result2;
     }
-    return result;
+    return result2;
   }
   /**
    * Whether to flip texture data along its vertical axis or not.
@@ -70205,8 +70205,8 @@ var Backend = class {
    * @param {Object} object - The object.
    * @param {Object} value - The dictionary to set.
    */
-  set(object4, value) {
-    this.data.set(object4, value);
+  set(object5, value) {
+    this.data.set(object5, value);
   }
   /**
    * Returns the dictionary for the given object.
@@ -70214,11 +70214,11 @@ var Backend = class {
    * @param {Object} object - The object.
    * @return {Object} The object's dictionary.
    */
-  get(object4) {
-    let map2 = this.data.get(object4);
+  get(object5) {
+    let map2 = this.data.get(object5);
     if (map2 === void 0) {
       map2 = {};
-      this.data.set(object4, map2);
+      this.data.set(object5, map2);
     }
     return map2;
   }
@@ -70229,16 +70229,16 @@ var Backend = class {
    * @param {Object} object - The object.
    * @return {boolean} Whether a dictionary for the given object as been defined or not.
    */
-  has(object4) {
-    return this.data.has(object4);
+  has(object5) {
+    return this.data.has(object5);
   }
   /**
    * Deletes an object from the internal data structure.
    *
    * @param {Object} object - The object to delete.
    */
-  delete(object4) {
-    this.data.delete(object4);
+  delete(object5) {
+    this.data.delete(object5);
   }
   /**
    * Delete GPU data associated with a bind group.
@@ -70557,11 +70557,11 @@ var WebGLState = class {
    *
    * @param {GLenum} id - The capability to enable.
    */
-  enable(id4) {
+  enable(id7) {
     const { enabled } = this;
-    if (enabled[id4] !== true) {
-      this.gl.enable(id4);
-      enabled[id4] = true;
+    if (enabled[id7] !== true) {
+      this.gl.enable(id7);
+      enabled[id7] = true;
     }
   }
   /**
@@ -70572,11 +70572,11 @@ var WebGLState = class {
    *
    * @param {GLenum} id - The capability to enable.
    */
-  disable(id4) {
+  disable(id7) {
     const { enabled } = this;
-    if (enabled[id4] !== false) {
-      this.gl.disable(id4);
-      enabled[id4] = false;
+    if (enabled[id7] !== false) {
+      this.gl.disable(id7);
+      enabled[id7] = false;
     }
   }
   /**
@@ -72372,26 +72372,26 @@ var WebGLBufferRenderer = class {
     this.object = null;
   }
   render(start, count) {
-    const { gl, mode, object: object4, type, info, index } = this;
+    const { gl, mode, object: object5, type, info, index } = this;
     if (index !== 0) {
       gl.drawElements(mode, count, type, start);
     } else {
       gl.drawArrays(mode, start, count);
     }
-    info.update(object4, count, 1);
+    info.update(object5, count, 1);
   }
   renderInstances(start, count, primcount) {
-    const { gl, mode, type, index, object: object4, info } = this;
+    const { gl, mode, type, index, object: object5, info } = this;
     if (primcount === 0) return;
     if (index !== 0) {
       gl.drawElementsInstanced(mode, count, type, start, primcount);
     } else {
       gl.drawArraysInstanced(mode, start, count, primcount);
     }
-    info.update(object4, count, primcount);
+    info.update(object5, count, primcount);
   }
   renderMultiDraw(starts, counts, drawCount) {
-    const { extensions, mode, object: object4, info } = this;
+    const { extensions, mode, object: object5, info } = this;
     if (drawCount === 0) return;
     const extension = extensions.get("WEBGL_multi_draw");
     if (extension === null) {
@@ -72408,7 +72408,7 @@ var WebGLBufferRenderer = class {
       for (let i2 = 0; i2 < drawCount; i2++) {
         elementCount += counts[i2];
       }
-      info.update(object4, elementCount, 1);
+      info.update(object5, elementCount, 1);
     }
   }
   //
@@ -73044,9 +73044,9 @@ var WebGLBackend = class extends Backend {
    * @param {Object3D} object - The 3D object to test.
    * @return {boolean} Whether the 3D object is fully occluded or not.
    */
-  isOccluded(renderContext, object4) {
+  isOccluded(renderContext, object5) {
     const renderContextData = this.get(renderContext);
-    return renderContextData.occluded && renderContextData.occluded.has(object4);
+    return renderContextData.occluded && renderContextData.occluded.has(object5);
   }
   /**
    * Updates the viewport with the values from the given render context.
@@ -73248,20 +73248,20 @@ var WebGLBackend = class extends Backend {
    * @param {number} instanceCount - The intance count.
    * @param {WebGLProgram} programGPU - The raw WebGL shader program.
    */
-  _draw(object4, renderer, firstVertex, vertexCount, instanceCount, programGPU) {
-    if (object4.isBatchedMesh) {
+  _draw(object5, renderer, firstVertex, vertexCount, instanceCount, programGPU) {
+    if (object5.isBatchedMesh) {
       if (this.hasFeature("WEBGL_multi_draw") === false) {
         const { gl } = this;
         const drawIdLocation = gl.getUniformLocation(programGPU, "nodeUniformDrawId");
-        const starts = object4._multiDrawStarts;
-        const counts = object4._multiDrawCounts;
-        const drawCount = object4._multiDrawCount;
+        const starts = object5._multiDrawStarts;
+        const counts = object5._multiDrawCounts;
+        const drawCount = object5._multiDrawCount;
         for (let i2 = 0; i2 < drawCount; i2++) {
           gl.uniform1ui(drawIdLocation, i2);
           renderer.render(starts[i2], counts[i2]);
         }
       } else {
-        renderer.renderMultiDraw(object4._multiDrawStarts, object4._multiDrawCounts, object4._multiDrawCount);
+        renderer.renderMultiDraw(object5._multiDrawStarts, object5._multiDrawCounts, object5._multiDrawCount);
       }
     } else if (instanceCount > 1) {
       renderer.renderInstances(firstVertex, vertexCount, instanceCount);
@@ -73276,14 +73276,14 @@ var WebGLBackend = class extends Backend {
    * @param {Info} info - Holds a series of statistical information about the GPU memory and the rendering process.
    */
   draw(renderObject) {
-    const { object: object4, pipeline, material, context: context3, hardwareClippingPlanes } = renderObject;
+    const { object: object5, pipeline, material, context: context3, hardwareClippingPlanes } = renderObject;
     const { programGPU } = this.get(pipeline);
     const { gl, state } = this;
     const contextData = this.get(context3);
     const drawParams = renderObject.getDrawParameters();
     if (drawParams === null) return;
     this._bindUniforms(renderObject.getBindings());
-    const frontFaceCW = object4.isMesh && object4.matrixWorld.determinant() < 0;
+    const frontFaceCW = object5.isMesh && object5.matrixWorld.determinant() < 0;
     state.setMaterial(material, frontFaceCW, hardwareClippingPlanes);
     if (context3.mrt !== null && context3.textures !== null) {
       state.setMRTBlending(context3.textures, context3.mrt, material);
@@ -73305,24 +73305,24 @@ var WebGLBackend = class extends Backend {
     const indexGPU = index !== null ? this.get(index).bufferGPU : null;
     state.setVertexState(vaoGPU, indexGPU);
     const lastObject = contextData.lastOcclusionObject;
-    if (lastObject !== object4 && lastObject !== void 0) {
+    if (lastObject !== object5 && lastObject !== void 0) {
       if (lastObject !== null && lastObject.occlusionTest === true) {
         gl.endQuery(gl.ANY_SAMPLES_PASSED);
         contextData.occlusionQueryIndex++;
       }
-      if (object4.occlusionTest === true) {
+      if (object5.occlusionTest === true) {
         const query = gl.createQuery();
         gl.beginQuery(gl.ANY_SAMPLES_PASSED, query);
         contextData.occlusionQueries[contextData.occlusionQueryIndex] = query;
-        contextData.occlusionQueryObjects[contextData.occlusionQueryIndex] = object4;
+        contextData.occlusionQueryObjects[contextData.occlusionQueryIndex] = object5;
       }
-      contextData.lastOcclusionObject = object4;
+      contextData.lastOcclusionObject = object5;
     }
     const renderer = this.bufferRenderer;
-    if (object4.isPoints) renderer.mode = gl.POINTS;
-    else if (object4.isLineSegments) renderer.mode = gl.LINES;
-    else if (object4.isLine) renderer.mode = gl.LINE_STRIP;
-    else if (object4.isLineLoop) renderer.mode = gl.LINE_LOOP;
+    if (object5.isPoints) renderer.mode = gl.POINTS;
+    else if (object5.isLineSegments) renderer.mode = gl.LINES;
+    else if (object5.isLine) renderer.mode = gl.LINE_STRIP;
+    else if (object5.isLineLoop) renderer.mode = gl.LINE_LOOP;
     else {
       if (material.wireframe === true) {
         state.setLineWidth(material.wireframeLinewidth * this.renderer.getPixelRatio());
@@ -73333,7 +73333,7 @@ var WebGLBackend = class extends Backend {
     }
     const { vertexCount, instanceCount } = drawParams;
     let { firstVertex } = drawParams;
-    renderer.object = object4;
+    renderer.object = object5;
     if (index !== null) {
       firstVertex *= index.array.BYTES_PER_ELEMENT;
       const indexData = this.get(index);
@@ -73386,7 +73386,7 @@ var WebGLBackend = class extends Backend {
       }
       for (let i2 = 0, len = cameras.length; i2 < len; i2++) {
         const subCamera = cameras[i2];
-        if (object4.layers.test(subCamera.layers)) {
+        if (object5.layers.test(subCamera.layers)) {
           if (isRenderCameraDepthArray) {
             this.renderer._activeCubeFace = i2;
             this._currentContext.activeCubeFace = i2;
@@ -73406,13 +73406,13 @@ var WebGLBackend = class extends Backend {
             );
           }
           state.bindBufferBase(gl.UNIFORM_BUFFER, cameraIndexBufferIndex, cameraData.indexesGPU[i2]);
-          this._draw(object4, renderer, firstVertex, vertexCount, instanceCount, programGPU);
+          this._draw(object5, renderer, firstVertex, vertexCount, instanceCount, programGPU);
         }
         this._currentContext.activeCubeFace = prevActiveCubeFace;
         this.renderer._activeCubeFace = prevActiveCubeFace;
       }
     } else {
-      this._draw(object4, renderer, firstVertex, vertexCount, instanceCount, programGPU);
+      this._draw(object5, renderer, firstVertex, vertexCount, instanceCount, programGPU);
     }
   }
   /**
@@ -73510,8 +73510,8 @@ var WebGLBackend = class extends Backend {
    * @param {Renderer} renderer - The renderer.
    * @return {GLSLNodeBuilder} The node builder.
    */
-  createNodeBuilder(object4, renderer) {
-    return new GLSLNodeBuilder(object4, renderer);
+  createNodeBuilder(object5, renderer) {
+    return new GLSLNodeBuilder(object5, renderer);
   }
   // program
   /**
@@ -76254,8 +76254,8 @@ var WGSLNodeBuilder = class extends NodeBuilder {
    * @param {Object3D} object - The 3D object.
    * @param {Renderer} renderer - The renderer.
    */
-  constructor(object4, renderer) {
-    super(object4, renderer, new WGSLNodeParser());
+  constructor(object5, renderer) {
+    super(object5, renderer, new WGSLNodeParser());
     this.uniformGroups = {};
     this.uniformGroupsBindings = {};
     this.builtins = {};
@@ -77206,7 +77206,7 @@ ${flowData.code}
    * @return {string} The WGSL snippet that defines the structs.
    */
   getStructs(shaderStage) {
-    let result = "";
+    let result2 = "";
     const structs = this.structs[shaderStage];
     if (structs.length > 0) {
       const snippets = [];
@@ -77217,9 +77217,9 @@ ${flowData.code}
         snippet += "\n};";
         snippets.push(snippet);
       }
-      result = "\n" + snippets.join("\n\n") + "\n";
+      result2 = "\n" + snippets.join("\n\n") + "\n";
     }
-    return result;
+    return result2;
   }
   /**
    * Returns a WGSL string representing a variable.
@@ -77553,16 +77553,16 @@ ${flowData.code}
    * @return {boolean} Whether the requested feature is supported or not.
    */
   isAvailable(name) {
-    let result = supports[name];
-    if (result === void 0) {
+    let result2 = supports[name];
+    if (result2 === void 0) {
       if (name === "float32Filterable") {
-        result = this.renderer.hasFeature("float32-filterable");
+        result2 = this.renderer.hasFeature("float32-filterable");
       } else if (name === "clipDistance") {
-        result = this.renderer.hasFeature("clip-distances");
+        result2 = this.renderer.hasFeature("clip-distances");
       }
-      supports[name] = result;
+      supports[name] = result2;
     }
-    return result;
+    return result2;
   }
   /**
    * Returns the native shader method name for a given generic name.
@@ -77859,11 +77859,11 @@ var WebGPUUtils = class {
    * @param {Material} material - The material.
    * @return {string} The GPU primitive topology.
    */
-  getPrimitiveTopology(object4, material) {
-    if (object4.isPoints) return GPUPrimitiveTopology.PointList;
-    else if (object4.isLineSegments || object4.isMesh && material.wireframe === true) return GPUPrimitiveTopology.LineList;
-    else if (object4.isLine) return GPUPrimitiveTopology.LineStrip;
-    else if (object4.isMesh) return GPUPrimitiveTopology.TriangleList;
+  getPrimitiveTopology(object5, material) {
+    if (object5.isPoints) return GPUPrimitiveTopology.PointList;
+    else if (object5.isLineSegments || object5.isMesh && material.wireframe === true) return GPUPrimitiveTopology.LineList;
+    else if (object5.isLine) return GPUPrimitiveTopology.LineStrip;
+    else if (object5.isMesh) return GPUPrimitiveTopology.TriangleList;
   }
   /**
    * Returns a modified sample count from the given sample count value.
@@ -78174,9 +78174,9 @@ var WebGPUAttributeUtils = class {
     await readBufferGPU.mapAsync(GPUMapMode.READ, 0, byteLength);
     if (target === null) {
       const arrayBuffer3 = readBufferGPU.getMappedRange(0, byteLength);
-      const result = arrayBuffer3.slice();
+      const result2 = arrayBuffer3.slice();
       readBufferGPU.destroy();
-      return result;
+      return result2;
     } else if (target.isReadbackBuffer) {
       target.buffer = readBufferGPU.getMappedRange(0, byteLength);
       return target;
@@ -78646,7 +78646,7 @@ var WebGPUPipelineUtils = class {
    * @param {Array<Promise>} promises - An array of compilation promises which are used in `compileAsync()`.
    */
   createRenderPipeline(renderObject, promises) {
-    const { object: object4, material, geometry, pipeline } = renderObject;
+    const { object: object5, material, geometry, pipeline } = renderObject;
     const { vertexProgram, fragmentProgram } = pipeline;
     const backend = this.backend;
     const device = backend.device;
@@ -78712,7 +78712,7 @@ var WebGPUPipelineUtils = class {
     }
     const vertexModule = backend.get(vertexProgram).module;
     const fragmentModule = backend.get(fragmentProgram).module;
-    const primitiveState = this._getPrimitiveState(object4, geometry, material);
+    const primitiveState = this._getPrimitiveState(object5, geometry, material);
     const depthCompare = this._getDepthCompare(material);
     const depthStencilFormat = utils.getCurrentDepthStencilFormat(renderObject.context);
     const sampleCount = this._getSampleCount(renderObject.context);
@@ -78829,16 +78829,16 @@ var WebGPUPipelineUtils = class {
    * @param {Material|BlendMode} object - The object containing blending information.
    * @return {Object} The blending state.
    */
-  _getBlending(object4) {
+  _getBlending(object5) {
     let color3, alpha;
-    const blending = object4.blending;
-    const blendSrc = object4.blendSrc;
-    const blendDst = object4.blendDst;
-    const blendEquation = object4.blendEquation;
+    const blending = object5.blending;
+    const blendSrc = object5.blendSrc;
+    const blendDst = object5.blendDst;
+    const blendEquation = object5.blendEquation;
     if (blending === CustomBlending) {
-      const blendSrcAlpha = object4.blendSrcAlpha !== null ? object4.blendSrcAlpha : blendSrc;
-      const blendDstAlpha = object4.blendDstAlpha !== null ? object4.blendDstAlpha : blendDst;
-      const blendEquationAlpha = object4.blendEquationAlpha !== null ? object4.blendEquationAlpha : blendEquation;
+      const blendSrcAlpha = object5.blendSrcAlpha !== null ? object5.blendSrcAlpha : blendSrc;
+      const blendDstAlpha = object5.blendDstAlpha !== null ? object5.blendDstAlpha : blendDst;
+      const blendEquationAlpha = object5.blendEquationAlpha !== null ? object5.blendEquationAlpha : blendEquation;
       color3 = {
         srcFactor: this._getBlendFactor(blendSrc),
         dstFactor: this._getBlendFactor(blendDst),
@@ -78850,7 +78850,7 @@ var WebGPUPipelineUtils = class {
         operation: this._getBlendOperation(blendEquationAlpha)
       };
     } else {
-      const premultipliedAlpha = object4.premultipliedAlpha;
+      const premultipliedAlpha = object5.premultipliedAlpha;
       const setBlend = (srcRGB, dstRGB, srcAlpha, dstAlpha) => {
         color3 = {
           srcFactor: srcRGB,
@@ -78887,10 +78887,10 @@ var WebGPUPipelineUtils = class {
             setBlend(GPUBlendFactor.SrcAlpha, GPUBlendFactor.One, GPUBlendFactor.One, GPUBlendFactor.One);
             break;
           case SubtractiveBlending:
-            error(`WebGPURenderer: "SubtractiveBlending" requires "${object4.isMaterial ? "material" : "blendMode"}.premultipliedAlpha = true".`);
+            error(`WebGPURenderer: "SubtractiveBlending" requires "${object5.isMaterial ? "material" : "blendMode"}.premultipliedAlpha = true".`);
             break;
           case MultiplyBlending:
-            error(`WebGPURenderer: "MultiplyBlending" requires "${object4.isMaterial ? "material" : "blendMode"}.premultipliedAlpha = true".`);
+            error(`WebGPURenderer: "MultiplyBlending" requires "${object5.isMaterial ? "material" : "blendMode"}.premultipliedAlpha = true".`);
             break;
         }
       }
@@ -79074,15 +79074,15 @@ var WebGPUPipelineUtils = class {
    * @param {Material} material - The material.
    * @return {Object} The primitive state.
    */
-  _getPrimitiveState(object4, geometry, material) {
+  _getPrimitiveState(object5, geometry, material) {
     const descriptor = {};
     const utils = this.backend.utils;
-    descriptor.topology = utils.getPrimitiveTopology(object4, material);
-    if (geometry.index !== null && object4.isLine === true && object4.isLineSegments !== true) {
+    descriptor.topology = utils.getPrimitiveTopology(object5, material);
+    if (geometry.index !== null && object5.isLine === true && object5.isLineSegments !== true) {
       descriptor.stripIndexFormat = geometry.index.array instanceof Uint16Array ? GPUIndexFormat.Uint16 : GPUIndexFormat.Uint32;
     }
     let flipSided = material.side === BackSide;
-    if (object4.isMesh && object4.matrixWorld.determinant() < 0) flipSided = !flipSided;
+    if (object5.isMesh && object5.matrixWorld.determinant() < 0) flipSided = !flipSided;
     descriptor.frontFace = flipSided === true ? GPUFrontFace.CW : GPUFrontFace.CCW;
     descriptor.cullMode = material.side === DoubleSide ? GPUCullMode.None : GPUCullMode.Back;
     return descriptor;
@@ -79204,8 +79204,8 @@ var WebGPUTimestampQueryPool = class extends TimestampQueryPool {
     }
     this.pendingResolve = this._resolveQueries();
     try {
-      const result = await this.pendingResolve;
-      return result;
+      const result2 = await this.pendingResolve;
+      return result2;
     } finally {
       this.pendingResolve = null;
     }
@@ -79954,9 +79954,9 @@ var WebGPUBackend = class extends Backend {
    * @param {Object3D} object - The 3D object to test.
    * @return {boolean} Whether the 3D object is fully occluded or not.
    */
-  isOccluded(renderContext, object4) {
+  isOccluded(renderContext, object5) {
     const renderContextData = this.get(renderContext);
-    return renderContextData.occluded && renderContextData.occluded.has(object4);
+    return renderContextData.occluded && renderContextData.occluded.has(object5);
   }
   /**
    * This method processes the result of occlusion queries and writes it
@@ -80203,7 +80203,7 @@ var WebGPUBackend = class extends Backend {
    * @param {Object} currentSets - Tracking object for currently set pipeline, attributes, bind groups, and index state.
    */
   _draw(renderObject, info, renderContextData, pipelineGPU, bindings, vertexBuffers, drawParams, passEncoderGPU, currentSets) {
-    const { object: object4, material, context: context3 } = renderObject;
+    const { object: object5, material, context: context3 } = renderObject;
     const index = renderObject.getIndex();
     const hasIndex = index !== null;
     this.pipelineUtils.setPipeline(passEncoderGPU, pipelineGPU);
@@ -80237,13 +80237,13 @@ var WebGPUBackend = class extends Backend {
       passEncoderGPU.setStencilReference(material.stencilRef);
       renderContextData.currentStencilRef = material.stencilRef;
     }
-    if (object4.isBatchedMesh === true) {
-      const starts = object4._multiDrawStarts;
-      const counts = object4._multiDrawCounts;
-      const drawCount = object4._multiDrawCount;
+    if (object5.isBatchedMesh === true) {
+      const starts = object5._multiDrawStarts;
+      const counts = object5._multiDrawCounts;
+      const drawCount = object5._multiDrawCount;
       let bytesPerElement = hasIndex === true ? index.array.BYTES_PER_ELEMENT : 1;
       if (material.wireframe) {
-        bytesPerElement = object4.geometry.attributes.position.count > 65535 ? 4 : 2;
+        bytesPerElement = object5.geometry.attributes.position.count > 65535 ? 4 : 2;
       }
       for (let i2 = 0; i2 < drawCount; i2++) {
         if (hasIndex === true) {
@@ -80251,7 +80251,7 @@ var WebGPUBackend = class extends Backend {
         } else {
           passEncoderGPU.draw(counts[i2], 1, starts[i2], i2);
         }
-        info.update(object4, counts[i2], 1);
+        info.update(object5, counts[i2], 1);
       }
     } else if (hasIndex === true) {
       const { vertexCount: indexCount, instanceCount, firstVertex: firstIndex } = drawParams;
@@ -80266,7 +80266,7 @@ var WebGPUBackend = class extends Backend {
       } else {
         passEncoderGPU.drawIndexed(indexCount, instanceCount, firstIndex, 0, 0);
       }
-      info.update(object4, indexCount, instanceCount);
+      info.update(object5, indexCount, instanceCount);
     } else {
       const { vertexCount, instanceCount, firstVertex } = drawParams;
       const indirect = renderObject.getIndirect();
@@ -80280,7 +80280,7 @@ var WebGPUBackend = class extends Backend {
       } else {
         passEncoderGPU.draw(vertexCount, instanceCount, firstVertex, 0);
       }
-      info.update(object4, vertexCount, instanceCount);
+      info.update(object5, vertexCount, instanceCount);
     }
   }
   // render object
@@ -80291,7 +80291,7 @@ var WebGPUBackend = class extends Backend {
    * @param {Info} info - Holds a series of statistical information about the GPU memory and the rendering process.
    */
   draw(renderObject, info) {
-    const { object: object4, context: context3, pipeline } = renderObject;
+    const { object: object5, context: context3, pipeline } = renderObject;
     const renderContextData = this.get(context3);
     const pipelineData = this.get(pipeline);
     const pipelineGPU = pipelineData.pipeline;
@@ -80319,7 +80319,7 @@ var WebGPUBackend = class extends Backend {
       const pixelRatio = this.renderer.getPixelRatio();
       for (let i2 = 0, len = cameras.length; i2 < len; i2++) {
         const subCamera = cameras[i2];
-        if (object4.layers.test(subCamera.layers)) {
+        if (object5.layers.test(subCamera.layers)) {
           const vp = subCamera.viewport;
           let pass3 = renderContextData.currentPass;
           let sets = renderContextData.currentSets;
@@ -80351,16 +80351,16 @@ var WebGPUBackend = class extends Backend {
       if (renderContextData.currentPass) {
         if (renderContextData.occlusionQuerySet !== void 0) {
           const lastObject = renderContextData.lastOcclusionObject;
-          if (lastObject !== object4) {
+          if (lastObject !== object5) {
             if (lastObject !== null && lastObject.occlusionTest === true) {
               renderContextData.currentPass.endOcclusionQuery();
               renderContextData.occlusionQueryIndex++;
             }
-            if (object4.occlusionTest === true) {
+            if (object5.occlusionTest === true) {
               renderContextData.currentPass.beginOcclusionQuery(renderContextData.occlusionQueryIndex);
-              renderContextData.occlusionQueryObjects[renderContextData.occlusionQueryIndex] = object4;
+              renderContextData.occlusionQueryObjects[renderContextData.occlusionQueryIndex] = object5;
             }
-            renderContextData.lastOcclusionObject = object4;
+            renderContextData.lastOcclusionObject = object5;
           }
         }
         this._draw(renderObject, info, renderContextData, pipelineGPU, bindings, vertexBuffers, drawParams, renderContextData.currentPass, renderContextData.currentSets);
@@ -80376,13 +80376,13 @@ var WebGPUBackend = class extends Backend {
    */
   needsRenderUpdate(renderObject) {
     const data = this.get(renderObject);
-    const { object: object4, material } = renderObject;
+    const { object: object5, material } = renderObject;
     const utils = this.utils;
     const sampleCount = utils.getSampleCountRenderContext(renderObject.context);
     const colorSpace = utils.getCurrentColorSpace(renderObject.context);
     const colorFormat = utils.getCurrentColorFormat(renderObject.context);
     const depthStencilFormat = utils.getCurrentDepthStencilFormat(renderObject.context);
-    const primitiveTopology = utils.getPrimitiveTopology(object4, material);
+    const primitiveTopology = utils.getPrimitiveTopology(object5, material);
     let needsUpdate = false;
     if (data.material !== material || data.materialVersion !== material.version || data.transparent !== material.transparent || data.blending !== material.blending || data.premultipliedAlpha !== material.premultipliedAlpha || data.blendSrc !== material.blendSrc || data.blendDst !== material.blendDst || data.blendEquation !== material.blendEquation || data.blendSrcAlpha !== material.blendSrcAlpha || data.blendDstAlpha !== material.blendDstAlpha || data.blendEquationAlpha !== material.blendEquationAlpha || data.colorWrite !== material.colorWrite || data.depthWrite !== material.depthWrite || data.depthTest !== material.depthTest || data.depthFunc !== material.depthFunc || data.stencilWrite !== material.stencilWrite || data.stencilFunc !== material.stencilFunc || data.stencilFail !== material.stencilFail || data.stencilZFail !== material.stencilZFail || data.stencilZPass !== material.stencilZPass || data.stencilFuncMask !== material.stencilFuncMask || data.stencilWriteMask !== material.stencilWriteMask || data.side !== material.side || data.alphaToCoverage !== material.alphaToCoverage || data.sampleCount !== sampleCount || data.colorSpace !== colorSpace || data.colorFormat !== colorFormat || data.depthStencilFormat !== depthStencilFormat || data.primitiveTopology !== primitiveTopology || data.clippingContextCacheKey !== renderObject.clippingContextCacheKey) {
       data.material = material;
@@ -80426,10 +80426,10 @@ var WebGPUBackend = class extends Backend {
    * @return {string} The cache key.
    */
   getRenderCacheKey(renderObject) {
-    const { object: object4, material } = renderObject;
+    const { object: object5, material } = renderObject;
     const utils = this.utils;
     const renderContext = renderObject.context;
-    const frontFaceCW = object4.isMesh && object4.matrixWorld.determinant() < 0;
+    const frontFaceCW = object5.isMesh && object5.matrixWorld.determinant() < 0;
     return [
       material.transparent,
       material.blending,
@@ -80457,7 +80457,7 @@ var WebGPUBackend = class extends Backend {
       utils.getCurrentColorSpace(renderContext),
       utils.getCurrentColorFormat(renderContext),
       utils.getCurrentDepthStencilFormat(renderContext),
-      utils.getPrimitiveTopology(object4, material),
+      utils.getPrimitiveTopology(object5, material),
       renderObject.getGeometryCacheKey(),
       renderObject.clippingContextCacheKey
     ].join();
@@ -80560,8 +80560,8 @@ var WebGPUBackend = class extends Backend {
    * @param {Renderer} renderer - The renderer.
    * @return {WGSLNodeBuilder} The node builder.
    */
-  createNodeBuilder(object4, renderer) {
-    return new WGSLNodeBuilder(object4, renderer);
+  createNodeBuilder(object5, renderer) {
+    return new WGSLNodeBuilder(object5, renderer);
   }
   // program
   /**
@@ -81343,9 +81343,9 @@ var NodeLoader = class extends Loader {
     loader.setPath(this.path);
     loader.setRequestHeader(this.requestHeader);
     loader.setWithCredentials(this.withCredentials);
-    loader.load(url2, (text2) => {
+    loader.load(url2, (text4) => {
       try {
-        onLoad(this.parse(JSON.parse(text2)));
+        onLoad(this.parse(JSON.parse(text4)));
       } catch (e2) {
         if (onError) {
           onError(e2);
@@ -84529,8 +84529,8 @@ function GLTFRegistry() {
     get: function(key) {
       return objects[key];
     },
-    add: function(key, object4) {
-      objects[key] = object4;
+    add: function(key, object5) {
+      objects[key] = object5;
     },
     remove: function(key) {
       delete objects[key];
@@ -85042,9 +85042,9 @@ var GLTFMeshoptCompression = class {
           });
         } else {
           return decoder2.ready.then(function() {
-            const result = new ArrayBuffer(count * stride);
-            decoder2.decodeGltfBuffer(new Uint8Array(result), count, stride, source, extensionDef.mode, extensionDef.filter);
-            return result;
+            const result2 = new ArrayBuffer(count * stride);
+            decoder2.decodeGltfBuffer(new Uint8Array(result2), count, stride, source, extensionDef.mode, extensionDef.filter);
+            return result2;
           });
         }
       });
@@ -85250,14 +85250,14 @@ var GLTFCubicSplineInterpolant = class extends Interpolant {
     super(parameterPositions, sampleValues, sampleSize, resultBuffer);
   }
   copySampleValue_(index) {
-    const result = this.resultBuffer, values = this.sampleValues, valueSize = this.valueSize, offset = index * valueSize * 3 + valueSize;
+    const result2 = this.resultBuffer, values = this.sampleValues, valueSize = this.valueSize, offset = index * valueSize * 3 + valueSize;
     for (let i2 = 0; i2 !== valueSize; i2++) {
-      result[i2] = values[offset + i2];
+      result2[i2] = values[offset + i2];
     }
-    return result;
+    return result2;
   }
   interpolate_(i1, t0, t22, t1) {
-    const result = this.resultBuffer;
+    const result2 = this.resultBuffer;
     const values = this.sampleValues;
     const stride = this.valueSize;
     const stride2 = stride * 2;
@@ -85277,17 +85277,17 @@ var GLTFCubicSplineInterpolant = class extends Interpolant {
       const m0 = values[offset0 + i2 + stride2] * td;
       const p1 = values[offset1 + i2 + stride];
       const m1 = values[offset1 + i2] * td;
-      result[i2] = s0 * p0 + s1 * m0 + s2 * p1 + s3 * m1;
+      result2[i2] = s0 * p0 + s1 * m0 + s2 * p1 + s3 * m1;
     }
-    return result;
+    return result2;
   }
 };
 var _quaternion2 = new Quaternion();
 var GLTFCubicSplineQuaternionInterpolant = class extends GLTFCubicSplineInterpolant {
   interpolate_(i1, t0, t22, t1) {
-    const result = super.interpolate_(i1, t0, t22, t1);
-    _quaternion2.fromArray(result).normalize().toArray(result);
-    return result;
+    const result2 = super.interpolate_(i1, t0, t22, t1);
+    _quaternion2.fromArray(result2).normalize().toArray(result2);
+    return result2;
   }
 };
 var WEBGL_CONSTANTS = {
@@ -85385,18 +85385,18 @@ function createDefaultMaterial(cache3) {
   }
   return cache3["DefaultMaterial"];
 }
-function addUnknownExtensionsToUserData(knownExtensions, object4, objectDef) {
+function addUnknownExtensionsToUserData(knownExtensions, object5, objectDef) {
   for (const name in objectDef.extensions) {
     if (knownExtensions[name] === void 0) {
-      object4.userData.gltfExtensions = object4.userData.gltfExtensions || {};
-      object4.userData.gltfExtensions[name] = objectDef.extensions[name];
+      object5.userData.gltfExtensions = object5.userData.gltfExtensions || {};
+      object5.userData.gltfExtensions[name] = objectDef.extensions[name];
     }
   }
 }
-function assignExtrasToUserData(object4, gltfDef) {
+function assignExtrasToUserData(object5, gltfDef) {
   if (gltfDef.extras !== void 0) {
     if (typeof gltfDef.extras === "object") {
-      Object.assign(object4.userData, gltfDef.extras);
+      Object.assign(object5.userData, gltfDef.extras);
     } else {
       console.warn("THREE.GLTFLoader: Ignoring primitive type .extras, " + gltfDef.extras);
     }
@@ -85483,9 +85483,9 @@ function createPrimitiveKey(primitiveDef) {
 }
 function createAttributesKey(attributes) {
   let attributesKey = "";
-  const keys = Object.keys(attributes).sort();
-  for (let i2 = 0, il = keys.length; i2 < il; i2++) {
-    attributesKey += keys[i2] + ":" + attributes[keys[i2]] + ";";
+  const keys2 = Object.keys(attributes).sort();
+  for (let i2 = 0, il = keys2.length; i2 < il; i2++) {
+    attributesKey += keys2[i2] + ":" + attributes[keys2[i2]] + ";";
   }
   return attributesKey;
 }
@@ -85575,7 +85575,7 @@ var GLTFParser = class {
         parser.getDependencies("camera")
       ]);
     }).then(function(dependencies) {
-      const result = {
+      const result2 = {
         scene: dependencies[0][json2.scene || 0],
         scenes: dependencies[0],
         animations: dependencies[1],
@@ -85584,15 +85584,15 @@ var GLTFParser = class {
         parser,
         userData: {}
       };
-      addUnknownExtensionsToUserData(extensions, result, json2);
-      assignExtrasToUserData(result, json2);
+      addUnknownExtensionsToUserData(extensions, result2, json2);
+      assignExtrasToUserData(result2, json2);
       return Promise.all(parser._invokeAll(function(ext) {
-        return ext.afterRoot && ext.afterRoot(result);
+        return ext.afterRoot && ext.afterRoot(result2);
       })).then(function() {
-        for (const scene of result.scenes) {
+        for (const scene of result2.scenes) {
           scene.updateMatrixWorld();
         }
-        onLoad(result);
+        onLoad(result2);
       });
     }).catch(onError);
   }
@@ -85653,9 +85653,9 @@ var GLTFParser = class {
    * @param {Object} object
    * @return {Object}
    */
-  _getNodeRef(cache3, index, object4) {
-    if (cache3.refs[index] <= 1) return object4;
-    const ref = object4.clone();
+  _getNodeRef(cache3, index, object5) {
+    if (cache3.refs[index] <= 1) return object5;
+    const ref = object5.clone();
     const updateMappings = (original, clone22) => {
       const mappings = this.associations.get(original);
       if (mappings != null) {
@@ -85665,7 +85665,7 @@ var GLTFParser = class {
         updateMappings(child, clone22.children[i2]);
       }
     };
-    updateMappings(object4, ref);
+    updateMappings(object5, ref);
     ref.name += "_instance_" + cache3.uses[index]++;
     return ref;
   }
@@ -85673,8 +85673,8 @@ var GLTFParser = class {
     const extensions = Object.values(this.plugins);
     extensions.push(this);
     for (let i2 = 0; i2 < extensions.length; i2++) {
-      const result = func(extensions[i2]);
-      if (result) return result;
+      const result2 = func(extensions[i2]);
+      if (result2) return result2;
     }
     return null;
   }
@@ -85683,8 +85683,8 @@ var GLTFParser = class {
     extensions.unshift(this);
     const pending = [];
     for (let i2 = 0; i2 < extensions.length; i2++) {
-      const result = func(extensions[i2]);
-      if (result) pending.push(result);
+      const result2 = func(extensions[i2]);
+      if (result2) pending.push(result2);
     }
     return pending;
   }
@@ -86632,9 +86632,9 @@ var GLTFParser = class {
     const tracks = [];
     const targetName = node.name ? node.name : node.uuid;
     const targetNames = [];
-    function collectMorphTargets(object4) {
-      if (object4.morphTargetInfluences) {
-        targetNames.push(object4.name ? object4.name : object4.uuid);
+    function collectMorphTargets(object5) {
+      if (object5.morphTargetInfluences) {
+        targetNames.push(object5.name ? object5.name : object5.uuid);
       }
     }
     if (PATH_PROPERTIES[target.path] === PATH_PROPERTIES.weights) {
@@ -86699,9 +86699,9 @@ var GLTFParser = class {
     return outputArray;
   }
   _createCubicSplineTrackInterpolant(track) {
-    track.createInterpolant = function InterpolantFactoryMethodGLTFCubicSpline(result) {
+    track.createInterpolant = function InterpolantFactoryMethodGLTFCubicSpline(result2) {
       const interpolantType = this instanceof QuaternionKeyframeTrack ? GLTFCubicSplineQuaternionInterpolant : GLTFCubicSplineInterpolant;
-      return new interpolantType(this.times, this.values, this.getValueSize() / 3, result);
+      return new interpolantType(this.times, this.values, this.getValueSize() / 3, result2);
     };
     track.createInterpolant.isInterpolantFactoryMethodGLTFCubicSpline = true;
   }
@@ -87533,14 +87533,14 @@ KTX2Loader.BasisWorker = function() {
       const array32 = arrays[i2];
       totalByteLength += array32.byteLength;
     }
-    const result = new Uint8Array(totalByteLength);
+    const result2 = new Uint8Array(totalByteLength);
     let byteOffset = 0;
     for (let i2 = 0; i2 < arrays.length; i2++) {
       const array32 = arrays[i2];
-      result.set(array32, byteOffset);
+      result2.set(array32, byteOffset);
       byteOffset += array32.byteLength;
     }
-    return result;
+    return result2;
   }
 };
 var UNCOMPRESSED_FORMATS = /* @__PURE__ */ new Set([RGBAFormat, RGBFormat, RGFormat, RedFormat]);
@@ -88015,8 +88015,8 @@ var OrbitControls = class extends Controls {
    * @param {Object3D} object - The object that is managed by the controls.
    * @param {?HTMLElement} domElement - The HTML element used for event listeners.
    */
-  constructor(object4, domElement = null) {
-    super(object4, domElement);
+  constructor(object5, domElement = null) {
+    super(object5, domElement);
     this.state = _STATE.NONE;
     this.target = new Vector3();
     this.cursor = new Vector3();
@@ -88055,7 +88055,7 @@ var OrbitControls = class extends Controls {
     this._lastPosition = new Vector3();
     this._lastQuaternion = new Quaternion();
     this._lastTargetPosition = new Vector3();
-    this._quat = new Quaternion().setFromUnitVectors(object4.up, new Vector3(0, 1, 0));
+    this._quat = new Quaternion().setFromUnitVectors(object5.up, new Vector3(0, 1, 0));
     this._quatInverse = this._quat.clone().invert();
     this._spherical = new Spherical();
     this._sphericalDelta = new Spherical();
@@ -89071,14 +89071,14 @@ var TransformControls = class extends Controls {
   pointerMove(pointer) {
     const axis = this.axis;
     const mode = this.mode;
-    const object4 = this.object;
+    const object5 = this.object;
     let space = this.space;
     if (mode === "scale") {
       space = "local";
     } else if (axis === "E" || axis === "XYZE" || axis === "XYZ") {
       space = "world";
     }
-    if (object4 === void 0 || axis === null || this.dragging === false || pointer !== null && pointer.button !== -1) return;
+    if (object5 === void 0 || axis === null || this.dragging === false || pointer !== null && pointer.button !== -1) return;
     if (pointer !== null) _raycaster.setFromCamera(pointer, this.camera);
     const planeIntersect = intersectObjectWithRay(this._plane, _raycaster, true);
     if (!planeIntersect) return;
@@ -89096,42 +89096,42 @@ var TransformControls = class extends Controls {
       } else {
         this._offset.applyQuaternion(this._parentQuaternionInv).divide(this._parentScale);
       }
-      object4.position.copy(this._offset).add(this._positionStart);
+      object5.position.copy(this._offset).add(this._positionStart);
       if (this.translationSnap) {
         if (space === "local") {
-          object4.position.applyQuaternion(_tempQuaternion.copy(this._quaternionStart).invert());
+          object5.position.applyQuaternion(_tempQuaternion.copy(this._quaternionStart).invert());
           if (axis.search("X") !== -1) {
-            object4.position.x = Math.round(object4.position.x / this.translationSnap) * this.translationSnap;
+            object5.position.x = Math.round(object5.position.x / this.translationSnap) * this.translationSnap;
           }
           if (axis.search("Y") !== -1) {
-            object4.position.y = Math.round(object4.position.y / this.translationSnap) * this.translationSnap;
+            object5.position.y = Math.round(object5.position.y / this.translationSnap) * this.translationSnap;
           }
           if (axis.search("Z") !== -1) {
-            object4.position.z = Math.round(object4.position.z / this.translationSnap) * this.translationSnap;
+            object5.position.z = Math.round(object5.position.z / this.translationSnap) * this.translationSnap;
           }
-          object4.position.applyQuaternion(this._quaternionStart);
+          object5.position.applyQuaternion(this._quaternionStart);
         }
         if (space === "world") {
-          if (object4.parent) {
-            object4.position.add(_tempVector.setFromMatrixPosition(object4.parent.matrixWorld));
+          if (object5.parent) {
+            object5.position.add(_tempVector.setFromMatrixPosition(object5.parent.matrixWorld));
           }
           if (axis.search("X") !== -1) {
-            object4.position.x = Math.round(object4.position.x / this.translationSnap) * this.translationSnap;
+            object5.position.x = Math.round(object5.position.x / this.translationSnap) * this.translationSnap;
           }
           if (axis.search("Y") !== -1) {
-            object4.position.y = Math.round(object4.position.y / this.translationSnap) * this.translationSnap;
+            object5.position.y = Math.round(object5.position.y / this.translationSnap) * this.translationSnap;
           }
           if (axis.search("Z") !== -1) {
-            object4.position.z = Math.round(object4.position.z / this.translationSnap) * this.translationSnap;
+            object5.position.z = Math.round(object5.position.z / this.translationSnap) * this.translationSnap;
           }
-          if (object4.parent) {
-            object4.position.sub(_tempVector.setFromMatrixPosition(object4.parent.matrixWorld));
+          if (object5.parent) {
+            object5.position.sub(_tempVector.setFromMatrixPosition(object5.parent.matrixWorld));
           }
         }
       }
-      object4.position.x = Math.max(this.minX, Math.min(this.maxX, object4.position.x));
-      object4.position.y = Math.max(this.minY, Math.min(this.maxY, object4.position.y));
-      object4.position.z = Math.max(this.minZ, Math.min(this.maxZ, object4.position.z));
+      object5.position.x = Math.max(this.minX, Math.min(this.maxX, object5.position.x));
+      object5.position.y = Math.max(this.minY, Math.min(this.maxY, object5.position.y));
+      object5.position.z = Math.max(this.minZ, Math.min(this.maxZ, object5.position.z));
     } else if (mode === "scale") {
       if (axis.search("XYZ") !== -1) {
         let d2 = this.pointEnd.length() / this.pointStart.length();
@@ -89153,16 +89153,16 @@ var TransformControls = class extends Controls {
           _tempVector2.z = 1;
         }
       }
-      object4.scale.copy(this._scaleStart).multiply(_tempVector2);
+      object5.scale.copy(this._scaleStart).multiply(_tempVector2);
       if (this.scaleSnap) {
         if (axis.search("X") !== -1) {
-          object4.scale.x = Math.round(object4.scale.x / this.scaleSnap) * this.scaleSnap || this.scaleSnap;
+          object5.scale.x = Math.round(object5.scale.x / this.scaleSnap) * this.scaleSnap || this.scaleSnap;
         }
         if (axis.search("Y") !== -1) {
-          object4.scale.y = Math.round(object4.scale.y / this.scaleSnap) * this.scaleSnap || this.scaleSnap;
+          object5.scale.y = Math.round(object5.scale.y / this.scaleSnap) * this.scaleSnap || this.scaleSnap;
         }
         if (axis.search("Z") !== -1) {
-          object4.scale.z = Math.round(object4.scale.z / this.scaleSnap) * this.scaleSnap || this.scaleSnap;
+          object5.scale.z = Math.round(object5.scale.z / this.scaleSnap) * this.scaleSnap || this.scaleSnap;
         }
       }
     } else if (mode === "rotate") {
@@ -89194,12 +89194,12 @@ var TransformControls = class extends Controls {
       }
       if (this.rotationSnap) this.rotationAngle = Math.round(this.rotationAngle / this.rotationSnap) * this.rotationSnap;
       if (space === "local" && axis !== "E" && axis !== "XYZE") {
-        object4.quaternion.copy(this._quaternionStart);
-        object4.quaternion.multiply(_tempQuaternion.setFromAxisAngle(this.rotationAxis, this.rotationAngle)).normalize();
+        object5.quaternion.copy(this._quaternionStart);
+        object5.quaternion.multiply(_tempQuaternion.setFromAxisAngle(this.rotationAxis, this.rotationAngle)).normalize();
       } else {
         this.rotationAxis.applyQuaternion(this._parentQuaternionInv);
-        object4.quaternion.copy(_tempQuaternion.setFromAxisAngle(this.rotationAxis, this.rotationAngle));
-        object4.quaternion.multiply(this._quaternionStart).normalize();
+        object5.quaternion.copy(_tempQuaternion.setFromAxisAngle(this.rotationAxis, this.rotationAngle));
+        object5.quaternion.multiply(this._quaternionStart).normalize();
       }
     }
     this.dispatchEvent(_changeEvent2);
@@ -89224,8 +89224,8 @@ var TransformControls = class extends Controls {
    * @param {Object3D} object -  The 3D object that should be transformed.
    * @return {TransformControls} A reference to this controls.
    */
-  attach(object4) {
-    this.object = object4;
+  attach(object5) {
+    this.object = object5;
     this._root.visible = true;
     return this;
   }
@@ -89391,8 +89391,8 @@ function onPointerUp2(event) {
   this.domElement.removeEventListener("pointermove", this._onPointerMove);
   this.pointerUp(this._getPointer(event));
 }
-function intersectObjectWithRay(object4, raycaster, includeInvisible) {
-  const allIntersections = raycaster.intersectObject(object4, true);
+function intersectObjectWithRay(object5, raycaster, includeInvisible) {
+  const allIntersections = raycaster.intersectObject(object5, true);
   for (let i2 = 0; i2 < allIntersections.length; i2++) {
     if (allIntersections[i2].object.visible || includeInvisible) {
       return allIntersections[i2];
@@ -89711,31 +89711,31 @@ var TransformControlsGizmo = class extends Object3D {
       const gizmo = new Object3D();
       for (const name in gizmoMap) {
         for (let i2 = gizmoMap[name].length; i2--; ) {
-          const object4 = gizmoMap[name][i2][0].clone();
+          const object5 = gizmoMap[name][i2][0].clone();
           const position = gizmoMap[name][i2][1];
           const rotation = gizmoMap[name][i2][2];
           const scale2 = gizmoMap[name][i2][3];
           const tag = gizmoMap[name][i2][4];
-          object4.name = name;
-          object4.tag = tag;
+          object5.name = name;
+          object5.tag = tag;
           if (position) {
-            object4.position.set(position[0], position[1], position[2]);
+            object5.position.set(position[0], position[1], position[2]);
           }
           if (rotation) {
-            object4.rotation.set(rotation[0], rotation[1], rotation[2]);
+            object5.rotation.set(rotation[0], rotation[1], rotation[2]);
           }
           if (scale2) {
-            object4.scale.set(scale2[0], scale2[1], scale2[2]);
+            object5.scale.set(scale2[0], scale2[1], scale2[2]);
           }
-          object4.updateMatrix();
-          const tempGeometry = object4.geometry.clone();
-          tempGeometry.applyMatrix4(object4.matrix);
-          object4.geometry = tempGeometry;
-          object4.renderOrder = Infinity;
-          object4.position.set(0, 0, 0);
-          object4.rotation.set(0, 0, 0);
-          object4.scale.set(1, 1, 1);
-          gizmo.add(object4);
+          object5.updateMatrix();
+          const tempGeometry = object5.geometry.clone();
+          tempGeometry.applyMatrix4(object5.matrix);
+          object5.geometry = tempGeometry;
+          object5.renderOrder = Infinity;
+          object5.position.set(0, 0, 0);
+          object5.rotation.set(0, 0, 0);
+          object5.scale.set(1, 1, 1);
+          gizmo.add(object5);
         }
       }
       return gizmo;
@@ -89759,7 +89759,7 @@ var TransformControlsGizmo = class extends Object3D {
   // updateMatrixWorld will update transformations and appearance of individual handles
   updateMatrixWorld(force) {
     const space = this.mode === "scale" ? "local" : this.space;
-    const quaternion = space === "local" ? this.worldQuaternion : _identityQuaternion;
+    const quaternion2 = space === "local" ? this.worldQuaternion : _identityQuaternion;
     this.gizmo["translate"].visible = this.mode === "translate";
     this.gizmo["rotate"].visible = this.mode === "rotate";
     this.gizmo["scale"].visible = this.mode === "scale";
@@ -89788,22 +89788,22 @@ var TransformControlsGizmo = class extends Object3D {
           handle.visible = !!this.axis;
           if (this.axis === "X") {
             _tempQuaternion.setFromEuler(_tempEuler.set(0, 0, 0));
-            handle.quaternion.copy(quaternion).multiply(_tempQuaternion);
-            if (Math.abs(_alignVector.copy(_unitX).applyQuaternion(quaternion).dot(this.eye)) > 0.9) {
+            handle.quaternion.copy(quaternion2).multiply(_tempQuaternion);
+            if (Math.abs(_alignVector.copy(_unitX).applyQuaternion(quaternion2).dot(this.eye)) > 0.9) {
               handle.visible = false;
             }
           }
           if (this.axis === "Y") {
             _tempQuaternion.setFromEuler(_tempEuler.set(0, 0, Math.PI / 2));
-            handle.quaternion.copy(quaternion).multiply(_tempQuaternion);
-            if (Math.abs(_alignVector.copy(_unitY).applyQuaternion(quaternion).dot(this.eye)) > 0.9) {
+            handle.quaternion.copy(quaternion2).multiply(_tempQuaternion);
+            if (Math.abs(_alignVector.copy(_unitY).applyQuaternion(quaternion2).dot(this.eye)) > 0.9) {
               handle.visible = false;
             }
           }
           if (this.axis === "Z") {
             _tempQuaternion.setFromEuler(_tempEuler.set(0, Math.PI / 2, 0));
-            handle.quaternion.copy(quaternion).multiply(_tempQuaternion);
-            if (Math.abs(_alignVector.copy(_unitZ).applyQuaternion(quaternion).dot(this.eye)) > 0.9) {
+            handle.quaternion.copy(quaternion2).multiply(_tempQuaternion);
+            if (Math.abs(_alignVector.copy(_unitZ).applyQuaternion(quaternion2).dot(this.eye)) > 0.9) {
               handle.visible = false;
             }
           }
@@ -89831,7 +89831,7 @@ var TransformControlsGizmo = class extends Object3D {
           handle.scale.copy(_tempVector);
           handle.visible = this.dragging;
         } else {
-          handle.quaternion.copy(quaternion);
+          handle.quaternion.copy(quaternion2);
           if (this.dragging) {
             handle.position.copy(this.worldPositionStart);
           } else {
@@ -89843,49 +89843,49 @@ var TransformControlsGizmo = class extends Object3D {
         }
         continue;
       }
-      handle.quaternion.copy(quaternion);
+      handle.quaternion.copy(quaternion2);
       if (this.mode === "translate" || this.mode === "scale") {
         const AXIS_HIDE_THRESHOLD = 0.99;
         const PLANE_HIDE_THRESHOLD = 0.2;
         if (handle.name === "X") {
-          if (Math.abs(_alignVector.copy(_unitX).applyQuaternion(quaternion).dot(this.eye)) > AXIS_HIDE_THRESHOLD) {
+          if (Math.abs(_alignVector.copy(_unitX).applyQuaternion(quaternion2).dot(this.eye)) > AXIS_HIDE_THRESHOLD) {
             handle.scale.set(1e-10, 1e-10, 1e-10);
             handle.visible = false;
           }
         }
         if (handle.name === "Y") {
-          if (Math.abs(_alignVector.copy(_unitY).applyQuaternion(quaternion).dot(this.eye)) > AXIS_HIDE_THRESHOLD) {
+          if (Math.abs(_alignVector.copy(_unitY).applyQuaternion(quaternion2).dot(this.eye)) > AXIS_HIDE_THRESHOLD) {
             handle.scale.set(1e-10, 1e-10, 1e-10);
             handle.visible = false;
           }
         }
         if (handle.name === "Z") {
-          if (Math.abs(_alignVector.copy(_unitZ).applyQuaternion(quaternion).dot(this.eye)) > AXIS_HIDE_THRESHOLD) {
+          if (Math.abs(_alignVector.copy(_unitZ).applyQuaternion(quaternion2).dot(this.eye)) > AXIS_HIDE_THRESHOLD) {
             handle.scale.set(1e-10, 1e-10, 1e-10);
             handle.visible = false;
           }
         }
         if (handle.name === "XY") {
-          if (Math.abs(_alignVector.copy(_unitZ).applyQuaternion(quaternion).dot(this.eye)) < PLANE_HIDE_THRESHOLD) {
+          if (Math.abs(_alignVector.copy(_unitZ).applyQuaternion(quaternion2).dot(this.eye)) < PLANE_HIDE_THRESHOLD) {
             handle.scale.set(1e-10, 1e-10, 1e-10);
             handle.visible = false;
           }
         }
         if (handle.name === "YZ") {
-          if (Math.abs(_alignVector.copy(_unitX).applyQuaternion(quaternion).dot(this.eye)) < PLANE_HIDE_THRESHOLD) {
+          if (Math.abs(_alignVector.copy(_unitX).applyQuaternion(quaternion2).dot(this.eye)) < PLANE_HIDE_THRESHOLD) {
             handle.scale.set(1e-10, 1e-10, 1e-10);
             handle.visible = false;
           }
         }
         if (handle.name === "XZ") {
-          if (Math.abs(_alignVector.copy(_unitY).applyQuaternion(quaternion).dot(this.eye)) < PLANE_HIDE_THRESHOLD) {
+          if (Math.abs(_alignVector.copy(_unitY).applyQuaternion(quaternion2).dot(this.eye)) < PLANE_HIDE_THRESHOLD) {
             handle.scale.set(1e-10, 1e-10, 1e-10);
             handle.visible = false;
           }
         }
       } else if (this.mode === "rotate") {
-        _tempQuaternion2.copy(quaternion);
-        _alignVector.copy(this.eye).applyQuaternion(_tempQuaternion.copy(quaternion).invert());
+        _tempQuaternion2.copy(quaternion2);
+        _alignVector.copy(this.eye).applyQuaternion(_tempQuaternion.copy(quaternion2).invert());
         if (handle.name.search("E") !== -1) {
           handle.quaternion.setFromRotationMatrix(_lookAtMatrix.lookAt(this.eye, _zeroVector, _unitY));
         }
@@ -90594,16 +90594,16 @@ var GodraysNode = class extends TempNode {
         const shadowPositionAbs = lightToPos.abs().toConst();
         const viewZ = shadowPositionAbs.x.max(shadowPositionAbs.y).max(shadowPositionAbs.z).negate();
         const depth3 = viewZToPerspectiveDepth2(viewZ, this._shadowCameraNear, this._shadowCameraFar);
-        const result = cubeTexture2(this._light.shadow.map.depthTexture, lightToPos).compare(depth3).r;
-        return vec22(result.oneMinus().add(5e-3), viewZ.negate());
+        const result2 = cubeTexture2(this._light.shadow.map.depthTexture, lightToPos).compare(depth3).r;
+        return vec22(result2.oneMinus().add(5e-3), viewZ.negate());
       } else if (this._light.isDirectionalLight) {
         const shadowCoord = computeShadowCoord(worldPos).toConst();
         const frustumTest = shadowCoord.x.greaterThanEqual(0).and(shadowCoord.x.lessThanEqual(1)).and(shadowCoord.y.greaterThanEqual(0)).and(shadowCoord.y.lessThanEqual(1)).and(shadowCoord.z.greaterThanEqual(0)).and(shadowCoord.z.lessThanEqual(1));
         const output3 = vec22(1, 0);
         If2(frustumTest.equal(true), () => {
-          const result = texture2(this._light.shadow.map.depthTexture, shadowCoord.xy).compare(shadowCoord.z).r;
+          const result2 = texture2(this._light.shadow.map.depthTexture, shadowCoord.xy).compare(shadowCoord.z).r;
           const viewZ = perspectiveDepthToViewZ2(shadowCoord.z, this._shadowCameraNear, this._shadowCameraFar);
-          output3.assign(vec22(result.oneMinus(), viewZ.negate()));
+          output3.assign(vec22(result2.oneMinus(), viewZ.negate()));
         });
         return output3;
       } else {
@@ -91038,10 +91038,10 @@ var DepthOfFieldNode = class extends TempNode {
       const beauty = this.textureNode.sample(uvNode);
       const blendNear = min2(near3.a, 0.5).mul(2);
       const blendFar = min2(far.a, 0.5).mul(2);
-      const result = vec42(0, 0, 0, 1).toVar();
-      result.rgb = mix2(beauty.rgb, far.rgb, blendFar);
-      result.rgb = mix2(result.rgb, near3.rgb, blendNear);
-      return result;
+      const result2 = vec42(0, 0, 0, 1).toVar();
+      result2.rgb = mix2(beauty.rgb, far.rgb, blendFar);
+      result2.rgb = mix2(result2.rgb, near3.rgb, blendNear);
+      return result2;
     });
     this._compositeMaterial.fragmentNode = composite2().context(builder.getSharedContext());
     this._compositeMaterial.needsUpdate = true;
@@ -91719,7 +91719,7 @@ function fireEntityIndexHooks(world) {
   hooks.clear();
   for (const fn of fired) fn();
 }
-function spawnRenderable(world, object4, x3, y4, z4) {
+function spawnRenderable(world, object5, x3, y4, z4) {
   fireEntityIndexHooks(world);
   const eid = Ne(world);
   if (eid < 0 || eid >= MAX_ENTITIES) {
@@ -91739,7 +91739,7 @@ function spawnRenderable(world, object4, x3, y4, z4) {
   Scale.x[eid] = 1;
   Scale.y[eid] = 1;
   Scale.z[eid] = 1;
-  renderables[eid] = object4;
+  renderables[eid] = object5;
   return eid;
 }
 function despawnRenderable(world, eid) {
@@ -91750,11 +91750,11 @@ function despawnRenderable(world, eid) {
 function renderSyncSystem(world, skip) {
   for (const eid of $2(world, [Position, Rotation, Scale])) {
     if (skip?.has(eid)) continue;
-    const object4 = renderables[eid];
-    if (object4 === void 0) continue;
-    object4.position.set(Position.x[eid], Position.y[eid], Position.z[eid]);
-    object4.quaternion.set(Rotation.x[eid], Rotation.y[eid], Rotation.z[eid], Rotation.w[eid]);
-    object4.scale.set(Scale.x[eid], Scale.y[eid], Scale.z[eid]);
+    const object5 = renderables[eid];
+    if (object5 === void 0) continue;
+    object5.position.set(Position.x[eid], Position.y[eid], Position.z[eid]);
+    object5.quaternion.set(Rotation.x[eid], Rotation.y[eid], Rotation.z[eid], Rotation.w[eid]);
+    object5.scale.set(Scale.x[eid], Scale.y[eid], Scale.z[eid]);
   }
 }
 function syncPhysicsBodyTransform(eid, bodyId, ops2, scratch = defaultPhysicsTransformScratch) {
@@ -91802,11 +91802,11 @@ function createTransformStorage(_world) {
 function finiteNumber(value) {
   return typeof value === "number" && Number.isFinite(value);
 }
-function distanceOf(record5, near3) {
+function distanceOf(record6, near3) {
   if (near3 === void 0) return 0;
-  const dx = record5.x - near3[0];
-  const dy = record5.y - near3[1];
-  const dz = record5.z - near3[2];
+  const dx = record6.x - near3[0];
+  const dy = record6.y - near3[1];
+  const dz = record6.z - near3[2];
   return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 function entityVersion(entities) {
@@ -91818,38 +91818,38 @@ function transformVersion(transforms) {
 function cellCoord(value, cellSize) {
   return Math.floor(value / cellSize);
 }
-function cellKey(cx, cy, cz) {
-  return `${cx},${cy},${cz}`;
-}
 function compareDistanceThenEntity(a2, b3) {
   return a2.distance - b3.distance;
 }
 function compareRecordOrder(a2, b3) {
   return a2.order - b3.order;
 }
-function tagsMatch(world, record5, tag) {
-  return tag === void 0 || world.tags.get(record5.eid)?.has(tag) === true;
+function tagsMatch(world, record6, tag) {
+  return tag === void 0 || world.tags.get(record6.eid)?.has(tag) === true;
 }
 function materialize(world, records, options) {
-  const result = [];
+  const result2 = [];
   const maxDistance = finiteNumber(options.radius) ? options.radius : void 0;
-  for (const record5 of records) {
-    if (record5.entity === options.excludeEntity) continue;
-    if (!tagsMatch(world, record5, options.tag)) continue;
-    const distance4 = distanceOf(record5, options.near);
+  for (const record6 of records) {
+    if (record6.entity === options.excludeEntity) continue;
+    if (!tagsMatch(world, record6, options.tag)) continue;
+    const distance4 = distanceOf(record6, options.near);
     if (maxDistance !== void 0 && distance4 > maxDistance) continue;
-    result.push({
-      entity: record5.entity,
-      eid: record5.eid,
-      position: [record5.x, record5.y, record5.z],
+    result2.push({
+      entity: record6.entity,
+      eid: record6.eid,
+      position: [record6.x, record6.y, record6.z],
       distance: distance4
     });
   }
-  if (options.sortBy === "distance") result.sort(compareDistanceThenEntity);
-  return result;
+  if (options.sortBy === "distance") result2.sort(compareDistanceThenEntity);
+  return result2;
 }
 var UniformGridSpatialIndex = class {
   cellSize;
+  // Nested numeric maps avoid allocating and hashing a `${x},${y},${z}` string
+  // for every entity and every candidate cell while remaining collision-free
+  // across the full safe integer coordinate range.
   cells = /* @__PURE__ */ new Map();
   records = [];
   indexedEntityVersion = -1;
@@ -91863,6 +91863,26 @@ var UniformGridSpatialIndex = class {
   }
   invalidate() {
     this.invalidationVersion++;
+  }
+  cell(cx, cy, cz, create) {
+    let ys = this.cells.get(cx);
+    if (ys === void 0) {
+      if (!create) return void 0;
+      ys = /* @__PURE__ */ new Map();
+      this.cells.set(cx, ys);
+    }
+    let zs = ys.get(cy);
+    if (zs === void 0) {
+      if (!create) return void 0;
+      zs = /* @__PURE__ */ new Map();
+      ys.set(cy, zs);
+    }
+    let bucket = zs.get(cz);
+    if (bucket === void 0 && create) {
+      bucket = [];
+      zs.set(cz, bucket);
+    }
+    return bucket;
   }
   ensureFresh(world) {
     const nextEntityVersion = entityVersion(world.entities);
@@ -91881,7 +91901,7 @@ var UniformGridSpatialIndex = class {
       const entity = ids[order];
       const entry = world.entities.resolve(entity);
       if (entry === void 0) continue;
-      const record5 = {
+      const record6 = {
         entity,
         eid: entry.eid,
         order,
@@ -91889,20 +91909,19 @@ var UniformGridSpatialIndex = class {
         y: Position.y[entry.eid],
         z: Position.z[entry.eid]
       };
-      this.records.push(record5);
-      const key = cellKey(
-        cellCoord(record5.x, this.cellSize),
-        cellCoord(record5.y, this.cellSize),
-        cellCoord(record5.z, this.cellSize)
-      );
-      let bucket = this.cells.get(key);
-      if (bucket === void 0) {
-        bucket = [];
-        this.cells.set(key, bucket);
-      }
-      bucket.push(record5);
+      this.records.push(record6);
+      this.cell(
+        cellCoord(record6.x, this.cellSize),
+        cellCoord(record6.y, this.cellSize),
+        cellCoord(record6.z, this.cellSize),
+        true
+      ).push(record6);
     }
-    for (const bucket of this.cells.values()) bucket.sort(compareRecordOrder);
+    for (const ys of this.cells.values()) {
+      for (const zs of ys.values()) {
+        for (const bucket of zs.values()) bucket.sort(compareRecordOrder);
+      }
+    }
     this.indexedEntityVersion = entityVersion(world.entities);
     this.indexedTransformVersion = transformVersion(world.transforms);
     this.indexedInvalidationVersion = this.invalidationVersion;
@@ -91937,7 +91956,7 @@ var UniformGridSpatialIndex = class {
       for (let cy = minY; cy <= maxY; cy++) {
         for (let cz = minZ; cz <= maxZ; cz++) {
           candidateCells++;
-          const bucket = this.cells.get(cellKey(cx, cy, cz));
+          const bucket = this.cell(cx, cy, cz, false);
           if (bucket !== void 0) candidates.push(...bucket);
         }
       }
@@ -91995,7 +92014,20 @@ function querySpatialEntitiesBruteForce(world, options = {}) {
 var DEFAULT_MAX_SOURCE_BYTES = 24 * 1024 * 1024;
 
 // src/engine.ts
+var NO_ENGINE_CAPABILITIES = Object.freeze({
+  ecsSpatialQueryBatch: false
+});
+var NATIVE_ENGINE_CAPABILITIES = Object.freeze({
+  ecsSpatialQueryBatch: true
+});
 var ops = typeof Deno !== "undefined" && Deno?.core?.ops ? Deno.core.ops : void 0;
+var engineCapabilities = typeof Deno !== "undefined" && Deno?.core?.ops ? NATIVE_ENGINE_CAPABILITIES : NO_ENGINE_CAPABILITIES;
+function installOps(host, capabilities = NO_ENGINE_CAPABILITIES) {
+  ops = host;
+  engineCapabilities = Object.freeze({
+    ecsSpatialQueryBatch: capabilities.ecsSpatialQueryBatch === true
+  });
+}
 var EntityTable = class {
   map = /* @__PURE__ */ new Map();
   /** Reverse index `bodyId -> ent_ id`, maintained alongside `map` so a physics
@@ -92040,40 +92072,40 @@ var EntityTable = class {
   }
   create(entry) {
     this.fireMutationHooks();
-    const id4 = `ent_${this.seq++}`;
-    this.map.set(id4, { generation: 0, ...entry });
-    if (entry.bodyId !== void 0) this.byBody.set(entry.bodyId, id4);
-    this.byEid.set(entry.eid, id4);
+    const id7 = `ent_${this.seq++}`;
+    this.map.set(id7, { generation: 0, ...entry });
+    if (entry.bodyId !== void 0) this.byBody.set(entry.bodyId, id7);
+    this.byEid.set(entry.eid, id7);
     this.tableVersion++;
-    return id4;
+    return id7;
   }
-  resolve(id4) {
-    return this.map.get(id4);
+  resolve(id7) {
+    return this.map.get(id7);
   }
   /** Re-attach a resource binding to a live entry after a snapshot restore. The
    *  identity slice (EntityEntrySnapshot) deliberately omits mesh/resource, so a
    *  self-sufficient world snapshot (M2 v3) rebinds the resource metadata here
    *  rather than widening the identity contract. No-op if the id is not live. */
-  bindResource(id4, resource) {
-    const entry = this.map.get(id4);
+  bindResource(id7, resource) {
+    const entry = this.map.get(id7);
     if (entry !== void 0) entry.resource = resource;
   }
   /** Re-attach the origin (create command) to a live entry after a snapshot restore —
    *  the companion to bindResource for the structural rebuild binding. No-op if not live. */
-  bindOrigin(id4, origin) {
-    const entry = this.map.get(id4);
+  bindOrigin(id7, origin) {
+    const entry = this.map.get(id7);
     if (entry !== void 0) entry.origin = origin;
   }
   /** Re-point a live entry's physics `bodyId`, keeping the `byBody` reverse index consistent.
    *  Used when a collider is REBUILT in place (e.g. terrain.deform reshapes a heightfield: the
    *  old body is removed and a fresh one added, so the entity must follow the new id). No-op if
    *  the id is not live. Passing `undefined` detaches the body (drops the reverse entry). */
-  rebindBody(id4, bodyId) {
-    const entry = this.map.get(id4);
+  rebindBody(id7, bodyId) {
+    const entry = this.map.get(id7);
     if (entry === void 0) return;
     if (entry.bodyId !== void 0) this.byBody.delete(entry.bodyId);
     entry.bodyId = bodyId;
-    if (bodyId !== void 0) this.byBody.set(bodyId, id4);
+    if (bodyId !== void 0) this.byBody.set(bodyId, id7);
     this.tableVersion++;
   }
   /** Merge a material update into a live entry's first-class material state. three.setMaterial
@@ -92081,8 +92113,8 @@ var EntityTable = class {
    *  entities), and a snapshot restore rebinds it. Only defined fields overwrite — an undefined
    *  field leaves the prior value, so a partial edit (just roughness, say) is non-destructive.
    *  No-op if the id is not live. */
-  bindMaterial(id4, material) {
-    const entry = this.map.get(id4);
+  bindMaterial(id7, material) {
+    const entry = this.map.get(id7);
     if (entry === void 0) return;
     const merged = { ...entry.material };
     if (material.color !== void 0) merged.color = material.color;
@@ -92097,15 +92129,15 @@ var EntityTable = class {
    *  snapshot restore rebinds it. A BehaviorSpec is a whole discriminated-union value, so it is
    *  REPLACED wholesale (unlike material's per-field merge) — setting patrol over idle is a swap,
    *  not a merge. Callers pass a canonical spec. No-op if the id is not live. */
-  bindBehavior(id4, behavior) {
-    const entry = this.map.get(id4);
+  bindBehavior(id7, behavior) {
+    const entry = this.map.get(id7);
     if (entry !== void 0) entry.behavior = behavior;
   }
   /** Replace a live entry's standalone-owned physics body ids (M18) — used by the writing
    *  skill (append via record + chainRuntimeDispose) and by snapshot restore (wholesale
    *  rebind before re-arming the dispose). No-op if the id is not live. */
-  bindRuntimeBodies(id4, bodyIds) {
-    const entry = this.map.get(id4);
+  bindRuntimeBodies(id7, bodyIds) {
+    const entry = this.map.get(id7);
     if (entry !== void 0) entry.runtimeBodyIds = [...bodyIds];
   }
   /** Chain a runtime-only cleanup onto a live entry's `runtimeDispose`. The chained closure is
@@ -92113,8 +92145,8 @@ var EntityTable = class {
    *  path that already disposed makes the later teardown call a no-op — never a double
    *  op_physics_remove_body. Failures from both links aggregate so neither masks the other.
    *  No-op if the id is not live. */
-  chainRuntimeDispose(id4, label4, cleanup) {
-    const entry = this.map.get(id4);
+  chainRuntimeDispose(id7, label4, cleanup) {
+    const entry = this.map.get(id7);
     if (entry === void 0) return;
     const prior = entry.runtimeDispose;
     let finished = false;
@@ -92189,8 +92221,8 @@ var EntityTable = class {
   idsCreatedSince(seq) {
     const out = [];
     for (let s2 = seq; s2 < this.seq; s2++) {
-      const id4 = `ent_${s2}`;
-      if (this.map.has(id4)) out.push(id4);
+      const id7 = `ent_${s2}`;
+      if (this.map.has(id7)) out.push(id7);
     }
     return out;
   }
@@ -92215,15 +92247,15 @@ var EntityTable = class {
     this.seq = seq;
     this.tableVersion = version2;
   }
-  destroy(id4) {
+  destroy(id7) {
     this.fireMutationHooks();
-    const entry = this.map.get(id4);
+    const entry = this.map.get(id7);
     if (entry !== void 0) {
-      this.map.delete(id4);
+      this.map.delete(id7);
       if (entry.bodyId !== void 0) this.byBody.delete(entry.bodyId);
       this.byEid.delete(entry.eid);
-      if (entry.parent !== void 0) this.byParent.get(entry.parent)?.delete(id4);
-      this.byParent.delete(id4);
+      if (entry.parent !== void 0) this.byParent.get(entry.parent)?.delete(id7);
+      this.byParent.delete(id7);
       this.tableVersion++;
     }
     return entry;
@@ -92235,8 +92267,8 @@ var EntityTable = class {
    *  emitted in creation order so a restore preserves `ids()` ordering. */
   snapshot() {
     const entries = [];
-    for (const [id4, entry] of this.map) {
-      entries.push({ id: id4, eid: entry.eid, generation: entry.generation, bodyId: entry.bodyId });
+    for (const [id7, entry] of this.map) {
+      entries.push({ id: id7, eid: entry.eid, generation: entry.generation, bodyId: entry.bodyId });
     }
     return { seq: this.seq, version: this.tableVersion, entries };
   }
@@ -92807,9 +92839,9 @@ function $constructor(name, initializer3, params) {
     inst._zod.traits.add(name);
     initializer3(inst, def);
     const proto2 = _3.prototype;
-    const keys = Object.keys(proto2);
-    for (let i2 = 0; i2 < keys.length; i2++) {
-      const k3 = keys[i2];
+    const keys2 = Object.keys(proto2);
+    for (let i2 = 0; i2 < keys2.length; i2++) {
+      const k3 = keys2[i2];
       if (!(k3 in inst)) {
         inst[k3] = proto2[k3].bind(inst);
       }
@@ -93031,12 +93063,12 @@ function getElementAtPath(obj, path2) {
   return path2.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
-  const keys = Object.keys(promisesObj);
-  const promises = keys.map((key) => promisesObj[key]);
+  const keys2 = Object.keys(promisesObj);
+  const promises = keys2.map((key) => promisesObj[key]);
   return Promise.all(promises).then((results) => {
     const resolvedObj = {};
-    for (let i2 = 0; i2 < keys.length; i2++) {
-      resolvedObj[keys[i2]] = results[i2];
+    for (let i2 = 0; i2 < keys2.length; i2++) {
+      resolvedObj[keys2[i2]] = results[i2];
     }
     return resolvedObj;
   });
@@ -93621,7 +93653,7 @@ function formatError(error51, mapper = (issue2) => issue2.message) {
   return fieldErrors;
 }
 function treeifyError(error51, mapper = (issue2) => issue2.message) {
-  const result = { errors: [] };
+  const result2 = { errors: [] };
   const processError = (error52, path2 = []) => {
     var _a3, _b;
     for (const issue2 of error52.issues) {
@@ -93634,10 +93666,10 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
       } else {
         const fullpath = [...path2, ...issue2.path];
         if (fullpath.length === 0) {
-          result.errors.push(mapper(issue2));
+          result2.errors.push(mapper(issue2));
           continue;
         }
-        let curr = result;
+        let curr = result2;
         let i2 = 0;
         while (i2 < fullpath.length) {
           const el = fullpath[i2];
@@ -93660,7 +93692,7 @@ function treeifyError(error51, mapper = (issue2) => issue2.message) {
     }
   };
   processError(error51);
-  return result;
+  return result2;
 }
 function toDotPath(_path) {
   const segs = [];
@@ -93692,52 +93724,52 @@ function prettifyError(error51) {
 }
 var _parse = (_Err) => (schema, value, _ctx, _params) => {
   const ctx = _ctx ? { ..._ctx, async: false } : { async: false };
-  const result = schema._zod.run({ value, issues: [] }, ctx);
-  if (result instanceof Promise) {
+  const result2 = schema._zod.run({ value, issues: [] }, ctx);
+  if (result2 instanceof Promise) {
     throw new $ZodAsyncError();
   }
-  if (result.issues.length) {
-    const e2 = new (_params?.Err ?? _Err)(result.issues.map((iss) => finalizeIssue(iss, ctx, config())));
+  if (result2.issues.length) {
+    const e2 = new (_params?.Err ?? _Err)(result2.issues.map((iss) => finalizeIssue(iss, ctx, config())));
     captureStackTrace(e2, _params?.callee);
     throw e2;
   }
-  return result.value;
+  return result2.value;
 };
 var parse2 = /* @__PURE__ */ _parse($ZodRealError);
 var _parseAsync = (_Err) => async (schema, value, _ctx, params) => {
   const ctx = _ctx ? { ..._ctx, async: true } : { async: true };
-  let result = schema._zod.run({ value, issues: [] }, ctx);
-  if (result instanceof Promise)
-    result = await result;
-  if (result.issues.length) {
-    const e2 = new (params?.Err ?? _Err)(result.issues.map((iss) => finalizeIssue(iss, ctx, config())));
+  let result2 = schema._zod.run({ value, issues: [] }, ctx);
+  if (result2 instanceof Promise)
+    result2 = await result2;
+  if (result2.issues.length) {
+    const e2 = new (params?.Err ?? _Err)(result2.issues.map((iss) => finalizeIssue(iss, ctx, config())));
     captureStackTrace(e2, params?.callee);
     throw e2;
   }
-  return result.value;
+  return result2.value;
 };
 var parseAsync = /* @__PURE__ */ _parseAsync($ZodRealError);
 var _safeParse = (_Err) => (schema, value, _ctx) => {
   const ctx = _ctx ? { ..._ctx, async: false } : { async: false };
-  const result = schema._zod.run({ value, issues: [] }, ctx);
-  if (result instanceof Promise) {
+  const result2 = schema._zod.run({ value, issues: [] }, ctx);
+  if (result2 instanceof Promise) {
     throw new $ZodAsyncError();
   }
-  return result.issues.length ? {
+  return result2.issues.length ? {
     success: false,
-    error: new (_Err ?? $ZodError)(result.issues.map((iss) => finalizeIssue(iss, ctx, config())))
-  } : { success: true, data: result.value };
+    error: new (_Err ?? $ZodError)(result2.issues.map((iss) => finalizeIssue(iss, ctx, config())))
+  } : { success: true, data: result2.value };
 };
 var safeParse = /* @__PURE__ */ _safeParse($ZodRealError);
 var _safeParseAsync = (_Err) => async (schema, value, _ctx) => {
   const ctx = _ctx ? { ..._ctx, async: true } : { async: true };
-  let result = schema._zod.run({ value, issues: [] }, ctx);
-  if (result instanceof Promise)
-    result = await result;
-  return result.issues.length ? {
+  let result2 = schema._zod.run({ value, issues: [] }, ctx);
+  if (result2 instanceof Promise)
+    result2 = await result2;
+  return result2.issues.length ? {
     success: false,
-    error: new _Err(result.issues.map((iss) => finalizeIssue(iss, ctx, config())))
-  } : { success: true, data: result.value };
+    error: new _Err(result2.issues.map((iss) => finalizeIssue(iss, ctx, config())))
+  } : { success: true, data: result2.value };
 };
 var safeParseAsync = /* @__PURE__ */ _safeParseAsync($ZodRealError);
 var _encode = (_Err) => (schema, value, _ctx) => {
@@ -94436,22 +94468,22 @@ var $ZodCheckEndsWith = /* @__PURE__ */ $constructor("$ZodCheckEndsWith", (inst,
     });
   };
 });
-function handleCheckPropertyResult(result, payload, property3) {
-  if (result.issues.length) {
-    payload.issues.push(...prefixIssues(property3, result.issues));
+function handleCheckPropertyResult(result2, payload, property3) {
+  if (result2.issues.length) {
+    payload.issues.push(...prefixIssues(property3, result2.issues));
   }
 }
 var $ZodCheckProperty = /* @__PURE__ */ $constructor("$ZodCheckProperty", (inst, def) => {
   $ZodCheck.init(inst, def);
   inst._zod.check = (payload) => {
-    const result = def.schema._zod.run({
+    const result2 = def.schema._zod.run({
       value: payload.value[def.property],
       issues: []
     }, {});
-    if (result instanceof Promise) {
-      return result.then((result2) => handleCheckPropertyResult(result2, payload, def.property));
+    if (result2 instanceof Promise) {
+      return result2.then((result22) => handleCheckPropertyResult(result22, payload, def.property));
     }
-    handleCheckPropertyResult(result, payload, def.property);
+    handleCheckPropertyResult(result2, payload, def.property);
     return;
   };
 });
@@ -94607,13 +94639,13 @@ var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
         }
         return handleCanaryResult(canary, payload, ctx);
       }
-      const result = inst._zod.parse(payload, ctx);
-      if (result instanceof Promise) {
+      const result2 = inst._zod.parse(payload, ctx);
+      if (result2 instanceof Promise) {
         if (ctx.async === false)
           throw new $ZodAsyncError();
-        return result.then((result2) => runChecks(result2, checks, ctx));
+        return result2.then((result22) => runChecks(result22, checks, ctx));
       }
-      return runChecks(result, checks, ctx);
+      return runChecks(result2, checks, ctx);
     };
   }
   defineLazy(inst, "~standard", () => ({
@@ -95135,11 +95167,11 @@ var $ZodDate = /* @__PURE__ */ $constructor("$ZodDate", (inst, def) => {
     return payload;
   };
 });
-function handleArrayResult(result, final, index) {
-  if (result.issues.length) {
-    final.issues.push(...prefixIssues(index, result.issues));
+function handleArrayResult(result2, final, index) {
+  if (result2.issues.length) {
+    final.issues.push(...prefixIssues(index, result2.issues));
   }
-  final.value[index] = result.value;
+  final.value[index] = result2.value;
 }
 var $ZodArray = /* @__PURE__ */ $constructor("$ZodArray", (inst, def) => {
   $ZodType.init(inst, def);
@@ -95158,14 +95190,14 @@ var $ZodArray = /* @__PURE__ */ $constructor("$ZodArray", (inst, def) => {
     const proms = [];
     for (let i2 = 0; i2 < input.length; i2++) {
       const item = input[i2];
-      const result = def.element._zod.run({
+      const result2 = def.element._zod.run({
         value: item,
         issues: []
       }, ctx);
-      if (result instanceof Promise) {
-        proms.push(result.then((result2) => handleArrayResult(result2, payload, i2)));
+      if (result2 instanceof Promise) {
+        proms.push(result2.then((result22) => handleArrayResult(result22, payload, i2)));
       } else {
-        handleArrayResult(result, payload, i2);
+        handleArrayResult(result2, payload, i2);
       }
     }
     if (proms.length) {
@@ -95174,16 +95206,16 @@ var $ZodArray = /* @__PURE__ */ $constructor("$ZodArray", (inst, def) => {
     return payload;
   };
 });
-function handlePropertyResult(result, final, key, input, isOptionalIn, isOptionalOut) {
+function handlePropertyResult(result2, final, key, input, isOptionalIn, isOptionalOut) {
   const isPresent = key in input;
-  if (result.issues.length) {
+  if (result2.issues.length) {
     if (isOptionalIn && isOptionalOut && !isPresent) {
       return;
     }
-    final.issues.push(...prefixIssues(key, result.issues));
+    final.issues.push(...prefixIssues(key, result2.issues));
   }
   if (!isPresent && !isOptionalIn) {
-    if (!result.issues.length) {
+    if (!result2.issues.length) {
       final.issues.push({
         code: "invalid_type",
         expected: "nonoptional",
@@ -95193,17 +95225,17 @@ function handlePropertyResult(result, final, key, input, isOptionalIn, isOptiona
     }
     return;
   }
-  if (result.value === void 0) {
+  if (result2.value === void 0) {
     if (isPresent) {
       final.value[key] = void 0;
     }
   } else {
-    final.value[key] = result.value;
+    final.value[key] = result2.value;
   }
 }
 function normalizeDef(def) {
-  const keys = Object.keys(def.shape);
-  for (const k3 of keys) {
+  const keys2 = Object.keys(def.shape);
+  for (const k3 of keys2) {
     if (!def.shape?.[k3]?._zod?.traits?.has("$ZodType")) {
       throw new Error(`Invalid element at key "${k3}": expected a Zod schema`);
     }
@@ -95211,9 +95243,9 @@ function normalizeDef(def) {
   const okeys = optionalKeys(def.shape);
   return {
     ...def,
-    keys,
-    keySet: new Set(keys),
-    numKeys: keys.length,
+    keys: keys2,
+    keySet: new Set(keys2),
+    numKeys: keys2.length,
     optionalKeys: new Set(okeys)
   };
 }
@@ -95337,42 +95369,42 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
     }
     doc.write(`const newResult = {};`);
     for (const key of normalized.keys) {
-      const id4 = ids[key];
+      const id7 = ids[key];
       const k3 = esc(key);
       const schema = shape[key];
       const isOptionalIn = schema?._zod?.optin === "optional";
       const isOptionalOut = schema?._zod?.optout === "optional";
-      doc.write(`const ${id4} = ${parseStr(key)};`);
+      doc.write(`const ${id7} = ${parseStr(key)};`);
       if (isOptionalIn && isOptionalOut) {
         doc.write(`
-        if (${id4}.issues.length) {
+        if (${id7}.issues.length) {
           if (${k3} in input) {
-            payload.issues = payload.issues.concat(${id4}.issues.map(iss => ({
+            payload.issues = payload.issues.concat(${id7}.issues.map(iss => ({
               ...iss,
               path: iss.path ? [${k3}, ...iss.path] : [${k3}]
             })));
           }
         }
         
-        if (${id4}.value === undefined) {
+        if (${id7}.value === undefined) {
           if (${k3} in input) {
             newResult[${k3}] = undefined;
           }
         } else {
-          newResult[${k3}] = ${id4}.value;
+          newResult[${k3}] = ${id7}.value;
         }
         
       `);
       } else if (!isOptionalIn) {
         doc.write(`
-        const ${id4}_present = ${k3} in input;
-        if (${id4}.issues.length) {
-          payload.issues = payload.issues.concat(${id4}.issues.map(iss => ({
+        const ${id7}_present = ${k3} in input;
+        if (${id7}.issues.length) {
+          payload.issues = payload.issues.concat(${id7}.issues.map(iss => ({
             ...iss,
             path: iss.path ? [${k3}, ...iss.path] : [${k3}]
           })));
         }
-        if (!${id4}_present && !${id4}.issues.length) {
+        if (!${id7}_present && !${id7}.issues.length) {
           payload.issues.push({
             code: "invalid_type",
             expected: "nonoptional",
@@ -95381,30 +95413,30 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
           });
         }
 
-        if (${id4}_present) {
-          if (${id4}.value === undefined) {
+        if (${id7}_present) {
+          if (${id7}.value === undefined) {
             newResult[${k3}] = undefined;
           } else {
-            newResult[${k3}] = ${id4}.value;
+            newResult[${k3}] = ${id7}.value;
           }
         }
 
       `);
       } else {
         doc.write(`
-        if (${id4}.issues.length) {
-          payload.issues = payload.issues.concat(${id4}.issues.map(iss => ({
+        if (${id7}.issues.length) {
+          payload.issues = payload.issues.concat(${id7}.issues.map(iss => ({
             ...iss,
             path: iss.path ? [${k3}, ...iss.path] : [${k3}]
           })));
         }
         
-        if (${id4}.value === undefined) {
+        if (${id7}.value === undefined) {
           if (${k3} in input) {
             newResult[${k3}] = undefined;
           }
         } else {
-          newResult[${k3}] = ${id4}.value;
+          newResult[${k3}] = ${id7}.value;
         }
         
       `);
@@ -95446,9 +95478,9 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
   };
 });
 function handleUnionResults(results, final, inst, ctx) {
-  for (const result of results) {
-    if (result.issues.length === 0) {
-      final.value = result.value;
+  for (const result2 of results) {
+    if (result2.issues.length === 0) {
+      final.value = result2.value;
       return final;
     }
   }
@@ -95461,7 +95493,7 @@ function handleUnionResults(results, final, inst, ctx) {
     code: "invalid_union",
     input: final.value,
     inst,
-    errors: results.map((result) => result.issues.map((iss) => finalizeIssue(iss, ctx, config())))
+    errors: results.map((result2) => result2.issues.map((iss) => finalizeIssue(iss, ctx, config())))
   });
   return final;
 }
@@ -95490,17 +95522,17 @@ var $ZodUnion = /* @__PURE__ */ $constructor("$ZodUnion", (inst, def) => {
     let async = false;
     const results = [];
     for (const option of def.options) {
-      const result = option._zod.run({
+      const result2 = option._zod.run({
         value: payload.value,
         issues: []
       }, ctx);
-      if (result instanceof Promise) {
-        results.push(result);
+      if (result2 instanceof Promise) {
+        results.push(result2);
         async = true;
       } else {
-        if (result.issues.length === 0)
-          return result;
-        results.push(result);
+        if (result2.issues.length === 0)
+          return result2;
+        results.push(result2);
       }
     }
     if (!async)
@@ -95521,7 +95553,7 @@ function handleExclusiveUnionResults(results, final, inst, ctx) {
       code: "invalid_union",
       input: final.value,
       inst,
-      errors: results.map((result) => result.issues.map((iss) => finalizeIssue(iss, ctx, config())))
+      errors: results.map((result2) => result2.issues.map((iss) => finalizeIssue(iss, ctx, config())))
     });
   } else {
     final.issues.push({
@@ -95545,15 +95577,15 @@ var $ZodXor = /* @__PURE__ */ $constructor("$ZodXor", (inst, def) => {
     let async = false;
     const results = [];
     for (const option of def.options) {
-      const result = option._zod.run({
+      const result2 = option._zod.run({
         value: payload.value,
         issues: []
       }, ctx);
-      if (result instanceof Promise) {
-        results.push(result);
+      if (result2 instanceof Promise) {
+        results.push(result2);
         async = true;
       } else {
-        results.push(result);
+        results.push(result2);
       }
     }
     if (!async)
@@ -95689,7 +95721,7 @@ function mergeValues(a2, b3) {
   }
   return { valid: false, mergeErrorPath: [] };
 }
-function handleIntersectionResults(result, left, right) {
+function handleIntersectionResults(result2, left, right) {
   const unrecKeys = /* @__PURE__ */ new Map();
   let unrecIssue;
   for (const iss of left.issues) {
@@ -95701,7 +95733,7 @@ function handleIntersectionResults(result, left, right) {
         unrecKeys.get(k3).l = true;
       }
     } else {
-      result.issues.push(iss);
+      result2.issues.push(iss);
     }
   }
   for (const iss of right.issues) {
@@ -95712,21 +95744,21 @@ function handleIntersectionResults(result, left, right) {
         unrecKeys.get(k3).r = true;
       }
     } else {
-      result.issues.push(iss);
+      result2.issues.push(iss);
     }
   }
   const bothKeys = [...unrecKeys].filter(([, f2]) => f2.l && f2.r).map(([k3]) => k3);
   if (bothKeys.length && unrecIssue) {
-    result.issues.push({ ...unrecIssue, keys: bothKeys });
+    result2.issues.push({ ...unrecIssue, keys: bothKeys });
   }
-  if (aborted(result))
-    return result;
+  if (aborted(result2))
+    return result2;
   const merged = mergeValues(left.value, right.value);
   if (!merged.valid) {
     throw new Error(`Unmergable intersection. Error path: ${JSON.stringify(merged.mergeErrorPath)}`);
   }
-  result.value = merged.data;
-  return result;
+  result2.value = merged.data;
+  return result2;
 }
 var $ZodTuple = /* @__PURE__ */ $constructor("$ZodTuple", (inst, def) => {
   $ZodType.init(inst, def);
@@ -95785,11 +95817,11 @@ var $ZodTuple = /* @__PURE__ */ $constructor("$ZodTuple", (inst, def) => {
       const rest = input.slice(items.length);
       for (const el of rest) {
         i2++;
-        const result = def.rest._zod.run({ value: el, issues: [] }, ctx);
-        if (result instanceof Promise) {
-          proms.push(result.then((r2) => handleTupleResult(r2, payload, i2)));
+        const result2 = def.rest._zod.run({ value: el, issues: [] }, ctx);
+        if (result2 instanceof Promise) {
+          proms.push(result2.then((r2) => handleTupleResult(r2, payload, i2)));
         } else {
-          handleTupleResult(result, payload, i2);
+          handleTupleResult(result2, payload, i2);
         }
       }
     }
@@ -95806,11 +95838,11 @@ function getTupleOptStart(items, key) {
   }
   return 0;
 }
-function handleTupleResult(result, final, index) {
-  if (result.issues.length) {
-    final.issues.push(...prefixIssues(index, result.issues));
+function handleTupleResult(result2, final, index) {
+  if (result2.issues.length) {
+    final.issues.push(...prefixIssues(index, result2.issues));
   }
-  final.value[index] = result.value;
+  final.value[index] = result2.value;
 }
 function handleTupleResults(itemResults, final, items, input, optoutStart) {
   for (let i2 = 0; i2 < items.length; i2++) {
@@ -95871,19 +95903,19 @@ var $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
             continue;
           }
           const outKey = keyResult.value;
-          const result = def.valueType._zod.run({ value: input[key], issues: [] }, ctx);
-          if (result instanceof Promise) {
-            proms.push(result.then((result2) => {
-              if (result2.issues.length) {
-                payload.issues.push(...prefixIssues(key, result2.issues));
+          const result2 = def.valueType._zod.run({ value: input[key], issues: [] }, ctx);
+          if (result2 instanceof Promise) {
+            proms.push(result2.then((result22) => {
+              if (result22.issues.length) {
+                payload.issues.push(...prefixIssues(key, result22.issues));
               }
-              payload.value[outKey] = result2.value;
+              payload.value[outKey] = result22.value;
             }));
           } else {
-            if (result.issues.length) {
-              payload.issues.push(...prefixIssues(key, result.issues));
+            if (result2.issues.length) {
+              payload.issues.push(...prefixIssues(key, result2.issues));
             }
-            payload.value[outKey] = result.value;
+            payload.value[outKey] = result2.value;
           }
         }
       }
@@ -95938,19 +95970,19 @@ var $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
           }
           continue;
         }
-        const result = def.valueType._zod.run({ value: input[key], issues: [] }, ctx);
-        if (result instanceof Promise) {
-          proms.push(result.then((result2) => {
-            if (result2.issues.length) {
-              payload.issues.push(...prefixIssues(key, result2.issues));
+        const result2 = def.valueType._zod.run({ value: input[key], issues: [] }, ctx);
+        if (result2 instanceof Promise) {
+          proms.push(result2.then((result22) => {
+            if (result22.issues.length) {
+              payload.issues.push(...prefixIssues(key, result22.issues));
             }
-            payload.value[keyResult.value] = result2.value;
+            payload.value[keyResult.value] = result22.value;
           }));
         } else {
-          if (result.issues.length) {
-            payload.issues.push(...prefixIssues(key, result.issues));
+          if (result2.issues.length) {
+            payload.issues.push(...prefixIssues(key, result2.issues));
           }
-          payload.value[keyResult.value] = result.value;
+          payload.value[keyResult.value] = result2.value;
         }
       }
     }
@@ -96037,22 +96069,22 @@ var $ZodSet = /* @__PURE__ */ $constructor("$ZodSet", (inst, def) => {
     const proms = [];
     payload.value = /* @__PURE__ */ new Set();
     for (const item of input) {
-      const result = def.valueType._zod.run({ value: item, issues: [] }, ctx);
-      if (result instanceof Promise) {
-        proms.push(result.then((result2) => handleSetResult(result2, payload)));
+      const result2 = def.valueType._zod.run({ value: item, issues: [] }, ctx);
+      if (result2 instanceof Promise) {
+        proms.push(result2.then((result22) => handleSetResult(result22, payload)));
       } else
-        handleSetResult(result, payload);
+        handleSetResult(result2, payload);
     }
     if (proms.length)
       return Promise.all(proms).then(() => payload);
     return payload;
   };
 });
-function handleSetResult(result, final) {
-  if (result.issues.length) {
-    final.issues.push(...result.issues);
+function handleSetResult(result2, final) {
+  if (result2.issues.length) {
+    final.issues.push(...result2.issues);
   }
-  final.value.add(result.value);
+  final.value.add(result2.value);
 }
 var $ZodEnum = /* @__PURE__ */ $constructor("$ZodEnum", (inst, def) => {
   $ZodType.init(inst, def);
@@ -96135,11 +96167,11 @@ var $ZodTransform = /* @__PURE__ */ $constructor("$ZodTransform", (inst, def) =>
     return payload;
   };
 });
-function handleOptionalResult(result, input) {
-  if (input === void 0 && (result.issues.length || result.fallback)) {
+function handleOptionalResult(result2, input) {
+  if (input === void 0 && (result2.issues.length || result2.fallback)) {
     return { issues: [], value: void 0 };
   }
-  return result;
+  return result2;
 }
 var $ZodOptional = /* @__PURE__ */ $constructor("$ZodOptional", (inst, def) => {
   $ZodType.init(inst, def);
@@ -96155,10 +96187,10 @@ var $ZodOptional = /* @__PURE__ */ $constructor("$ZodOptional", (inst, def) => {
   inst._zod.parse = (payload, ctx) => {
     if (def.innerType._zod.optin === "optional") {
       const input = payload.value;
-      const result = def.innerType._zod.run(payload, ctx);
-      if (result instanceof Promise)
-        return result.then((r2) => handleOptionalResult(r2, input));
-      return handleOptionalResult(result, input);
+      const result2 = def.innerType._zod.run(payload, ctx);
+      if (result2 instanceof Promise)
+        return result2.then((r2) => handleOptionalResult(r2, input));
+      return handleOptionalResult(result2, input);
     }
     if (payload.value === void 0) {
       return payload;
@@ -96203,11 +96235,11 @@ var $ZodDefault = /* @__PURE__ */ $constructor("$ZodDefault", (inst, def) => {
       payload.value = def.defaultValue;
       return payload;
     }
-    const result = def.innerType._zod.run(payload, ctx);
-    if (result instanceof Promise) {
-      return result.then((result2) => handleDefaultResult(result2, def));
+    const result2 = def.innerType._zod.run(payload, ctx);
+    if (result2 instanceof Promise) {
+      return result2.then((result22) => handleDefaultResult(result22, def));
     }
-    return handleDefaultResult(result, def);
+    return handleDefaultResult(result2, def);
   };
 });
 function handleDefaultResult(payload, def) {
@@ -96237,11 +96269,11 @@ var $ZodNonOptional = /* @__PURE__ */ $constructor("$ZodNonOptional", (inst, def
     return v3 ? new Set([...v3].filter((x3) => x3 !== void 0)) : void 0;
   });
   inst._zod.parse = (payload, ctx) => {
-    const result = def.innerType._zod.run(payload, ctx);
-    if (result instanceof Promise) {
-      return result.then((result2) => handleNonOptionalResult(result2, inst));
+    const result2 = def.innerType._zod.run(payload, ctx);
+    if (result2 instanceof Promise) {
+      return result2.then((result22) => handleNonOptionalResult(result22, inst));
     }
-    return handleNonOptionalResult(result, inst);
+    return handleNonOptionalResult(result2, inst);
   };
 });
 function handleNonOptionalResult(payload, inst) {
@@ -96261,14 +96293,14 @@ var $ZodSuccess = /* @__PURE__ */ $constructor("$ZodSuccess", (inst, def) => {
     if (ctx.direction === "backward") {
       throw new $ZodEncodeError("ZodSuccess");
     }
-    const result = def.innerType._zod.run(payload, ctx);
-    if (result instanceof Promise) {
-      return result.then((result2) => {
-        payload.value = result2.issues.length === 0;
+    const result2 = def.innerType._zod.run(payload, ctx);
+    if (result2 instanceof Promise) {
+      return result2.then((result22) => {
+        payload.value = result22.issues.length === 0;
         return payload;
       });
     }
-    payload.value = result.issues.length === 0;
+    payload.value = result2.issues.length === 0;
     return payload;
   };
 });
@@ -96281,15 +96313,15 @@ var $ZodCatch = /* @__PURE__ */ $constructor("$ZodCatch", (inst, def) => {
     if (ctx.direction === "backward") {
       return def.innerType._zod.run(payload, ctx);
     }
-    const result = def.innerType._zod.run(payload, ctx);
-    if (result instanceof Promise) {
-      return result.then((result2) => {
-        payload.value = result2.value;
-        if (result2.issues.length) {
+    const result2 = def.innerType._zod.run(payload, ctx);
+    if (result2 instanceof Promise) {
+      return result2.then((result22) => {
+        payload.value = result22.value;
+        if (result22.issues.length) {
           payload.value = def.catchValue({
             ...payload,
             error: {
-              issues: result2.issues.map((iss) => finalizeIssue(iss, ctx, config()))
+              issues: result22.issues.map((iss) => finalizeIssue(iss, ctx, config()))
             },
             input: payload.value
           });
@@ -96299,12 +96331,12 @@ var $ZodCatch = /* @__PURE__ */ $constructor("$ZodCatch", (inst, def) => {
         return payload;
       });
     }
-    payload.value = result.value;
-    if (result.issues.length) {
+    payload.value = result2.value;
+    if (result2.issues.length) {
       payload.value = def.catchValue({
         ...payload,
         error: {
-          issues: result.issues.map((iss) => finalizeIssue(iss, ctx, config()))
+          issues: result2.issues.map((iss) => finalizeIssue(iss, ctx, config()))
         },
         input: payload.value
       });
@@ -96380,24 +96412,24 @@ var $ZodCodec = /* @__PURE__ */ $constructor("$ZodCodec", (inst, def) => {
     }
   };
 });
-function handleCodecAResult(result, def, ctx) {
-  if (result.issues.length) {
-    result.aborted = true;
-    return result;
+function handleCodecAResult(result2, def, ctx) {
+  if (result2.issues.length) {
+    result2.aborted = true;
+    return result2;
   }
   const direction3 = ctx.direction || "forward";
   if (direction3 === "forward") {
-    const transformed = def.transform(result.value, result);
+    const transformed = def.transform(result2.value, result2);
     if (transformed instanceof Promise) {
-      return transformed.then((value) => handleCodecTxResult(result, value, def.out, ctx));
+      return transformed.then((value) => handleCodecTxResult(result2, value, def.out, ctx));
     }
-    return handleCodecTxResult(result, transformed, def.out, ctx);
+    return handleCodecTxResult(result2, transformed, def.out, ctx);
   } else {
-    const transformed = def.reverseTransform(result.value, result);
+    const transformed = def.reverseTransform(result2.value, result2);
     if (transformed instanceof Promise) {
-      return transformed.then((value) => handleCodecTxResult(result, value, def.in, ctx));
+      return transformed.then((value) => handleCodecTxResult(result2, value, def.in, ctx));
     }
-    return handleCodecTxResult(result, transformed, def.in, ctx);
+    return handleCodecTxResult(result2, transformed, def.in, ctx);
   }
 }
 function handleCodecTxResult(left, value, nextSchema, ctx) {
@@ -96420,11 +96452,11 @@ var $ZodReadonly = /* @__PURE__ */ $constructor("$ZodReadonly", (inst, def) => {
     if (ctx.direction === "backward") {
       return def.innerType._zod.run(payload, ctx);
     }
-    const result = def.innerType._zod.run(payload, ctx);
-    if (result instanceof Promise) {
-      return result.then(handleReadonlyResult);
+    const result2 = def.innerType._zod.run(payload, ctx);
+    if (result2 instanceof Promise) {
+      return result2.then(handleReadonlyResult);
     }
-    return handleReadonlyResult(result);
+    return handleReadonlyResult(result2);
   };
 });
 function handleReadonlyResult(payload) {
@@ -96486,11 +96518,11 @@ var $ZodFunction = /* @__PURE__ */ $constructor("$ZodFunction", (inst, def) => {
     }
     return function(...args) {
       const parsedArgs = inst._def.input ? parse2(inst._def.input, args) : args;
-      const result = Reflect.apply(func, this, parsedArgs);
+      const result2 = Reflect.apply(func, this, parsedArgs);
       if (inst._def.output) {
-        return parse2(inst._def.output, result);
+        return parse2(inst._def.output, result2);
       }
-      return result;
+      return result2;
     };
   };
   inst.implementAsync = (func) => {
@@ -96499,11 +96531,11 @@ var $ZodFunction = /* @__PURE__ */ $constructor("$ZodFunction", (inst, def) => {
     }
     return async function(...args) {
       const parsedArgs = inst._def.input ? await parseAsync(inst._def.input, args) : args;
-      const result = await Reflect.apply(func, this, parsedArgs);
+      const result2 = await Reflect.apply(func, this, parsedArgs);
       if (inst._def.output) {
-        return await parseAsync(inst._def.output, result);
+        return await parseAsync(inst._def.output, result2);
       }
-      return result;
+      return result2;
     };
   };
   inst._zod.parse = (payload, _ctx) => {
@@ -96592,8 +96624,8 @@ var $ZodCustom = /* @__PURE__ */ $constructor("$ZodCustom", (inst, def) => {
     return;
   };
 });
-function handleRefineResult(result, payload, input, inst) {
-  if (!result) {
+function handleRefineResult(result2, payload, input, inst) {
+  if (!result2) {
     const _iss = {
       code: "custom",
       input,
@@ -99823,8 +99855,8 @@ function ko_default() {
     localeError: error27()
   };
 }
-var capitalizeFirstCharacter = (text2) => {
-  return text2.charAt(0).toUpperCase() + text2.slice(1);
+var capitalizeFirstCharacter = (text4) => {
+  return text4.charAt(0).toUpperCase() + text4.slice(1);
 };
 function getUnitTypeFromNumber(number4) {
   const abs3 = Math.abs(number4);
@@ -99908,12 +99940,12 @@ var error28 = () => {
     }
   };
   function getSizing(origin, unitType, inclusive, targetShouldBe) {
-    const result = Sizable[origin] ?? null;
-    if (result === null)
-      return result;
+    const result2 = Sizable[origin] ?? null;
+    if (result2 === null)
+      return result2;
     return {
-      unit: result.unit[unitType],
-      verb: result.verb[targetShouldBe][inclusive ? "inclusive" : "notInclusive"]
+      unit: result2.unit[unitType],
+      verb: result2.verb[targetShouldBe][inclusive ? "inclusive" : "notInclusive"]
     };
   }
   const FormatDictionary = {
@@ -103576,11 +103608,11 @@ function process(schema, ctx, _params = { path: [], schemaPath: [] }) {
     }
     return seen.schema;
   }
-  const result = { schema: {}, count: 1, cycle: void 0, path: _params.path };
-  ctx.seen.set(schema, result);
+  const result2 = { schema: {}, count: 1, cycle: void 0, path: _params.path };
+  ctx.seen.set(schema, result2);
   const overrideSchema = schema._zod.toJSONSchema?.();
   if (overrideSchema) {
-    result.schema = overrideSchema;
+    result2.schema = overrideSchema;
   } else {
     const params = {
       ..._params,
@@ -103588,9 +103620,9 @@ function process(schema, ctx, _params = { path: [], schemaPath: [] }) {
       path: _params.path
     };
     if (schema._zod.processJSONSchema) {
-      schema._zod.processJSONSchema(ctx, result.schema, params);
+      schema._zod.processJSONSchema(ctx, result2.schema, params);
     } else {
-      const _json = result.schema;
+      const _json = result2.schema;
       const processor = ctx.processors[def.type];
       if (!processor) {
         throw new Error(`[toJSONSchema]: Non-representable type encountered: ${def.type}`);
@@ -103599,22 +103631,22 @@ function process(schema, ctx, _params = { path: [], schemaPath: [] }) {
     }
     const parent = schema._zod.parent;
     if (parent) {
-      if (!result.ref)
-        result.ref = parent;
+      if (!result2.ref)
+        result2.ref = parent;
       process(parent, ctx, params);
       ctx.seen.get(parent).isParent = true;
     }
   }
   const meta32 = ctx.metadataRegistry.get(schema);
   if (meta32)
-    Object.assign(result.schema, meta32);
+    Object.assign(result2.schema, meta32);
   if (ctx.io === "input" && isTransforming(schema)) {
-    delete result.schema.examples;
-    delete result.schema.default;
+    delete result2.schema.examples;
+    delete result2.schema.default;
   }
-  if (ctx.io === "input" && "_prefault" in result.schema)
-    (_a3 = result.schema).default ?? (_a3.default = result.schema._prefault);
-  delete result.schema._prefault;
+  if (ctx.io === "input" && "_prefault" in result2.schema)
+    (_a3 = result2.schema).default ?? (_a3.default = result2.schema._prefault);
+  delete result2.schema._prefault;
   const _result = ctx.seen.get(schema);
   return _result.schema;
 }
@@ -103624,13 +103656,13 @@ function extractDefs(ctx, schema) {
     throw new Error("Unprocessed schema. This is a bug in Zod.");
   const idToSchema = /* @__PURE__ */ new Map();
   for (const entry of ctx.seen.entries()) {
-    const id4 = ctx.metadataRegistry.get(entry[0])?.id;
-    if (id4) {
-      const existing = idToSchema.get(id4);
+    const id7 = ctx.metadataRegistry.get(entry[0])?.id;
+    if (id7) {
+      const existing = idToSchema.get(id7);
       if (existing && existing !== entry[0]) {
-        throw new Error(`Duplicate schema id "${id4}" detected during JSON Schema conversion. Two different schemas cannot share the same id when converted together.`);
+        throw new Error(`Duplicate schema id "${id7}" detected during JSON Schema conversion. Two different schemas cannot share the same id when converted together.`);
       }
-      idToSchema.set(id4, entry[0]);
+      idToSchema.set(id7, entry[0]);
     }
   }
   const makeURI = (entry) => {
@@ -103641,9 +103673,9 @@ function extractDefs(ctx, schema) {
       if (externalId) {
         return { ref: uriGenerator(externalId) };
       }
-      const id4 = entry[1].defId ?? entry[1].schema.id ?? `schema${ctx.counter++}`;
-      entry[1].defId = id4;
-      return { defId: id4, ref: `${uriGenerator("__shared")}#/${defsSegment}/${id4}` };
+      const id7 = entry[1].defId ?? entry[1].schema.id ?? `schema${ctx.counter++}`;
+      entry[1].defId = id7;
+      return { defId: id7, ref: `${uriGenerator("__shared")}#/${defsSegment}/${id7}` };
     }
     if (entry[1] === root) {
       return { ref: "#" };
@@ -103691,8 +103723,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         continue;
       }
     }
-    const id4 = ctx.metadataRegistry.get(entry[0])?.id;
-    if (id4) {
+    const id7 = ctx.metadataRegistry.get(entry[0])?.id;
+    if (id7) {
       extractToDef(entry);
       continue;
     }
@@ -103777,26 +103809,26 @@ function finalize(ctx, schema) {
   for (const entry of [...ctx.seen.entries()].reverse()) {
     flattenRef(entry[0]);
   }
-  const result = {};
+  const result2 = {};
   if (ctx.target === "draft-2020-12") {
-    result.$schema = "https://json-schema.org/draft/2020-12/schema";
+    result2.$schema = "https://json-schema.org/draft/2020-12/schema";
   } else if (ctx.target === "draft-07") {
-    result.$schema = "http://json-schema.org/draft-07/schema#";
+    result2.$schema = "http://json-schema.org/draft-07/schema#";
   } else if (ctx.target === "draft-04") {
-    result.$schema = "http://json-schema.org/draft-04/schema#";
+    result2.$schema = "http://json-schema.org/draft-04/schema#";
   } else if (ctx.target === "openapi-3.0") {
   } else {
   }
   if (ctx.external?.uri) {
-    const id4 = ctx.external.registry.get(schema)?.id;
-    if (!id4)
+    const id7 = ctx.external.registry.get(schema)?.id;
+    if (!id7)
       throw new Error("Schema is missing an `id` property");
-    result.$id = ctx.external.uri(id4);
+    result2.$id = ctx.external.uri(id7);
   }
-  Object.assign(result, root.def ?? root.schema);
+  Object.assign(result2, root.def ?? root.schema);
   const rootMetaId = ctx.metadataRegistry.get(schema)?.id;
-  if (rootMetaId !== void 0 && result.id === rootMetaId)
-    delete result.id;
+  if (rootMetaId !== void 0 && result2.id === rootMetaId)
+    delete result2.id;
   const defs = ctx.external?.defs ?? {};
   for (const entry of ctx.seen.entries()) {
     const seen = entry[1];
@@ -103810,14 +103842,14 @@ function finalize(ctx, schema) {
   } else {
     if (Object.keys(defs).length > 0) {
       if (ctx.target === "draft-2020-12") {
-        result.$defs = defs;
+        result2.$defs = defs;
       } else {
-        result.definitions = defs;
+        result2.definitions = defs;
       }
     }
   }
   try {
-    const finalized = JSON.parse(JSON.stringify(result));
+    const finalized = JSON.parse(JSON.stringify(result2));
     Object.defineProperty(finalized, "~standard", {
       value: {
         ...schema["~standard"],
@@ -104510,8 +104542,8 @@ var JSONSchemaGenerator = class {
         this.ctx.external = _params.external;
     }
     extractDefs(this.ctx, schema);
-    const result = finalize(this.ctx, schema);
-    const { "~standard": _3, ...plainResult } = result;
+    const result2 = finalize(this.ctx, schema);
+    const { "~standard": _3, ...plainResult } = result2;
     return plainResult;
   }
 };
@@ -105692,11 +105724,11 @@ var ZodEnum = /* @__PURE__ */ $constructor("ZodEnum", (inst, def) => {
   inst._zod.processJSONSchema = (ctx, json2, params) => enumProcessor(inst, ctx, json2, params);
   inst.enum = def.entries;
   inst.options = Object.values(def.entries);
-  const keys = new Set(Object.keys(def.entries));
+  const keys2 = new Set(Object.keys(def.entries));
   inst.extract = (values, params) => {
     const newEntries = {};
     for (const value of values) {
-      if (keys.has(value)) {
+      if (keys2.has(value)) {
         newEntries[value] = def.entries[value];
       } else
         throw new Error(`Key ${value} not found in enum`);
@@ -105711,7 +105743,7 @@ var ZodEnum = /* @__PURE__ */ $constructor("ZodEnum", (inst, def) => {
   inst.exclude = (values, params) => {
     const newEntries = { ...def.entries };
     for (const value of values) {
-      if (keys.has(value)) {
+      if (keys2.has(value)) {
         delete newEntries[value];
       } else
         throw new Error(`Key ${value} not found in enum`);
@@ -106442,11 +106474,11 @@ function convertBaseSchema(schema, ctx) {
         } else if (schemasToIntersect.length === 1) {
           zodSchema = schemasToIntersect[0];
         } else {
-          let result = z3.intersection(schemasToIntersect[0], schemasToIntersect[1]);
+          let result2 = z3.intersection(schemasToIntersect[0], schemasToIntersect[1]);
           for (let i2 = 2; i2 < schemasToIntersect.length; i2++) {
-            result = z3.intersection(result, schemasToIntersect[i2]);
+            result2 = z3.intersection(result2, schemasToIntersect[i2]);
           }
-          zodSchema = result;
+          zodSchema = result2;
         }
         break;
       }
@@ -106531,12 +106563,12 @@ function convertSchema(schema, ctx) {
     if (schema.allOf.length === 0) {
       baseSchema = hasExplicitType ? baseSchema : z3.any();
     } else {
-      let result = hasExplicitType ? baseSchema : convertSchema(schema.allOf[0], ctx);
+      let result2 = hasExplicitType ? baseSchema : convertSchema(schema.allOf[0], ctx);
       const startIdx = hasExplicitType ? 0 : 1;
       for (let i2 = startIdx; i2 < schema.allOf.length; i2++) {
-        result = z3.intersection(result, convertSchema(schema.allOf[i2], ctx));
+        result2 = z3.intersection(result2, convertSchema(schema.allOf[i2], ctx));
       }
-      baseSchema = result;
+      baseSchema = result2;
     }
   }
   if (schema.nullable === true && ctx.version === "openapi-3.0") {
@@ -106620,6 +106652,38 @@ function date4(params) {
   return /* @__PURE__ */ _coercedDate(ZodDate, params);
 }
 config(en_default());
+
+// src/worldlog/replay-value.ts
+function cloneReplayValue(value, seen = /* @__PURE__ */ new Set()) {
+  if (value === null) return null;
+  const type = typeof value;
+  if (type === "number" || type === "string" || type === "boolean" || type === "undefined") return value;
+  if (type === "bigint") throw new Error("cannot record a BigInt value (not replay-serializable)");
+  if (type === "function" || type === "symbol") throw new Error(`cannot record a ${type} value`);
+  const object5 = value;
+  if (seen.has(object5)) throw new Error("cannot record a circular value");
+  seen.add(object5);
+  const toJSON2 = object5.toJSON;
+  if (typeof toJSON2 === "function") {
+    seen.delete(object5);
+    return cloneReplayValue(toJSON2.call(object5), seen);
+  }
+  let clone3;
+  if (Array.isArray(object5)) {
+    const array5 = new Array(object5.length);
+    for (let i2 = 0; i2 < object5.length; i2++) array5[i2] = cloneReplayValue(object5[i2], seen);
+    clone3 = array5;
+  } else {
+    const record6 = {};
+    for (const key of Object.keys(object5)) {
+      const item = cloneReplayValue(object5[key], seen);
+      if (item !== void 0) record6[key] = item;
+    }
+    clone3 = record6;
+  }
+  seen.delete(object5);
+  return clone3;
+}
 
 // src/behavior/behavior-spec.ts
 var BEHAVIOR_SPEC_VERSION = 1;
@@ -106790,6 +106854,7 @@ var PERMISSION_PROFILES = {
     "item.configure",
     "game.write",
     "game.configure",
+    "game.plan",
     "trigger.configure",
     "event.read",
     "event.write",
@@ -106904,6 +106969,7 @@ var PERMISSION_PROFILES = {
   "game.author": [
     "game.write",
     "game.configure",
+    "game.plan",
     "design.read",
     "design.write",
     "quest.read",
@@ -106944,6 +107010,7 @@ var PERMISSION_PROFILES = {
     "checkpoint.write",
     "design.read",
     "design.write",
+    "game.plan",
     "save.write",
     "scene.read",
     "ecs.read",
@@ -106996,6 +107063,7 @@ var PERMISSION_PROFILES = {
     "audio.play",
     "design.read",
     "design.write",
+    "game.plan",
     "catalog.read"
   ],
   "reviewer": ["authoring.read", "scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read", "design.read", "catalog.read", DERIVED_RUNTIME_DISCOVERY_PERMISSION],
@@ -107012,6 +107080,10 @@ var PERMISSION_PROFILES = {
 };
 function resolveProfile(name) {
   return new Set(PERMISSION_PROFILES[name] ?? []);
+}
+var REALM_DEFAULT_PROFILE = "builder.readWrite";
+function realmDefaultGrants() {
+  return resolveProfile(REALM_DEFAULT_PROFILE);
 }
 
 // src/worldlog/log.ts
@@ -107127,23 +107199,23 @@ function parseWorldLog(jsonl, opts = {}) {
       }
       throw new Error(message);
     }
-    const result = lineSchema.safeParse(json2);
-    if (!result.success) {
-      const message = `world log: malformed command on line ${i2 + 1}: ${result.error.message}`;
+    const result2 = lineSchema.safeParse(json2);
+    if (!result2.success) {
+      const message = `world log: malformed command on line ${i2 + 1}: ${result2.error.message}`;
       if (canRecover(i2)) {
         opts.onRecoverableError?.(message);
         continue;
       }
       throw new Error(message);
     }
-    if (result.data.kind === "meta") {
-      meta4 = result.data;
+    if (result2.data.kind === "meta") {
+      meta4 = result2.data;
       continue;
     }
-    if (result.data.kind === "skill" && result.data.perms === void 0 && result.data.profile === void 0) {
+    if (result2.data.kind === "skill" && result2.data.perms === void 0 && result2.data.profile === void 0) {
       throw new Error(`world log: skill command on line ${i2 + 1} carries neither perms nor profile`);
     }
-    out.push(result.data);
+    out.push(result2.data);
   }
   out.sort((a2, b3) => a2.seq - b3.seq);
   const warnings = [];
@@ -107201,19 +107273,32 @@ function installSeededRandom(seed, force = false) {
   Math.random = gen.next;
   return gen.next;
 }
+function installRandomState(state) {
+  const gen = statefulMulberry32(0);
+  gen.setState(state);
+  installedRng = gen;
+  Math.random = gen.next;
+  return gen.next;
+}
 function getInstalledSkillRng() {
   return installedSkillRng;
+}
+function installSkillRandomState(state) {
+  const gen = statefulMulberry32(0);
+  gen.setState(state);
+  installedSkillRng = gen;
+  return gen;
 }
 function captureWorldState(world, sorted = true, includeGameplay = true) {
   const scratch = new Float32Array(7);
   const ids = sorted ? [...world.entities.ids()].sort() : world.entities.ids();
   const entities = [];
-  for (const id4 of ids) {
-    const entry = world.entities.resolve(id4);
+  for (const id7 of ids) {
+    const entry = world.entities.resolve(id7);
     if (entry === void 0) continue;
     const eid = entry.eid;
     const state = {
-      id: id4,
+      id: id7,
       eid,
       pos: [Position.x[eid], Position.y[eid], Position.z[eid]],
       rot: [Rotation.x[eid], Rotation.y[eid], Rotation.z[eid], Rotation.w[eid]],
@@ -107238,10 +107323,16 @@ function captureEntityGameplay(state, entry, tagSet) {
 }
 function syncAllBodies(world) {
   const scratch = new Float32Array(7);
-  for (const id4 of world.entities.ids()) {
-    const entry = world.entities.resolve(id4);
+  for (const id7 of world.entities.ids()) {
+    const entry = world.entities.resolve(id7);
     if (entry === void 0 || entry.bodyId === void 0) continue;
-    syncPhysicsBodyTransform(entry.eid, entry.bodyId, world.ops, scratch);
+    if (world.transforms === void 0) {
+      syncPhysicsBodyTransform(entry.eid, entry.bodyId, world.ops, scratch);
+      continue;
+    }
+    world.ops.op_physics_body_transform(entry.bodyId, scratch);
+    world.transforms.writePosition(entry.eid, scratch[0], scratch[1], scratch[2]);
+    world.transforms.writeRotation(entry.eid, scratch[3], scratch[4], scratch[5], scratch[6]);
   }
 }
 
@@ -107257,21 +107348,21 @@ var TraceIntegrityError = class extends Error {
   lineNumber;
 };
 function fnv1a16(input) {
-  let hash7 = 0xcbf29ce484222325n;
+  let hash9 = 0xcbf29ce484222325n;
   const prime = 0x100000001b3n;
   const mask = 0xffffffffffffffffn;
   for (let i2 = 0; i2 < input.length; i2++) {
-    hash7 ^= BigInt(input.charCodeAt(i2));
-    hash7 = hash7 * prime & mask;
+    hash9 ^= BigInt(input.charCodeAt(i2));
+    hash9 = hash9 * prime & mask;
   }
-  return hash7.toString(16).padStart(16, "0");
+  return hash9.toString(16).padStart(16, "0");
 }
 function stableStringify(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return "[" + value.map(stableStringify).join(",") + "]";
   const obj = value;
-  const keys = Object.keys(obj).sort();
-  return "{" + keys.filter((k3) => obj[k3] !== void 0).map((k3) => JSON.stringify(k3) + ":" + stableStringify(obj[k3])).join(",") + "}";
+  const keys2 = Object.keys(obj).sort();
+  return "{" + keys2.filter((k3) => obj[k3] !== void 0).map((k3) => JSON.stringify(k3) + ":" + stableStringify(obj[k3])).join(",") + "}";
 }
 function canonicalEvent(ev) {
   return stableStringify({
@@ -107299,66 +107390,280 @@ function withoutIntegrity(ev) {
     payload: ev.payload
   };
 }
-function eventSeq(id4) {
-  const match = /^evt_.+_(\d{12})_[0-9a-f]{16}$/.exec(id4);
+function eventSeq(id7) {
+  const match = /^evt_.+_(\d{12})_[0-9a-f]{16}$/.exec(id7);
   if (match === null) return null;
   const n3 = Number(match[1]);
   return Number.isSafeInteger(n3) ? n3 : null;
 }
 function completeJsonlLines(jsonl, policy) {
   if (jsonl.length === 0) return { lines: [] };
-  const raw = jsonl.split("\n");
-  const final = raw[raw.length - 1] ?? "";
-  if (final === "") return { lines: raw.slice(0, -1) };
+  const raw3 = jsonl.split("\n");
+  const final = raw3[raw3.length - 1] ?? "";
+  if (final === "") return { lines: raw3.slice(0, -1) };
   try {
     JSON.parse(final);
-    return { lines: raw };
+    return { lines: raw3 };
   } catch {
   }
-  if (policy === "ignore") return { lines: raw.slice(0, -1), partialFinalLine: final };
-  throw new TraceIntegrityError("partial_final_line", raw.length, "trace has an incomplete final JSONL line");
+  if (policy === "ignore") return { lines: raw3.slice(0, -1), partialFinalLine: final };
+  throw new TraceIntegrityError("partial_final_line", raw3.length, "trace has an incomplete final JSONL line");
+}
+var OrderedRing = class {
+  constructor(capacity) {
+    this.capacity = capacity;
+    this.capacity = Math.max(0, Math.floor(capacity));
+    this.slots = new Array(this.capacity);
+  }
+  capacity;
+  slots;
+  start = 0;
+  count = 0;
+  get length() {
+    return this.count;
+  }
+  push(value) {
+    if (this.capacity === 0) return;
+    if (this.count < this.capacity) {
+      this.slots[(this.start + this.count) % this.capacity] = value;
+      this.count++;
+      return;
+    }
+    this.slots[this.start] = value;
+    this.start = (this.start + 1) % this.capacity;
+  }
+  toArray() {
+    const result2 = new Array(this.count);
+    for (let i2 = 0; i2 < this.count; i2++) {
+      result2[i2] = this.slots[(this.start + i2) % this.capacity];
+    }
+    return result2;
+  }
+};
+var ARRAY_MUTATORS = /* @__PURE__ */ new Set([
+  "copyWithin",
+  "fill",
+  "pop",
+  "push",
+  "reverse",
+  "shift",
+  "sort",
+  "splice",
+  "unshift"
+]);
+function readonlyArrayView(source) {
+  return new Proxy(source, {
+    get(target, property3) {
+      if (ARRAY_MUTATORS.has(property3)) {
+        return () => {
+          throw new TypeError("trace replay arrays are read-only");
+        };
+      }
+      const value = Reflect.get(target, property3, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+    set() {
+      throw new TypeError("trace replay arrays are read-only");
+    },
+    deleteProperty() {
+      throw new TypeError("trace replay arrays are read-only");
+    },
+    defineProperty() {
+      throw new TypeError("trace replay arrays are read-only");
+    }
+  });
+}
+var ReadonlyMapView = class {
+  constructor(source) {
+    this.source = source;
+  }
+  source;
+  get size() {
+    return this.source.size;
+  }
+  get(key) {
+    return this.source.get(key);
+  }
+  has(key) {
+    return this.source.has(key);
+  }
+  entries() {
+    return this.source.entries();
+  }
+  keys() {
+    return this.source.keys();
+  }
+  values() {
+    return this.source.values();
+  }
+  forEach(callbackfn, thisArg) {
+    this.source.forEach((value, key) => callbackfn.call(thisArg, value, key, this));
+  }
+  [Symbol.iterator]() {
+    return this.source[Symbol.iterator]();
+  }
+  get [Symbol.toStringTag]() {
+    return "ReadonlyMap";
+  }
+};
+var ReadonlyArrayMapView = class {
+  constructor(source) {
+    this.source = source;
+  }
+  source;
+  views = /* @__PURE__ */ new WeakMap();
+  get size() {
+    return this.source.size;
+  }
+  view(values) {
+    const existing = this.views.get(values);
+    if (existing !== void 0) return existing;
+    const created = readonlyArrayView(values);
+    this.views.set(values, created);
+    return created;
+  }
+  get(key) {
+    const values = this.source.get(key);
+    return values === void 0 ? void 0 : this.view(values);
+  }
+  has(key) {
+    return this.source.has(key);
+  }
+  *entries() {
+    for (const [key, values] of this.source) yield [key, this.view(values)];
+  }
+  keys() {
+    return this.source.keys();
+  }
+  *values() {
+    for (const values of this.source.values()) yield this.view(values);
+  }
+  forEach(callbackfn, thisArg) {
+    for (const [key, values] of this.source) callbackfn.call(thisArg, this.view(values), key, this);
+  }
+  [Symbol.iterator]() {
+    return this.entries();
+  }
+  get [Symbol.toStringTag]() {
+    return "ReadonlyMap";
+  }
+};
+function freezeJsonValue(value) {
+  if (value === null || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) freezeJsonValue(child);
+  return Object.freeze(value);
+}
+function newMutableReplayIndex() {
+  const threadIds = [];
+  const events = [];
+  const byId = /* @__PURE__ */ new Map();
+  const parentsById = /* @__PURE__ */ new Map();
+  const childrenById = /* @__PURE__ */ new Map();
+  const view = {
+    threadId: null,
+    threadIds: readonlyArrayView(threadIds),
+    events: readonlyArrayView(events),
+    byId: new ReadonlyMapView(byId),
+    parentsById: new ReadonlyArrayMapView(parentsById),
+    childrenById: new ReadonlyArrayMapView(childrenById)
+  };
+  return {
+    threadId: null,
+    threadIds,
+    threadIdSet: /* @__PURE__ */ new Set(),
+    events,
+    byId,
+    parentsById,
+    childrenById,
+    parentIdsById: /* @__PURE__ */ new Map(),
+    linkedParentIdsByChildId: /* @__PURE__ */ new Map(),
+    waitingChildrenByParentId: /* @__PURE__ */ new Map(),
+    seqs: [],
+    seqsStrictlyIncreasing: true,
+    view
+  };
+}
+function parseTraceDelta(raw3) {
+  const value = JSON.parse(raw3);
+  if (typeof value.identity !== "string" || typeof value.length !== "number" || typeof value.modifiedNs !== "string" || typeof value.start !== "number" || typeof value.end !== "number" || typeof value.content !== "string" || typeof value.cursorHash !== "string" || typeof value.endCursorHash !== "string") throw new Error("native trace delta returned an invalid response");
+  return value;
 }
 var LiminaTracer = class _LiminaTracer {
   constructor(threadId, maxInMemory = 8192, retainDurableInMemory = true) {
     this.threadId = threadId;
     this.maxInMemory = maxInMemory;
     this.retainDurableInMemory = retainDurableInMemory;
+    this.events = new OrderedRing(maxInMemory);
   }
   threadId;
   maxInMemory;
   retainDurableInMemory;
   seq = 0;
-  events = [];
+  events;
   durableEvents = [];
   appendTraceName;
   lastIntegrityHash = null;
   replayCache;
+  /** Append mode owns a verified byte cursor, not the file or its event thread
+   *  namespace. Every query catches up bounded suffixes first, so other valid
+   *  appenders and logical threads are visible while any replacement,
+   *  truncation, or corrupt suffix fails closed. */
+  appendState;
+  work = {
+    deltaReads: 0,
+    deltaBytesRead: 0,
+    linesVerified: 0,
+    tailEntriesVisited: 0,
+    fullFileReads: 0
+  };
   enableAppend(name) {
     this.appendTraceName = name;
-    this.lastIntegrityHash = lastIntegrityHash(this.durableEvents);
+    const index = newMutableReplayIndex();
+    this.appendState = {
+      name,
+      index,
+      identity: null,
+      offset: 0,
+      modifiedNs: null,
+      cursorHash: null,
+      partialFinalLine: "",
+      nextLineNumber: 1,
+      previousHash: null,
+      fault: null
+    };
     return this;
   }
   emit(e2) {
+    if (this.appendTraceName !== void 0) this.syncAppendTrace();
     const seq = this.seq;
     const timestamp = (/* @__PURE__ */ new Date()).toISOString();
     const body = stableStringify({ seq, type: e2.type, actorId: e2.actorId, payload: e2.payload });
-    const id4 = `evt_${e2.actorId}_${String(seq).padStart(12, "0")}_${fnv1a16(body)}`;
-    const event = { id: id4, timestamp, ...e2 };
+    const id7 = `evt_${e2.actorId}_${String(seq).padStart(12, "0")}_${fnv1a16(body)}`;
+    const event = { id: id7, timestamp, ...e2 };
     if (this.appendTraceName !== void 0) {
-      const hash7 = hashEvent(event, this.lastIntegrityHash);
-      const withIntegrity = { ...event, integrity: { hash: hash7, previousHash: this.lastIntegrityHash } };
+      const state = this.requireAppendState();
+      if (state.partialFinalLine.length > 0) {
+        throw new TraceIntegrityError(
+          "partial_final_line",
+          state.nextLineNumber,
+          "cannot append while the durable trace has an incomplete final line"
+        );
+      }
+      const hash9 = hashEvent(event, state.previousHash);
+      const withIntegrity = { ...event, integrity: { hash: hash9, previousHash: state.previousHash } };
       ops.op_append_trace(this.appendTraceName, JSON.stringify(withIntegrity) + "\n");
-      this.lastIntegrityHash = hash7;
+      this.syncAppendTrace();
+      return id7;
     }
     this.seq++;
     this.events.push(event);
     if (this.appendTraceName === void 0 && this.retainDurableInMemory) this.durableEvents.push(event);
     this.replayCache = void 0;
-    if (this.events.length > this.maxInMemory) this.events.shift();
-    return id4;
+    return id7;
   }
   trace(actorId, sinceTick) {
-    return this.events.filter((ev) => {
+    if (this.appendTraceName !== void 0) this.syncAppendTrace();
+    return this.events.toArray().filter((ev) => {
       if (ev.actorId !== actorId) return false;
       if (sinceTick === void 0) return true;
       const p2 = ev.payload;
@@ -107372,12 +107677,19 @@ var LiminaTracer = class _LiminaTracer {
   /** Serialize to EventLoom-shaped JSONL, computing the sha256 integrity chain
    *  here (genesis previousHash=null; previousHash(N)=hash(N-1)). */
   exportJsonl() {
-    if (this.appendTraceName !== void 0) return ops.op_read_trace(this.appendTraceName);
-    if (!this.retainDurableInMemory) return serializeEvents(this.events);
+    if (this.appendTraceName !== void 0) {
+      this.syncAppendTrace();
+      this.work.fullFileReads++;
+      return ops.op_read_trace(this.appendTraceName);
+    }
+    if (!this.retainDurableInMemory) return serializeEvents(this.events.toArray());
     return serializeEvents(this.durableEvents);
   }
   durableEventCount() {
-    if (this.appendTraceName !== void 0) return this.replay().events.length;
+    if (this.appendTraceName !== void 0) {
+      this.syncAppendTrace();
+      return this.requireAppendState().index.events.length;
+    }
     if (!this.retainDurableInMemory) return this.events.length;
     return this.durableEvents.length;
   }
@@ -107389,11 +107701,31 @@ var LiminaTracer = class _LiminaTracer {
   tail(opts = {}) {
     const afterSeq = opts.afterSeq ?? -1;
     const limit = Math.max(0, Math.min(opts.limit ?? 100, 1e3));
-    const source = this.appendTraceName !== void 0 ? this.replay().events : this.retainDurableInMemory ? this.durableEvents : this.events;
+    if (this.appendTraceName !== void 0) {
+      this.syncAppendTrace();
+      const index = this.requireAppendState().index;
+      const events2 = [];
+      let cursor = index.seqsStrictlyIncreasing ? upperBound(index.seqs, afterSeq) : 0;
+      let nextAfterSeq = null;
+      for (; cursor < index.events.length && events2.length < limit; cursor++) {
+        this.work.tailEntriesVisited++;
+        const ev = index.events[cursor];
+        const seq = index.seqs[cursor];
+        if (seq === null || seq <= afterSeq) continue;
+        nextAfterSeq = seq;
+        if (opts.actorId !== void 0 && ev.actorId !== opts.actorId) continue;
+        if (opts.threadId !== void 0 && ev.threadId !== opts.threadId) continue;
+        if (opts.type !== void 0 && ev.type !== opts.type) continue;
+        events2.push(ev);
+      }
+      return { events: events2, nextAfterSeq };
+    }
+    const source = this.retainDurableInMemory ? this.durableEvents : this.events.toArray();
     const events = source.filter((ev) => {
       const seq = eventSeq(ev.id);
       if (seq === null || seq <= afterSeq) return false;
       if (opts.actorId !== void 0 && ev.actorId !== opts.actorId) return false;
+      if (opts.threadId !== void 0 && ev.threadId !== opts.threadId) return false;
       if (opts.type !== void 0 && ev.type !== opts.type) return false;
       return true;
     }).slice(0, limit);
@@ -107401,6 +107733,7 @@ var LiminaTracer = class _LiminaTracer {
     return { events, nextAfterSeq: last };
   }
   explainEvent(eventId) {
+    if (this.appendTraceName !== void 0) this.syncAppendTrace();
     const replay = this.replay();
     const event = replay.byId.get(eventId);
     if (event === void 0) return void 0;
@@ -107414,20 +107747,185 @@ var LiminaTracer = class _LiminaTracer {
    *  childrenById) — the M8 audit surface walks this to answer "why was X
    *  allowed/denied" from the real recorded events. */
   replay() {
-    if (this.appendTraceName !== void 0) return _LiminaTracer.replayTrace(this.appendTraceName);
+    if (this.appendTraceName !== void 0) {
+      this.syncAppendTrace();
+      const index = this.requireAppendState().index;
+      index.view.threadId = index.threadId;
+      index.view.partialFinalLine = this.requireAppendState().partialFinalLine || void 0;
+      return index.view;
+    }
     if (this.replayCache === void 0) {
-      this.replayCache = buildReplay(this.retainDurableInMemory ? this.durableEvents : this.events);
+      this.replayCache = buildReplay(this.retainDurableInMemory ? this.durableEvents : this.events.toArray());
     }
     return this.replayCache;
   }
+  requireAppendState() {
+    if (this.appendState === void 0) throw new Error("tracer is not append-backed");
+    return this.appendState;
+  }
+  static readDelta(name, offset, maxBytes) {
+    const readDelta = ops.op_read_trace_delta;
+    if (readDelta === void 0) {
+      throw new Error("append-backed tracing requires native op_read_trace_delta support");
+    }
+    return parseTraceDelta(readDelta(name, offset, maxBytes));
+  }
+  syncAppendTrace() {
+    const state = this.requireAppendState();
+    if (state.fault !== null) throw state.fault;
+    try {
+      for (; ; ) {
+        const delta = _LiminaTracer.readDelta(state.name, state.offset, 256 * 1024);
+        this.work.deltaReads++;
+        if (state.identity === null) {
+          state.identity = delta.identity;
+        } else if (delta.identity !== state.identity) {
+          throw new TraceIntegrityError(
+            "trace_replaced",
+            state.nextLineNumber,
+            "durable trace was atomically replaced while this tracer was live; reopen is required"
+          );
+        }
+        if (delta.length < state.offset) {
+          throw new TraceIntegrityError(
+            "trace_truncated",
+            state.nextLineNumber,
+            `durable trace shrank from verified offset ${state.offset} to ${delta.length}`
+          );
+        }
+        if (delta.start !== state.offset) {
+          throw new Error(`native trace delta started at ${delta.start}, expected ${state.offset}`);
+        }
+        if (state.cursorHash !== null && delta.cursorHash !== state.cursorHash) {
+          throw new TraceIntegrityError(
+            "verified_prefix_modified",
+            Math.max(1, state.nextLineNumber - 1),
+            "the verified durable trace tail was modified in place"
+          );
+        }
+        if (delta.end === state.offset && delta.length === state.offset && state.modifiedNs !== null && delta.modifiedNs !== state.modifiedNs) {
+          throw new TraceIntegrityError(
+            "verified_prefix_modified",
+            Math.max(1, state.nextLineNumber - 1),
+            "the durable trace changed without appending bytes"
+          );
+        }
+        if (delta.end < delta.start || delta.end > delta.length) {
+          throw new Error("native trace delta returned invalid byte bounds");
+        }
+        const bytesRead = delta.end - delta.start;
+        this.work.deltaBytesRead += bytesRead;
+        state.offset = delta.end;
+        state.modifiedNs = delta.modifiedNs;
+        state.cursorHash = delta.endCursorHash;
+        if (delta.content.length > 0) this.verifyAppendSuffix(delta.content);
+        if (state.offset >= delta.length) break;
+        if (bytesRead === 0) throw new Error("native trace delta made no progress");
+      }
+    } catch (err) {
+      if (err instanceof TraceIntegrityError) state.fault = err;
+      throw err;
+    }
+  }
+  verifyAppendSuffix(content) {
+    const state = this.requireAppendState();
+    const joined = state.partialFinalLine + content;
+    const pieces = joined.split("\n");
+    state.partialFinalLine = pieces.pop() ?? "";
+    for (const line of pieces) this.verifyAppendLine(line);
+  }
+  verifyAppendLine(line) {
+    const state = this.requireAppendState();
+    const lineNumber = state.nextLineNumber;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new TraceIntegrityError("invalid_json", lineNumber, `invalid trace JSON at line ${lineNumber}: ${message}`);
+    }
+    const event = parsed;
+    if (event.integrity === void 0 || typeof event.integrity.hash !== "string") {
+      throw new TraceIntegrityError("missing_integrity", lineNumber, `trace line ${lineNumber} is missing integrity`);
+    }
+    if (event.integrity.previousHash !== state.previousHash) {
+      throw new TraceIntegrityError("previous_hash_mismatch", lineNumber, `trace line ${lineNumber} previousHash mismatch`);
+    }
+    const expected = hashEvent(event, state.previousHash);
+    if (event.integrity.hash !== expected) {
+      throw new TraceIntegrityError("hash_mismatch", lineNumber, `trace line ${lineNumber} hash mismatch`);
+    }
+    const durableEvent = freezeJsonValue(event);
+    this.addAppendEvent(durableEvent);
+    state.previousHash = event.integrity.hash;
+    this.lastIntegrityHash = event.integrity.hash;
+    state.nextLineNumber++;
+    this.work.linesVerified++;
+  }
+  addAppendEvent(event) {
+    const index = this.requireAppendState().index;
+    index.events.push(event);
+    index.byId.set(event.id, event);
+    if (!index.threadIdSet.has(event.threadId)) {
+      index.threadIdSet.add(event.threadId);
+      index.threadIds.push(event.threadId);
+      index.threadId = index.threadIds.length === 1 ? event.threadId : null;
+    }
+    index.view.threadId = index.threadId;
+    const rawParentIds = event.parentEventId === null ? event.causedBy : [event.parentEventId, ...event.causedBy];
+    const parentIds = [...new Set(rawParentIds)];
+    index.parentIdsById.set(event.id, parentIds);
+    this.refreshParents(event);
+    for (const parentId of parentIds) {
+      if (index.byId.has(parentId)) continue;
+      const waiting = index.waitingChildrenByParentId.get(parentId) ?? [];
+      waiting.push(event);
+      index.waitingChildrenByParentId.set(parentId, waiting);
+    }
+    const waitingChildren = index.waitingChildrenByParentId.get(event.id) ?? [];
+    for (const child of waitingChildren) {
+      this.refreshParents(child);
+    }
+    index.waitingChildrenByParentId.delete(event.id);
+    const seq = eventSeq(event.id);
+    const priorSeq = index.seqs.length > 0 ? index.seqs[index.seqs.length - 1] : null;
+    if (seq === null || priorSeq !== null && seq <= priorSeq) index.seqsStrictlyIncreasing = false;
+    index.seqs.push(seq);
+    if (seq !== null && seq >= this.seq) this.seq = seq + 1;
+    this.events.push(withoutIntegrity(event));
+  }
+  refreshParents(event) {
+    const index = this.requireAppendState().index;
+    const parentIds = index.parentIdsById.get(event.id) ?? [];
+    const parents = parentIds.map((parentId) => index.byId.get(parentId)).filter((parent) => parent !== void 0);
+    index.parentsById.set(event.id, parents);
+    const linked = index.linkedParentIdsByChildId.get(event.id) ?? /* @__PURE__ */ new Set();
+    index.linkedParentIdsByChildId.set(event.id, linked);
+    for (const parent of parents) {
+      if (linked.has(parent.id)) continue;
+      const children = index.childrenById.get(parent.id) ?? [];
+      children.push(event);
+      linked.add(parent.id);
+      if (!index.childrenById.has(parent.id)) index.childrenById.set(parent.id, children);
+    }
+    if (parents.length === parentIds.length) {
+      index.parentIdsById.delete(event.id);
+      index.linkedParentIdsByChildId.delete(event.id);
+    }
+  }
   inspect() {
-    const actors = [...new Set(this.events.map((e2) => e2.actorId))];
+    if (this.appendTraceName !== void 0) this.syncAppendTrace();
+    const hot = this.events.toArray();
+    const actors = [...new Set(hot.map((e2) => e2.actorId))];
     return {
       threadId: this.threadId,
       eventCount: this.events.length,
       actors,
-      recent: this.events.slice(-20)
+      recent: hot.slice(-20)
     };
+  }
+  workMetrics() {
+    return Object.freeze({ ...this.work });
   }
   static replayTrace(name, opts = {}) {
     return _LiminaTracer.replayJsonl(ops.op_read_trace(name), opts);
@@ -107437,34 +107935,35 @@ var LiminaTracer = class _LiminaTracer {
   }
   static appendOnEmit(threadId, name, maxInMemory = 8192, opts = {}) {
     const recoverPartialFinalLine = opts.recoverPartialFinalLine ?? true;
-    let jsonl = "";
     try {
-      jsonl = ops.op_read_trace(name);
+      _LiminaTracer.readDelta(name, 0, 0);
     } catch {
       ops.op_write_trace(name, "");
     }
-    const replayOpts = {
-      ...opts,
-      onPartialFinalLine: recoverPartialFinalLine ? "ignore" : opts.onPartialFinalLine
-    };
-    let replay;
+    let tracer = new _LiminaTracer(threadId, maxInMemory, false).enableAppend(name);
     try {
-      replay = _LiminaTracer.replayJsonl(jsonl, replayOpts);
+      tracer.syncAppendTrace();
     } catch (err) {
-      if (!recoverPartialFinalLine || !(err instanceof TraceIntegrityError)) throw err;
-      const lines = jsonl.split("\n");
-      const prefixLineCount = Math.max(0, err.lineNumber - 1);
-      const prefix = prefixLineCount === 0 ? "" : lines.slice(0, prefixLineCount).join("\n") + "\n";
-      replay = _LiminaTracer.replayJsonl(prefix, { ...opts, onPartialFinalLine: "error" });
-      ops.op_write_trace(name, serializeEvents(replay.events.map(withoutIntegrity)));
+      if (!recoverPartialFinalLine || !(err instanceof TraceIntegrityError) || !isRecoverableBootCorruption(err.reason)) throw err;
+      const verified = tracer.requireAppendState().index.events.map(withoutIntegrity);
+      ops.op_write_trace(name, serializeEvents(verified));
+      tracer = new _LiminaTracer(threadId, maxInMemory, false).enableAppend(name);
+      tracer.syncAppendTrace();
     }
-    const tracer = _LiminaTracer.fromReplay(replay, maxInMemory, false);
-    tracer.appendTraceName = name;
-    if (tracer.threadId !== threadId && replay.events.length === 0) {
-      return new _LiminaTracer(threadId, maxInMemory).enableAppend(name);
+    const state = tracer.requireAppendState();
+    if (state.partialFinalLine.length > 0) {
+      if (recoverPartialFinalLine) {
+        ops.op_write_trace(name, serializeEvents(state.index.events.map(withoutIntegrity)));
+        tracer = new _LiminaTracer(threadId, maxInMemory, false).enableAppend(name);
+        tracer.syncAppendTrace();
+      } else if ((opts.onPartialFinalLine ?? "error") === "error") {
+        throw new TraceIntegrityError(
+          "partial_final_line",
+          state.nextLineNumber,
+          "trace has an incomplete final JSONL line"
+        );
+      }
     }
-    tracer.lastIntegrityHash = integrityTail(replay.events);
-    if (recoverPartialFinalLine && replay.partialFinalLine !== void 0) ops.op_write_trace(name, serializeEvents(replay.events.map(withoutIntegrity)));
     return tracer;
   }
   static ephemeral(threadId, maxInMemory = 8192) {
@@ -107484,9 +107983,8 @@ var LiminaTracer = class _LiminaTracer {
       const seq = eventSeq(ev.id);
       if (seq !== null && seq > maxSeq) maxSeq = seq;
     }
-    while (tracer.events.length > maxInMemory) tracer.events.shift();
     tracer.seq = maxSeq + 1;
-    tracer.lastIntegrityHash = keepDurable ? lastIntegrityHash(tracer.durableEvents) : integrityTail(replay.events);
+    tracer.lastIntegrityHash = keepDurable ? lastIntegrityHash(tracer.durableEvents) : integrityTail([...replay.events]);
     return tracer;
   }
   static replayJsonl(jsonl, opts = {}) {
@@ -107532,15 +108030,28 @@ function integrityTail(events) {
   const last = events[events.length - 1];
   return last.integrity?.hash ?? lastIntegrityHash(events.map(withoutIntegrity));
 }
+function upperBound(sorted, value) {
+  let low = 0;
+  let high = sorted.length;
+  while (low < high) {
+    const middle = low + (high - low >> 1);
+    if (sorted[middle] <= value) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+function isRecoverableBootCorruption(reason) {
+  return reason === "invalid_json" || reason === "missing_integrity" || reason === "previous_hash_mismatch" || reason === "hash_mismatch";
+}
 function serializeEvents(events) {
   let previousHash = null;
   const lines = [];
   for (const ev of events) {
     const clean = withoutIntegrity(ev);
-    const hash7 = hashEvent(clean, previousHash);
-    const withIntegrity = { ...clean, integrity: { hash: hash7, previousHash } };
+    const hash9 = hashEvent(clean, previousHash);
+    const withIntegrity = { ...clean, integrity: { hash: hash9, previousHash } };
     lines.push(JSON.stringify(withIntegrity));
-    previousHash = hash7;
+    previousHash = hash9;
   }
   return lines.length > 0 ? lines.join("\n") + "\n" : "";
 }
@@ -107548,10 +108059,14 @@ function buildReplay(events) {
   const byId = /* @__PURE__ */ new Map();
   const parentsById = /* @__PURE__ */ new Map();
   const childrenById = /* @__PURE__ */ new Map();
-  let threadId = null;
+  const threadIds = [];
+  const threadIdSet = /* @__PURE__ */ new Set();
   for (const ev of events) {
     byId.set(ev.id, ev);
-    if (threadId === null) threadId = ev.threadId;
+    if (!threadIdSet.has(ev.threadId)) {
+      threadIdSet.add(ev.threadId);
+      threadIds.push(ev.threadId);
+    }
   }
   for (const ev of events) {
     const parents = [];
@@ -107566,7 +108081,14 @@ function buildReplay(events) {
     }
     parentsById.set(ev.id, parents);
   }
-  return { threadId, events, byId, parentsById, childrenById };
+  return {
+    threadId: threadIds.length === 1 ? threadIds[0] : null,
+    threadIds,
+    events,
+    byId,
+    parentsById,
+    childrenById
+  };
 }
 
 // src/worldlog/snapshot.ts
@@ -107580,6 +108102,18 @@ var SnapshotParticipantRegistry = class {
       throw new Error(`snapshot participants: duplicate key '${participant2.key}'`);
     }
     this.participants.set(participant2.key, participant2);
+  }
+  /**
+   * Remove a dynamically owned participant. Supplying the expected object makes teardown
+   * ownership-safe: a stale session cannot unregister a newer participant that reused its key.
+   */
+  unregister(key, expected) {
+    const current = this.participants.get(key);
+    if (current === void 0) return false;
+    if (expected !== void 0 && current !== expected) {
+      throw new Error(`snapshot participants: key '${key}' is owned by a different participant`);
+    }
+    return this.participants.delete(key);
   }
   get(key) {
     return this.participants.get(key);
@@ -107794,6 +108328,23 @@ var worldSnapshotSchema = external_exports.object({
   managers: external_exports.record(external_exports.string(), external_exports.unknown()).optional().default({}),
   physics: external_exports.string()
 });
+function parseSnapshot(json2) {
+  let parsed;
+  try {
+    parsed = JSON.parse(json2);
+  } catch (err) {
+    throw new Error(`world snapshot: invalid JSON: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const snap = worldSnapshotSchema.safeParse(parsed);
+  if (!snap.success) {
+    const record6 = typeof parsed === "object" && parsed !== null ? parsed : {};
+    if (record6.snapshotVersion !== void 0 && record6.snapshotVersion !== SNAPSHOT_VERSION) {
+      throw new Error(`world snapshot: version ${record6.snapshotVersion} != ${SNAPSHOT_VERSION}`);
+    }
+    throw new Error(`world snapshot: malformed snapshot: ${snap.error.message}`);
+  }
+  return snap.data;
+}
 
 // src/render/entity-scene-resources.ts
 var HOST_LIFETIME = "host";
@@ -107807,10 +108358,10 @@ function disposeEntitySceneResources(root) {
   const geometries = /* @__PURE__ */ new Set();
   const materials = /* @__PURE__ */ new Set();
   const textures = /* @__PURE__ */ new Set();
-  const visit = (object4) => {
-    if (!isRecord(object4)) return;
-    if (isRecord(object4.geometry)) geometries.add(object4.geometry);
-    const objectMaterials = Array.isArray(object4.material) ? object4.material : [object4.material];
+  const visit = (object5) => {
+    if (!isRecord(object5)) return;
+    if (isRecord(object5.geometry)) geometries.add(object5.geometry);
+    const objectMaterials = Array.isArray(object5.material) ? object5.material : [object5.material];
     for (const material of objectMaterials) {
       if (!isRecord(material)) continue;
       materials.add(material);
@@ -107891,6 +108442,10 @@ function policyEventPayload(d2) {
 
 // src/skills/registry.ts
 var policyAlreadyCommitted = /* @__PURE__ */ Symbol("limina.policyAlreadyCommitted");
+var preparedInvocation = /* @__PURE__ */ Symbol("limina.preparedInvocation");
+function isRecord2(value) {
+  return typeof value === "object" && value !== null;
+}
 function stampTick(applyTick, proposeTick) {
   return typeof applyTick === "number" && Number.isFinite(applyTick) && applyTick >= proposeTick ? applyTick : proposeTick;
 }
@@ -108009,6 +108564,31 @@ var SkillRegistry = class _SkillRegistry {
   }
   describe(name) {
     return this.skills.get(name);
+  }
+  /** Validate and normalize once before an authority wrapper snapshots input.
+   * The returned applicator carries a module-private one-shot proof, so invoke()
+   * consumes the exact Zod-normalized value without running transforms twice. */
+  prepareInvocation(name, input) {
+    const skill = this.skills.get(name);
+    if (skill === void 0) return { ok: false };
+    const parsed = skill.input.safeParse(input);
+    if (!parsed.success) return { ok: false };
+    const state = {
+      registry: this,
+      name,
+      skill,
+      rawInput: input,
+      input: parsed.data,
+      used: false
+    };
+    return {
+      ok: true,
+      input: parsed.data,
+      apply(base) {
+        if (state.used) throw new Error(`prepared invocation '${name}' was already consumed`);
+        return { ...base, [preparedInvocation]: state };
+      }
+    };
   }
   /** The default BOOTSTRAP core set — the universal cross-domain verbs an agent
    *  starts with (plus discovery, so it can always find more). Grant-filtering then
@@ -108151,6 +108731,7 @@ var SkillRegistry = class _SkillRegistry {
   reviewGate;
   pending = /* @__PURE__ */ new Map();
   maxPendingApprovals = 1024;
+  approvalHoldTimeoutMs = 15 * 60 * 1e3;
   /** Install the review gate (e.g. `reviewProfileGate(...)`), REPLACING any existing. */
   setApprovalGate(gate) {
     this.reviewGate = gate;
@@ -108173,8 +108754,39 @@ var SkillRegistry = class _SkillRegistry {
     }
     this.maxPendingApprovals = limit;
   }
+  /** Bound proposal-time authorization reservations. Approval controls are not
+   * replay commands, so wall time is appropriate here; world mutations remain
+   * deterministic and occur only on a timely grant. */
+  setApprovalHoldTimeoutMs(timeoutMs) {
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+      throw new Error("approval hold timeout must be a positive safe integer");
+    }
+    this.approvalHoldTimeoutMs = timeoutMs;
+    this.expireApprovals();
+  }
+  expireApprovals(nowMs = Date.now()) {
+    for (const [approvalId, pending] of this.pending) {
+      if (nowMs - pending.createdAtMs < this.approvalHoldTimeoutMs) continue;
+      this.pending.delete(approvalId);
+      this.tracer.emit({
+        type: "skill.approval.denied",
+        actorId: pending.base.agentId,
+        threadId: pending.base.sessionId,
+        parentEventId: null,
+        causedBy: [approvalId],
+        payload: {
+          approvalId,
+          skill: pending.skill,
+          reason: "approval hold expired",
+          holdTimeoutMs: this.approvalHoldTimeoutMs,
+          reservation: "proposal-time policy usage remains consumed until its policy window resets"
+        }
+      });
+    }
+  }
   /** Snapshot of the actions currently held for approval (for a reviewer/editor). */
   pendingApprovals() {
+    this.expireApprovals();
     return [...this.pending.values()].map((p2) => ({
       approvalId: p2.approvalId,
       skill: p2.skill,
@@ -108201,6 +108813,7 @@ var SkillRegistry = class _SkillRegistry {
       tick: base.tick,
       world: base.world,
       chainId,
+      chainToken: base.chainToken,
       undo: (label4, fn) => {
         if (!this.chainUndoLedgerEnabled) return;
         const frame2 = this.chainFrames.get(chainId);
@@ -108210,7 +108823,7 @@ var SkillRegistry = class _SkillRegistry {
         frame2.ledger.push({ label: label4, fn });
       },
       emit: (type, payload, causedBy) => {
-        const id4 = this.tracer.emit({
+        const id7 = this.tracer.emit({
           type,
           actorId: base.agentId,
           threadId: base.sessionId,
@@ -108218,8 +108831,8 @@ var SkillRegistry = class _SkillRegistry {
           causedBy: causedBy ?? [],
           payload
         });
-        emitted.push(id4);
-        return id4;
+        emitted.push(id7);
+        return id7;
       }
     };
     return { ctx, meta: () => ({ executionTimeMs: Date.now() - start, eventsEmitted: emitted }) };
@@ -108237,8 +108850,8 @@ var SkillRegistry = class _SkillRegistry {
     try {
       for (const reconcile of this.worldReconcilers) reconcile(base.world);
       if (skill.hooks?.before) await skill.hooks.before(input, ctx);
-      const result = await skill.handler(input, ctx);
-      const parsedResult = skill.output.safeParse(result);
+      const result2 = await skill.handler(input, ctx);
+      const parsedResult = skill.output.safeParse(result2);
       if (!parsedResult.success) {
         ctx.emit("skill.contract.violation", {
           skill: skill.name,
@@ -108252,9 +108865,30 @@ var SkillRegistry = class _SkillRegistry {
           metadata: meta4()
         };
       }
-      if (skill.hooks?.after) await skill.hooks.after(result, ctx);
+      const normalizedResult = parsedResult.data;
+      if (skill.hooks?.after) await skill.hooks.after(normalizedResult, ctx);
+      if (skill.commitFields !== void 0 && skill.commitFields.length > 0 && isRecord2(normalizedResult)) {
+        try {
+          for (const field of skill.commitFields) {
+            if (field in normalizedResult) cloneReplayValue(normalizedResult[field]);
+          }
+        } catch (error51) {
+          const message = error51 instanceof Error ? error51.message : String(error51);
+          ctx.emit("skill.contract.violation", {
+            skill: skill.name,
+            version: skill.version,
+            boundary: "commitFields",
+            error: message
+          }, execCausedBy);
+          return {
+            success: false,
+            error: { code: "contract_error", message: `skill '${skill.name}' returned a non-replayable commit field: ${message}` },
+            metadata: meta4()
+          };
+        }
+      }
       ctx.emit("skill.executed", { skill: skill.name, version: skill.version, input, tick: stampTick(applyTick, base.tick) }, execCausedBy);
-      return { success: true, result, metadata: meta4() };
+      return { success: true, result: normalizedResult, metadata: meta4() };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const code3 = err instanceof SkillInvocationError ? err.code : "handler_error";
@@ -108275,9 +108909,18 @@ var SkillRegistry = class _SkillRegistry {
         metadata: meta4()
       };
     }
-    const parsed = skill.input.safeParse(input);
-    if (!parsed.success) {
-      return { success: false, error: { code: "invalid_input", message: parsed.error.message }, metadata: meta4() };
+    const prepared2 = base[preparedInvocation];
+    let normalizedInput;
+    if (prepared2 !== void 0 && prepared2.registry === this && prepared2.name === name && prepared2.skill === skill && !prepared2.used) {
+      prepared2.used = true;
+      normalizedInput = prepared2.input;
+    } else {
+      const candidate = prepared2?.rawInput ?? input;
+      const parsed = skill.input.safeParse(candidate);
+      if (!parsed.success) {
+        return { success: false, error: { code: "invalid_input", message: parsed.error.message }, metadata: meta4() };
+      }
+      normalizedInput = parsed.data;
     }
     let policyEventId;
     if (this.policy !== void 0 && base[policyAlreadyCommitted] !== true) {
@@ -108290,7 +108933,7 @@ var SkillRegistry = class _SkillRegistry {
         permissions: base.permissions,
         requiredPermissions: skill.permissions,
         tick: base.tick,
-        args: parsed.data,
+        args: normalizedInput,
         pkg: base.pkg
       });
       policyEventId = ctx.emit(policyEventType(decision), policyEventPayload(decision), base.causedBy);
@@ -108310,6 +108953,7 @@ var SkillRegistry = class _SkillRegistry {
     }
     const execCausedBy = policyEventId !== void 0 ? [...base.causedBy ?? [], policyEventId] : base.causedBy;
     if (base.approvalGateBypassed !== true && this.reviewGate !== void 0 && this.reviewGate(name, base, skill)) {
+      this.expireApprovals();
       if (this.pending.size >= this.maxPendingApprovals) {
         ctx.emit("skill.approval.denied", {
           skill: name,
@@ -108324,15 +108968,15 @@ var SkillRegistry = class _SkillRegistry {
       }
       const approvalId = ctx.emit(
         "skill.approval.pending",
-        { skill: name, version: skill.version, input: parsed.data, agentId: base.agentId, profile: base.profile, tick: base.tick },
+        { skill: name, version: skill.version, input: normalizedInput, agentId: base.agentId, profile: base.profile, tick: base.tick },
         execCausedBy
       );
-      this.pending.set(approvalId, { approvalId, skill: name, input: parsed.data, base, createdTick: base.tick });
+      this.pending.set(approvalId, { approvalId, skill: name, input: normalizedInput, base, createdTick: base.tick, createdAtMs: Date.now() });
       return { success: false, error: { code: "pending_approval", message: approvalId }, metadata: meta4() };
     }
     const frame2 = this.chainUndoLedgerEnabled && !this.chainFrames.has(chainId) ? this.beginChainFrame(chainId, skill, base.world) : void 0;
     try {
-      const res = await this.applyHandler(skill, parsed.data, base, ctx, meta4, execCausedBy);
+      const res = await this.applyHandler(skill, normalizedInput, base, ctx, meta4, execCausedBy);
       if (frame2 !== void 0 && !res.success) this.unwindChainFrame(frame2, ctx);
       return res;
     } finally {
@@ -108478,6 +109122,7 @@ var SkillRegistry = class _SkillRegistry {
    *  id. Emits `skill.approval.granted` / `denied` on the original agent's thread,
    *  linked to the pending event so the causal chain stays intact. */
   async resolveApproval(approvalId, granted, reviewer) {
+    this.expireApprovals();
     const parked = this.pending.get(approvalId);
     if (parked === void 0) {
       return { success: false, error: { code: "not_found", message: `unknown or already-resolved approval: ${approvalId}` } };
@@ -108503,6 +109148,7 @@ var SkillRegistry = class _SkillRegistry {
       tick: stampTick(applyTick, parked.base.tick),
       causedBy: [approvalId, grantedId],
       chainId: void 0,
+      chainToken: void 0,
       approvalGateBypassed: true,
       [policyAlreadyCommitted]: true
     };
@@ -108548,9 +109194,9 @@ var AssetRegistry = class _AssetRegistry {
    *  touching the host asset root. */
   loadBundle(entries) {
     for (const e2 of entries) {
-      const hash7 = assetContentHash(e2.bytes, this.ops);
-      if (hash7 !== "sha256:" && hash7 !== e2.hash) {
-        throw new Error(`asset '${e2.id}': bundle content hash mismatch (declared ${e2.hash}, computed ${hash7})`);
+      const hash9 = assetContentHash(e2.bytes, this.ops);
+      if (hash9 !== "sha256:" && hash9 !== e2.hash) {
+        throw new Error(`asset '${e2.id}': bundle content hash mismatch (declared ${e2.hash}, computed ${hash9})`);
       }
       this.cache.set(e2.id, { assetId: e2.id, bytes: e2.bytes, hash: e2.hash });
       this.packaged.add(e2.id);
@@ -108581,8 +109227,8 @@ var AssetRegistry = class _AssetRegistry {
       throw new Error(`asset '${assetId}': package-sourced but missing from the bundle`);
     }
     const bytes = this.ops.op_read_asset(assetId);
-    const hash7 = assetContentHash(bytes, this.ops);
-    const resolved = { assetId, bytes, hash: hash7 };
+    const hash9 = assetContentHash(bytes, this.ops);
+    const resolved = { assetId, bytes, hash: hash9 };
     this.cache.set(assetId, resolved);
     return resolved;
   }
@@ -108603,7 +109249,7 @@ var AssetRegistry = class _AssetRegistry {
   /** Refs for every asset resolved this session, for the export manifest's
    *  content-addressed `assets` list. */
   refs() {
-    return [...this.cache.keys()].map((id4) => this.toRef(id4));
+    return [...this.cache.keys()].map((id7) => this.toRef(id7));
   }
   /** The full content-addressed bundle (refs + bytes) for every resolved asset —
    *  what assembleExport serializes into assets.jsonl so the package is
@@ -108800,8 +109446,8 @@ function thermalPass(src, dst, rows, cols, talus) {
     }
   }
 }
-function erodeBlock(raw, rows, cols, gr0, gc0, seed, p2) {
-  const h2 = new Float32Array(raw);
+function erodeBlock(raw3, rows, cols, gr0, gc0, seed, p2) {
+  const h2 = new Float32Array(raw3);
   if (p2.rain > 0) {
     const whole = Math.floor(p2.rain);
     const frac = p2.rain - whole;
@@ -108968,8 +109614,8 @@ function rawElevation01(seed, x3, z4, lod, shape) {
 }
 function requestHintKey(hints) {
   if (hints === void 0) return "";
-  const keys = Object.keys(hints).sort();
-  return JSON.stringify(keys.map((k3) => [k3, hints[k3]]));
+  const keys2 = Object.keys(hints).sort();
+  return JSON.stringify(keys2.map((k3) => [k3, hints[k3]]));
 }
 var EROSION_MACRO = 8;
 var ProceduralTerrainSource = class {
@@ -109007,15 +109653,15 @@ var ProceduralTerrainSource = class {
     const grStart = mbz * EROSION_MACRO * (TILE_RES - 1);
     const gc0 = gcStart - apron;
     const gr0 = grStart - apron;
-    const raw = new Float32Array(dim * dim);
+    const raw3 = new Float32Array(dim * dim);
     for (let r2 = 0; r2 < dim; r2++) {
       const z4 = (gr0 + r2) * CELL_SIZE;
       for (let c2 = 0; c2 < dim; c2++) {
         const x3 = (gc0 + c2) * CELL_SIZE;
-        raw[r2 * dim + c2] = rawElevation01(seed, x3, z4, lod, shape);
+        raw3[r2 * dim + c2] = rawElevation01(seed, x3, z4, lod, shape);
       }
     }
-    const eroded = erodeBlock(raw, dim, dim, gr0, gc0, seed, ep);
+    const eroded = erodeBlock(raw3, dim, dim, gr0, gc0, seed, ep);
     const interior = new Float32Array(span * span);
     for (let r2 = 0; r2 < span; r2++) {
       for (let c2 = 0; c2 < span; c2++) interior[r2 * span + c2] = eroded[(r2 + apron) * dim + (c2 + apron)];
@@ -109931,7 +110577,10 @@ function resolveSurface(materials, material, pbr, color3) {
     };
   }
   if (isMaterialName(material)) {
-    return { surface: createMaterial(material, { pbr }), state: { name: material, pbr, ...getMaterialParams(material) } };
+    return {
+      surface: createMaterial(material, { pbr }),
+      state: { name: material, pbr, ...getMaterialParams(material) }
+    };
   }
   if (materials?.has(material)) {
     return { surface: materials.build(material), state: { name: material, pbr: true } };
@@ -109979,7 +110628,12 @@ function makeCreateEntity(materials) {
     handler: (input, ctx) => {
       const [x3, y4, z4] = input.position;
       const geometry = primitiveGeometry(input.shape, input.size);
-      const { surface: material, state: materialState } = resolveSurface(materials, input.material, input.pbr, input.color);
+      const { surface: material, state: materialState } = resolveSurface(
+        materials,
+        input.material,
+        input.pbr,
+        input.color
+      );
       const mesh = new Mesh(geometry, material);
       ctx.world.scene.add(mesh);
       const eid = spawnRenderable(ctx.world.ecs, mesh, x3, y4, z4);
@@ -109992,9 +110646,24 @@ function makeCreateEntity(materials) {
       const collider = input.collider ?? (input.dynamic || input.static ? "box" : void 0);
       if (input.static) {
         if (collider === "sphere") {
-          bodyId = ctx.world.ops.op_physics_add_static_sphere(x3, y4, z4, input.size / 2, input.friction, input.restitution);
+          bodyId = ctx.world.ops.op_physics_add_static_sphere(
+            x3,
+            y4,
+            z4,
+            input.size / 2,
+            input.friction,
+            input.restitution
+          );
         } else if (collider === "capsule") {
-          bodyId = ctx.world.ops.op_physics_add_static_capsule(x3, y4, z4, input.size / 2, input.size / 4, input.friction, input.restitution);
+          bodyId = ctx.world.ops.op_physics_add_static_capsule(
+            x3,
+            y4,
+            z4,
+            input.size / 2,
+            input.size / 4,
+            input.friction,
+            input.restitution
+          );
         } else {
           const [hx, hy, hz] = boxColliderHalf(geometry);
           bodyId = ctx.world.ops.op_physics_add_static_box(x3, y4, z4, hx, hy, hz, input.friction, input.restitution);
@@ -110003,9 +110672,24 @@ function makeCreateEntity(materials) {
         if (collider === "sphere") {
           bodyId = ctx.world.ops.op_physics_add_sphere(x3, y4, z4, input.size / 2, input.friction, input.restitution);
         } else if (collider === "capsule") {
-          bodyId = ctx.world.ops.op_physics_add_capsule(x3, y4, z4, input.size / 2, input.size / 4, input.friction, input.restitution);
+          bodyId = ctx.world.ops.op_physics_add_capsule(
+            x3,
+            y4,
+            z4,
+            input.size / 2,
+            input.size / 4,
+            input.friction,
+            input.restitution
+          );
         } else {
-          bodyId = ctx.world.ops.op_physics_add_box_material(x3, y4, z4, input.size / 2, input.friction, input.restitution);
+          bodyId = ctx.world.ops.op_physics_add_box_material(
+            x3,
+            y4,
+            z4,
+            input.size / 2,
+            input.friction,
+            input.restitution
+          );
         }
       }
       const origin = { tool: "scene.createEntity", input: { ...input } };
@@ -110162,7 +110846,9 @@ var queryEntities = {
   }
 };
 var inspectInput = external_exports.object({
-  tag: external_exports.string().optional().describe("Summarize only entities carrying this tag (the AABB/sample is over the filtered set; the tag census is always global)."),
+  tag: external_exports.string().optional().describe(
+    "Summarize only entities carrying this tag (the AABB/sample is over the filtered set; the tag census is always global)."
+  ),
   sampleSize: external_exports.number().int().min(0).max(64).default(8).describe("How many entity positions to include in `sample` (for spot-checking placement).")
 });
 var inspectScene = {
@@ -110273,17 +110959,19 @@ function captureRecipe(world, rootId, name) {
   const indexOf = /* @__PURE__ */ new Map();
   const queue = [rootId];
   while (queue.length > 0) {
-    const id4 = queue.shift();
-    if (indexOf.has(id4)) continue;
-    indexOf.set(id4, order.length);
-    order.push(id4);
-    for (const child of world.entities.childrenOf(id4)) queue.push(child);
+    const id7 = queue.shift();
+    if (indexOf.has(id7)) continue;
+    indexOf.set(id7, order.length);
+    order.push(id7);
+    for (const child of world.entities.childrenOf(id7)) queue.push(child);
   }
-  const nodes = order.map((id4, i2) => {
-    const entry = world.entities.resolve(id4);
-    if (entry === void 0) throw new Error(`scene.group: entity '${id4}' vanished during capture`);
+  const nodes = order.map((id7, i2) => {
+    const entry = world.entities.resolve(id7);
+    if (entry === void 0) throw new Error(`scene.group: entity '${id7}' vanished during capture`);
     if (entry.origin === void 0) {
-      throw new Error(`scene.group: entity '${id4}' has no origin create-command; only entities created through a recorded create skill can be captured into a recipe`);
+      throw new Error(
+        `scene.group: entity '${id7}' has no origin create-command; only entities created through a recorded create skill can be captured into a recipe`
+      );
     }
     const offset = computeLocalOffset(world, rootId, entry.eid);
     const parentIdx = i2 === 0 ? null : entry.parent !== void 0 ? indexOf.get(entry.parent) ?? null : null;
@@ -110323,16 +111011,22 @@ async function instantiateRecipe(registry2, recipe, targetMatrix, seed, ctx) {
       permissions: ctx.permissions,
       tick: ctx.tick,
       world: ctx.world,
-      chainId: ctx.chainId
+      chainId: ctx.chainId,
+      chainToken: ctx.chainToken
     });
     if (!res.success) {
-      throw new Error(`scene.instantiateGroup: replay of '${node.origin.tool}' (node ${i2}) failed: ${JSON.stringify(res.error)}`);
+      throw new Error(
+        `scene.instantiateGroup: replay of '${node.origin.tool}' (node ${i2}) failed: ${JSON.stringify(res.error)}`
+      );
     }
     created.push(res.result.entity);
   }
   return { root: created[0], entities: created };
 }
-var ScaleInput = external_exports.union([external_exports.number().positive(), external_exports.tuple([external_exports.number().positive(), external_exports.number().positive(), external_exports.number().positive()])]);
+var ScaleInput = external_exports.union([
+  external_exports.number().positive(),
+  external_exports.tuple([external_exports.number().positive(), external_exports.number().positive(), external_exports.number().positive()])
+]);
 function normScale(scale2) {
   return scale2 === void 0 ? [1, 1, 1] : typeof scale2 === "number" ? [scale2, scale2, scale2] : scale2;
 }
@@ -110418,9 +111112,15 @@ function makeDuplicate(registry2) {
       if (src === void 0) throw new Error(`scene.duplicate: unknown entity '${input.entity}'`);
       const recipe = captureRecipe(ctx.world, input.entity, `__dup:${input.entity}`);
       const eid = src.eid;
-      const rot = new Quaternion(Rotation.x[eid], Rotation.y[eid], Rotation.z[eid], Rotation.w[eid]).multiply(yawQuat(input.yaw));
+      const rot = new Quaternion(Rotation.x[eid], Rotation.y[eid], Rotation.z[eid], Rotation.w[eid]).multiply(
+        yawQuat(input.yaw)
+      );
       const targetMatrix = new Matrix4().compose(
-        new Vector3(Position.x[eid] + input.offset[0], Position.y[eid] + input.offset[1], Position.z[eid] + input.offset[2]),
+        new Vector3(
+          Position.x[eid] + input.offset[0],
+          Position.y[eid] + input.offset[1],
+          Position.z[eid] + input.offset[2]
+        ),
         rot,
         new Vector3(Scale.x[eid], Scale.y[eid], Scale.z[eid])
       );
@@ -110726,15 +111426,15 @@ function makeSetMaterial(materials) {
         if (metalness3 !== void 0) material.metalness = metalness3;
       };
       const replacedMaterials = /* @__PURE__ */ new Set();
-      const visit = (object4) => {
-        if (input.castShadow !== void 0) object4.castShadow = input.castShadow;
-        if (input.receiveShadow !== void 0) object4.receiveShadow = input.receiveShadow;
-        if (buildReplacement !== void 0 && object4.isMesh === true) {
+      const visit = (object5) => {
+        if (input.castShadow !== void 0) object5.castShadow = input.castShadow;
+        if (input.receiveShadow !== void 0) object5.receiveShadow = input.receiveShadow;
+        if (buildReplacement !== void 0 && object5.isMesh === true) {
           const next = buildReplacement();
           if (color3 !== void 0) next.color.set(color3);
           if (roughness3 !== void 0) next.roughness = roughness3;
           if (metalness3 !== void 0) next.metalness = metalness3;
-          const target = object4;
+          const target = object5;
           const previous = target.material;
           target.material = next;
           for (const material of Array.isArray(previous) ? previous : [previous]) {
@@ -110744,8 +111444,8 @@ function makeSetMaterial(materials) {
               material.dispose?.();
             }
           }
-        } else if (hasMaterialChange && object4.material !== void 0) {
-          const material = object4.material;
+        } else if (hasMaterialChange && object5.material !== void 0) {
+          const material = object5.material;
           if (Array.isArray(material)) {
             for (const sub3 of material) applyMaterialProps(sub3);
           } else {
@@ -110915,10 +111615,10 @@ var addLight = {
       state = { nextId: 0, lights: /* @__PURE__ */ new Map() };
       addedLights.set(ctx.world, state);
     }
-    const id4 = `light_${state.nextId++}`;
-    state.lights.set(id4, light);
-    ctx.emit("three.light.added", { id: id4, kind: input.kind });
-    return { ok: true, id: id4 };
+    const id7 = `light_${state.nextId++}`;
+    state.lights.set(id7, light);
+    ctx.emit("three.light.added", { id: id7, kind: input.kind });
+    return { ok: true, id: id7 };
   }
 };
 var removeLightInput = external_exports.object({ id: external_exports.string() });
@@ -110947,11 +111647,11 @@ var loadGltfInput = external_exports.object({
   assetId: external_exports.string(),
   position: Vec35.default([0, 0, 0])
 });
-function isRecord2(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null;
 }
 function isMaterialLike(value) {
-  return isRecord2(value);
+  return isRecord3(value);
 }
 var GLTF_TEXTURE_SLOTS = [
   "map",
@@ -110971,7 +111671,7 @@ var GLTF_TEXTURE_SLOTS = [
 ];
 function rehomeTextureToData(tex) {
   if (typeof __liminaImageBitmapToRGBA !== "function") return false;
-  if (!isRecord2(tex) || !("image" in tex)) return false;
+  if (!isRecord3(tex) || !("image" in tex)) return false;
   const rgba = __liminaImageBitmapToRGBA(tex.image);
   if (rgba === null) return false;
   const upload = tex;
@@ -111001,25 +111701,25 @@ function rehomeMaterialTextures(material) {
     for (const m2 of material) rehomeMaterialTextures(m2);
     return;
   }
-  if (!isRecord2(material)) return;
+  if (!isRecord3(material)) return;
   for (const slot of GLTF_TEXTURE_SLOTS) {
     if (slot in material) rehomeTextureToData(material[slot]);
   }
 }
 function prepareGltfTextures(root) {
-  const visit = (object4) => {
-    if (object4.material !== void 0) rehomeMaterialTextures(object4.material);
+  const visit = (object5) => {
+    if (object5.material !== void 0) rehomeMaterialTextures(object5.material);
   };
   if (typeof root.traverse === "function") root.traverse(visit);
   else visit(root);
 }
-function collectGltfMetadata(assetId, hash7, bytes, root) {
+function collectGltfMetadata(assetId, hash9, bytes, root) {
   let objectCount = 0;
   let meshCount = 0;
   const materials = /* @__PURE__ */ new Set();
   const textures = /* @__PURE__ */ new Set();
   const visit = (node) => {
-    if (!isRecord2(node)) return;
+    if (!isRecord3(node)) return;
     objectCount += 1;
     if (node.isMesh === true) meshCount += 1;
     const material = node.material;
@@ -111038,12 +111738,12 @@ function collectGltfMetadata(assetId, hash7, bytes, root) {
     }
   };
   visit(root);
-  const name = isRecord2(root) && typeof root.name === "string" && root.name.length > 0 ? root.name : void 0;
+  const name = isRecord3(root) && typeof root.name === "string" && root.name.length > 0 ? root.name : void 0;
   return {
     kind: "gltf",
     assetId,
     source: `assets/${assetId}`,
-    hash: hash7,
+    hash: hash9,
     bytes: bytes.byteLength,
     rootName: name,
     objectCount,
@@ -111086,18 +111786,18 @@ function gltfSceneContentKey(assetId, bytes) {
 }
 function markGltfHostResources(root) {
   const mark = (resource) => {
-    if (!isRecord2(resource)) return;
-    const userData3 = isRecord2(resource.userData) ? resource.userData : void 0;
+    if (!isRecord3(resource)) return;
+    const userData3 = isRecord3(resource.userData) ? resource.userData : void 0;
     if (userData3 !== void 0) userData3.liminaLifetime = "host";
   };
-  const visit = (object4) => {
-    if (!isRecord2(object4)) return;
-    mark(object4.geometry);
-    const materials = Array.isArray(object4.material) ? object4.material : [object4.material];
+  const visit = (object5) => {
+    if (!isRecord3(object5)) return;
+    mark(object5.geometry);
+    const materials = Array.isArray(object5.material) ? object5.material : [object5.material];
     for (const material of materials) {
-      if (!isRecord2(material)) continue;
+      if (!isRecord3(material)) continue;
       mark(material);
-      for (const value of Object.values(material)) if (isRecord2(value) && value.isTexture === true) mark(value);
+      for (const value of Object.values(material)) if (isRecord3(value) && value.isTexture === true) mark(value);
     }
   };
   const candidate = root;
@@ -111108,14 +111808,14 @@ function disposeGltfTemplate(root, disposedResources) {
   const geometries = /* @__PURE__ */ new Set();
   const materials = /* @__PURE__ */ new Set();
   const textures = /* @__PURE__ */ new Set();
-  const visit = (object4) => {
-    if (!isRecord2(object4)) return;
-    if (isRecord2(object4.geometry)) geometries.add(object4.geometry);
-    for (const material of Array.isArray(object4.material) ? object4.material : [object4.material]) {
-      if (!isRecord2(material)) continue;
+  const visit = (object5) => {
+    if (!isRecord3(object5)) return;
+    if (isRecord3(object5.geometry)) geometries.add(object5.geometry);
+    for (const material of Array.isArray(object5.material) ? object5.material : [object5.material]) {
+      if (!isRecord3(material)) continue;
       materials.add(material);
       for (const value of Object.values(material)) {
-        if (isRecord2(value) && value.isTexture === true) textures.add(value);
+        if (isRecord3(value) && value.isTexture === true) textures.add(value);
       }
     }
   };
@@ -111140,8 +111840,8 @@ function disposeGltfTemplate(root, disposedResources) {
   return errors;
 }
 function arrayView(value) {
-  if (!isRecord2(value)) return void 0;
-  const array5 = ArrayBuffer.isView(value.array) ? value.array : isRecord2(value.data) && ArrayBuffer.isView(value.data.array) ? value.data.array : void 0;
+  if (!isRecord3(value)) return void 0;
+  const array5 = ArrayBuffer.isView(value.array) ? value.array : isRecord3(value.data) && ArrayBuffer.isView(value.data.array) ? value.data.array : void 0;
   return array5;
 }
 function estimateGltfSceneResidentBytes(root) {
@@ -111149,14 +111849,14 @@ function estimateGltfSceneResidentBytes(root) {
   const materials = /* @__PURE__ */ new Set();
   const textures = /* @__PURE__ */ new Set();
   let objects = 0;
-  const visit = (object4) => {
-    if (!isRecord2(object4)) return;
+  const visit = (object5) => {
+    if (!isRecord3(object5)) return;
     objects++;
-    if (isRecord2(object4.geometry)) geometries.add(object4.geometry);
-    for (const material of Array.isArray(object4.material) ? object4.material : [object4.material]) {
-      if (!isRecord2(material)) continue;
+    if (isRecord3(object5.geometry)) geometries.add(object5.geometry);
+    for (const material of Array.isArray(object5.material) ? object5.material : [object5.material]) {
+      if (!isRecord3(material)) continue;
       materials.add(material);
-      for (const value of Object.values(material)) if (isRecord2(value) && value.isTexture === true) textures.add(value);
+      for (const value of Object.values(material)) if (isRecord3(value) && value.isTexture === true) textures.add(value);
     }
   };
   const candidate = root;
@@ -111169,8 +111869,8 @@ function estimateGltfSceneResidentBytes(root) {
   };
   for (const geometry of geometries) {
     takeGeometryArray(geometry.index);
-    if (isRecord2(geometry.attributes)) for (const attribute3 of Object.values(geometry.attributes)) takeGeometryArray(attribute3);
-    if (isRecord2(geometry.morphAttributes)) {
+    if (isRecord3(geometry.attributes)) for (const attribute3 of Object.values(geometry.attributes)) takeGeometryArray(attribute3);
+    if (isRecord3(geometry.morphAttributes)) {
       for (const attributes of Object.values(geometry.morphAttributes)) {
         if (Array.isArray(attributes)) for (const attribute3 of attributes) takeGeometryArray(attribute3);
       }
@@ -111180,9 +111880,9 @@ function estimateGltfSceneResidentBytes(root) {
   let textureBytes = 0;
   for (const texture3 of textures) {
     const images = [];
-    if (isRecord2(texture3.image)) images.push(texture3.image);
+    if (isRecord3(texture3.image)) images.push(texture3.image);
     if (Array.isArray(texture3.mipmaps)) {
-      for (const mip of texture3.mipmaps) if (isRecord2(mip)) images.push(mip);
+      for (const mip of texture3.mipmaps) if (isRecord3(mip)) images.push(mip);
     }
     let baseBytes = 0;
     for (const image of images) {
@@ -111204,14 +111904,14 @@ function cloneGltfRoot(root) {
   if (typeof r2.clone !== "function") return root;
   const copy = r2.clone(true);
   const cloneMaterial = (material) => {
-    if (!isRecord2(material) || typeof material.clone !== "function") return material;
+    if (!isRecord3(material) || typeof material.clone !== "function") return material;
     const cloned = material.clone();
-    if (isRecord2(cloned.userData)) delete cloned.userData.liminaLifetime;
+    if (isRecord3(cloned.userData)) delete cloned.userData.liminaLifetime;
     return cloned;
   };
-  const visit = (object4) => {
-    if (!isRecord2(object4) || object4.material === void 0) return;
-    object4.material = Array.isArray(object4.material) ? object4.material.map(cloneMaterial) : cloneMaterial(object4.material);
+  const visit = (object5) => {
+    if (!isRecord3(object5) || object5.material === void 0) return;
+    object5.material = Array.isArray(object5.material) ? object5.material.map(cloneMaterial) : cloneMaterial(object5.material);
   };
   const candidate = copy;
   if (typeof candidate.traverse === "function") candidate.traverse(visit);
@@ -111307,7 +112007,6 @@ var GltfSceneCache = class {
   }
   configureKtx2(renderer) {
     if (this.#disposed) throw new Error("glTF scene cache is disposed");
-    if (this.#activeWorlds !== 0 || this.#entries.size !== 0 || this.#inFlight.size !== 0) throw new Error("KTX2 must be configured before glTF prewarm or world acquisition");
     if (this.#ktx2TranscoderPath === void 0) return;
     if (this.#ktx2Loader !== void 0) return;
     const manager = new LoadingManager();
@@ -111495,7 +112194,7 @@ var defaultGltfSceneCache = new GltfSceneCache();
 async function parseGltfScene(assetId, bytes, cache3 = defaultGltfSceneCache) {
   return cache3.parse(assetId, bytes);
 }
-async function loadGltfIntoScene(ctx, assetId, bytes, hash7, placement) {
+async function loadGltfIntoScene(ctx, assetId, bytes, hash9, placement) {
   const [x3, y4, z4] = placement.position;
   const skipMesh = ctx.world.simWorker === true;
   let root;
@@ -111531,7 +112230,7 @@ async function loadGltfIntoScene(ctx, assetId, bytes, hash7, placement) {
     Scale.y[eid] = placement.scale[1];
     Scale.z[eid] = placement.scale[2];
   }
-  const resource = root !== void 0 ? collectGltfMetadata(assetId, hash7, bytes, root) : { kind: "gltf", assetId, source: `assets/${assetId}`, hash: hash7, bytes: bytes.byteLength, objectCount: 0, meshCount: 0, materialCount: 0, textureCount: 0 };
+  const resource = root !== void 0 ? collectGltfMetadata(assetId, hash9, bytes, root) : { kind: "gltf", assetId, source: `assets/${assetId}`, hash: hash9, bytes: bytes.byteLength, objectCount: 0, meshCount: 0, materialCount: 0, textureCount: 0 };
   const entity = root !== void 0 ? ctx.world.entities.create({ eid, mesh: root, resource }) : ctx.world.entities.create({ eid, origin: { tool: "asset.load", input: { assetId, position: placement.position } } });
   ctx.undo?.(`gltf entity ${assetId}`, () => {
     teardownEntity(ctx.world, entity);
@@ -111679,10 +112378,10 @@ function gltfLocalAabb(bytes) {
   const rootNodeIds = json2.scenes?.[json2.scene ?? 0]?.nodes ?? // No scene declared: fall back to every node as a root (matches THREE's tolerant load).
   nodes.map((_3, i2) => i2);
   const stack3 = [];
-  for (const id4 of rootNodeIds) stack3.push({ id: id4, world: new Matrix4() });
+  for (const id7 of rootNodeIds) stack3.push({ id: id7, world: new Matrix4() });
   while (stack3.length > 0) {
-    const { id: id4, world } = stack3.pop();
-    const node = nodes[id4];
+    const { id: id7, world } = stack3.pop();
+    const node = nodes[id7];
     if (node === void 0) continue;
     nodeLocalMatrix(node, local);
     const nodeWorld = new Matrix4().multiplyMatrices(world, local);
@@ -112394,8 +113093,8 @@ function buildTreeImpostorMaterial(options) {
   const fallbackForward = T8.vec3(cameraRightObject.z.negate(), 0, cameraRightObject.x).normalize();
   const forward = horizontalLength.greaterThan(1e-5).select(ordinaryForward, fallbackForward);
   const right = T8.vec3(forward.z, 0, forward.x.negate());
-  const raw = T8.positionGeometry;
-  material.positionNode = center.add(right.mul(raw.x.mul(centerScale.w))).add(T8.vec3(0, raw.y.mul(centerScale.w), 0)).add(forward.mul(raw.z.mul(centerScale.w)));
+  const raw3 = T8.positionGeometry;
+  material.positionNode = center.add(right.mul(raw3.x.mul(centerScale.w))).add(T8.vec3(0, raw3.y.mul(centerScale.w), 0)).add(forward.mul(raw3.z.mul(centerScale.w)));
   const viewObject = toCamera.normalize();
   const cy = yaw.cos(), sy = yaw.sin();
   const viewLocal = T8.vec3(
@@ -112492,15 +113191,15 @@ function positive(value, label4) {
   return value;
 }
 function hashWords(words) {
-  let hash7 = 0xcbf29ce484222325n;
+  let hash9 = 0xcbf29ce484222325n;
   for (const value of words) {
     let word = BigInt(value >>> 0);
     for (let byte = 0; byte < 4; byte++) {
-      hash7 = (hash7 ^ word & 0xffn) * 0x100000001b3n & 0xffffffffffffffffn;
+      hash9 = (hash9 ^ word & 0xffn) * 0x100000001b3n & 0xffffffffffffffffn;
       word >>= 8n;
     }
   }
-  return `fnv1a64:${hash7.toString(16).padStart(16, "0")}`;
+  return `fnv1a64:${hash9.toString(16).padStart(16, "0")}`;
 }
 function floatWords(value) {
   const view = new DataView(new ArrayBuffer(8));
@@ -112771,11 +113470,11 @@ var TreeSpeciesBatchAdapter = class {
   apply(instances, anchorX, anchorZ) {
     this.root.position.set(anchorX, 0, anchorZ);
     let full = 0, reduced = 0, impostor2 = 0;
-    const matrix = new Matrix4(), position = new Vector3(), quaternion = new Quaternion(), scale2 = new Vector3();
+    const matrix = new Matrix4(), position = new Vector3(), quaternion2 = new Quaternion(), scale2 = new Vector3();
     for (const tree of instances) {
       matrix.compose(
         position.set(tree.x - anchorX, tree.y, tree.z - anchorZ),
-        quaternion.setFromEuler(new Euler(0, tree.yaw, 0)),
+        quaternion2.setFromEuler(new Euler(0, tree.yaw, 0)),
         scale2.setScalar(tree.scale)
       );
       if (tree.rung === 0) {
@@ -112901,11 +113600,11 @@ var TreePopulationBatchSet = class {
     }
   }
   publishAll(anchorX, anchorZ) {
-    const selected = new Map([...this.species.keys()].map((id4) => [id4, []]));
+    const selected = new Map([...this.species.keys()].map((id7) => [id7, []]));
     for (const page of [...this.pages.values()].sort((a2, b3) => a2.selection.pageZ - b3.selection.pageZ || a2.selection.pageX - b3.selection.pageX)) {
       for (const tree of page.selection.instances) selected.get(tree.speciesId).push(tree);
     }
-    for (const [id4, adapter] of this.species) adapter.publish(selected.get(id4), anchorX, anchorZ);
+    for (const [id7, adapter] of this.species) adapter.publish(selected.get(id7), anchorX, anchorZ);
     this.root.position.set(0, 0, 0);
     this.anchorX = anchorX;
     this.anchorZ = anchorZ;
@@ -113103,8 +113802,8 @@ var TreePopulationResidencyController = class {
 // src/render/tree-population-runtime.ts
 function meshes(root) {
   const found = [];
-  root.traverse?.((object4) => {
-    if (object4.isMesh) found.push(object4);
+  root.traverse?.((object5) => {
+    if (object5.isMesh) found.push(object5);
   });
   return found;
 }
@@ -113154,7 +113853,11 @@ function impostor(root, sourceHash, reducedHash) {
   if (found.length !== 1 || Array.isArray(found[0].material)) throw new Error("tree impostor runtime requires one quad primitive/material");
   const mesh = found[0], sourceMaterial = mesh.material;
   const descriptor = mesh.parent?.userData?.liminaTreeImpostor ?? mesh.userData?.liminaTreeImpostor ?? root.userData?.liminaTreeImpostor;
-  if (descriptor?.schema !== "limina.tree-impostor/2" || descriptor.sourceContentHash !== sourceHash || descriptor.lodContentHash !== reducedHash) {
+  if (descriptor?.schema !== "limina.tree-impostor/2") {
+    throw new Error("tree impostor descriptor is missing or has an unknown schema");
+  }
+  const verifiable = (hash9) => hash9 !== "sha256:" && hash9.length > "sha256:".length;
+  if (verifiable(sourceHash) && descriptor.sourceContentHash !== sourceHash || verifiable(reducedHash) && descriptor.lodContentHash !== reducedHash) {
     throw new Error("tree impostor descriptor does not match the pinned source/reduced asset hashes");
   }
   if (!(sourceMaterial.map instanceof Texture) || !(sourceMaterial.normalMap instanceof Texture)) throw new Error("tree impostor runtime requires embedded albedo and normal-depth textures");
@@ -113232,12 +113935,12 @@ var TreePopulationRuntime = class {
     const position = cameraPosition3(camera);
     const maximumIterations = this.residency.plan.pages.length + 1;
     for (let iteration = 0; iteration < maximumIterations; iteration++) {
-      const result = this.residency.update(position.x, position.y, position.z);
+      const result2 = this.residency.update(position.x, position.y, position.z);
       await this.residency.settle();
       const errors = this.takeErrors();
       if (errors.length > 0) throw new AggregateError(errors, "tree population readiness failed");
-      if (result.blocked) throw new Error("tree population readiness was blocked by its active-tree budget");
-      if (result.launched === null) return;
+      if (result2.blocked) throw new Error("tree population readiness was blocked by its active-tree budget");
+      if (result2.launched === null) return;
     }
     throw new Error("tree population readiness did not converge within its page bound");
   }
@@ -113425,13 +114128,13 @@ function requestKey(req) {
   const hints = req.hints;
   let hintStr = "";
   if (hints !== void 0) {
-    const keys = Object.keys(hints).sort();
-    for (const key of keys) {
+    const keys2 = Object.keys(hints).sort();
+    for (const key of keys2) {
       if (typeof hints[key] !== "number" || !Number.isFinite(hints[key])) {
         throw new Error(`terrain tile hint '${key}' must be finite`);
       }
     }
-    hintStr = JSON.stringify(keys.map((k3) => [k3, hints[k3]]));
+    hintStr = JSON.stringify(keys2.map((k3) => [k3, hints[k3]]));
   }
   return `s${seed}|x${tx}|z${tz}|l${lod}|h${hintStr}`;
 }
@@ -113561,10 +114264,10 @@ var TileCache = class {
 };
 function serializeTiles(entries) {
   if (entries.length === 0) return "";
-  return entries.map(({ key, hash: hash7, tile }) => {
+  return entries.map(({ key, hash: hash9, tile }) => {
     const line = {
       key,
-      hash: hash7,
+      hash: hash9,
       nrows: tile.nrows,
       ncols: tile.ncols,
       origin: tile.origin,
@@ -113585,31 +114288,31 @@ function parseTiles(jsonl) {
   for (let i2 = 0; i2 < lines.length; i2++) {
     const line = lines[i2];
     if (line.length === 0) continue;
-    let raw;
+    let raw3;
     try {
-      raw = JSON.parse(line);
+      raw3 = JSON.parse(line);
     } catch (err) {
       throw new Error(`tiles: invalid JSON on line ${i2 + 1}: ${err instanceof Error ? err.message : String(err)}`);
     }
-    if (typeof raw.key !== "string" || !Array.isArray(raw.heights) || raw.heights.length !== raw.nrows * raw.ncols) {
+    if (typeof raw3.key !== "string" || !Array.isArray(raw3.heights) || raw3.heights.length !== raw3.nrows * raw3.ncols) {
       throw new Error(`tiles: malformed tile on line ${i2 + 1}`);
     }
     const tile = {
-      nrows: raw.nrows,
-      ncols: raw.ncols,
-      origin: raw.origin,
-      scale: raw.scale,
-      heights: floatsFromBits(raw.heights)
+      nrows: raw3.nrows,
+      ncols: raw3.ncols,
+      origin: raw3.origin,
+      scale: raw3.scale,
+      heights: floatsFromBits(raw3.heights)
     };
-    if (raw.climate !== void 0) {
-      tile.climate = floatsFromBits(raw.climate);
-      tile.climateChannels = raw.climateChannels;
+    if (raw3.climate !== void 0) {
+      tile.climate = floatsFromBits(raw3.climate);
+      tile.climateChannels = raw3.climateChannels;
     }
-    const hash7 = tileContentHash(tile);
-    if (hash7 !== "sha256:" && hash7 !== raw.hash) {
-      throw new Error(`tiles: content hash mismatch on line ${i2 + 1} (stored ${raw.hash}, computed ${hash7})`);
+    const hash9 = tileContentHash(tile);
+    if (hash9 !== "sha256:" && hash9 !== raw3.hash) {
+      throw new Error(`tiles: content hash mismatch on line ${i2 + 1} (stored ${raw3.hash}, computed ${hash9})`);
     }
-    out.push({ key: raw.key, hash: raw.hash, tile });
+    out.push({ key: raw3.key, hash: raw3.hash, tile });
   }
   return out;
 }
@@ -113922,9 +114625,9 @@ function requireArray(value, path2, min3, max3) {
   for (let index = 0; index < value.length; index++) if (!Object.hasOwn(value, index)) fail(`${path2} must not be sparse`);
   return value;
 }
-function requireFiniteNumber(value, path2, min3, max3, integer3 = false) {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < min3 || value > max3 || integer3 && !Number.isInteger(value)) {
-    fail(`${path2} must be a ${integer3 ? "finite integer" : "finite number"} in [${min3}, ${max3}]`);
+function requireFiniteNumber(value, path2, min3, max3, integer4 = false) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min3 || value > max3 || integer4 && !Number.isInteger(value)) {
+    fail(`${path2} must be a ${integer4 ? "finite integer" : "finite number"} in [${min3}, ${max3}]`);
   }
   return value;
 }
@@ -114477,10 +115180,10 @@ var WorldMapSchema = external_exports.preprocess((value) => isPlainRootRecord(va
 function worldMapContentHash2(map2) {
   return worldMapContentHash(map2);
 }
-function migrateWorldMap(raw) {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return raw;
-  const map2 = raw;
-  if (typeof map2.version !== "number") return raw;
+function migrateWorldMap(raw3) {
+  if (raw3 === null || typeof raw3 !== "object" || Array.isArray(raw3)) return raw3;
+  const map2 = raw3;
+  if (typeof map2.version !== "number") return raw3;
   return map2;
 }
 function verifyWorldMap(parsed) {
@@ -114506,7 +115209,11 @@ function placedWorldAabb(local, position, rotationEuler, scale2, normalizeHeight
   for (let cx = 0; cx < 2; cx++) {
     for (let cy = 0; cy < 2; cy++) {
       for (let cz = 0; cz < 2; cz++) {
-        v3.set(cx ? local.max[0] : local.min[0], cy ? local.max[1] : local.min[1], cz ? local.max[2] : local.min[2]).applyMatrix4(m2);
+        v3.set(
+          cx ? local.max[0] : local.min[0],
+          cy ? local.max[1] : local.min[1],
+          cz ? local.max[2] : local.min[2]
+        ).applyMatrix4(m2);
         if (v3.x < min3[0]) min3[0] = v3.x;
         if (v3.y < min3[1]) min3[1] = v3.y;
         if (v3.z < min3[2]) min3[2] = v3.z;
@@ -114588,24 +115295,28 @@ var PLACE_PERMS = ["scene.write"];
 var scatterConfigSchema = external_exports.object({
   seed: external_exports.number().int(),
   density: external_exports.number().int().min(1).max(64).optional(),
-  assets: external_exports.array(external_exports.object({
-    id: external_exports.string(),
-    weight: external_exports.number().positive().optional(),
-    embedRadius: external_exports.number().nonnegative().optional(),
-    lods: external_exports.array(external_exports.object({
+  assets: external_exports.array(
+    external_exports.object({
       id: external_exports.string(),
-      distance: external_exports.number().positive(),
-      hysteresis: external_exports.number().min(0).max(1).optional()
-    })).min(1).optional(),
-    treeLod: external_exports.object({
-      reducedId: external_exports.string(),
-      reducedDistance: external_exports.number().positive(),
-      impostorId: external_exports.string(),
-      impostorDistance: external_exports.number().positive(),
-      cullDistance: external_exports.number().positive(),
-      hysteresis: external_exports.number().min(0).max(0.49).optional()
-    }).optional()
-  })).min(1),
+      weight: external_exports.number().positive().optional(),
+      embedRadius: external_exports.number().nonnegative().optional(),
+      lods: external_exports.array(
+        external_exports.object({
+          id: external_exports.string(),
+          distance: external_exports.number().positive(),
+          hysteresis: external_exports.number().min(0).max(1).optional()
+        })
+      ).min(1).optional(),
+      treeLod: external_exports.object({
+        reducedId: external_exports.string(),
+        reducedDistance: external_exports.number().positive(),
+        impostorId: external_exports.string(),
+        impostorDistance: external_exports.number().positive(),
+        cullDistance: external_exports.number().positive(),
+        hysteresis: external_exports.number().min(0).max(0.49).optional()
+      }).optional()
+    })
+  ).min(1),
   cellSize: external_exports.number().positive().optional(),
   elevationMin: external_exports.number().optional(),
   elevationMax: external_exports.number().optional(),
@@ -114708,7 +115419,11 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
             ctx.world.ops.op_physics_remove_body(colliderBodyId);
             throw new Error("asset.place collider owner disappeared before lifecycle binding");
           }
-          ctx.world.entities.chainRuntimeDispose(entity, "asset.place", () => ctx.world.ops.op_physics_remove_body(colliderBodyId));
+          ctx.world.entities.chainRuntimeDispose(
+            entity,
+            "asset.place",
+            () => ctx.world.ops.op_physics_remove_body(colliderBodyId)
+          );
           ctx.world.entities.bindRuntimeBodies(entity, [colliderBodyId]);
           ctx.undo("asset.place collider", () => {
             rec.runtimeDispose?.();
@@ -114716,14 +115431,19 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
         }
       }
       if (input.material !== void 0) {
-        const res = await registry2.invoke("three.setMaterial", { entity, ...input.material }, {
-          agentId: ctx.agentId,
-          sessionId: ctx.sessionId,
-          permissions: new Set(PLACE_PERMS),
-          tick: ctx.tick,
-          world: ctx.world,
-          chainId: ctx.chainId
-        });
+        const res = await registry2.invoke(
+          "three.setMaterial",
+          { entity, ...input.material },
+          {
+            agentId: ctx.agentId,
+            sessionId: ctx.sessionId,
+            permissions: new Set(PLACE_PERMS),
+            tick: ctx.tick,
+            world: ctx.world,
+            chainId: ctx.chainId,
+            chainToken: ctx.chainToken
+          }
+        );
         if (!res.success) {
           const failure = new Error(`asset.place: material override failed: ${JSON.stringify(res.error)}`);
           try {
@@ -114757,7 +115477,13 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
     permissions: [...PLACE_PERMS],
     commitFields: ["hash"],
     input: placeLodInput,
-    output: external_exports.object({ entity: external_exports.string(), hash: external_exports.string(), levels: external_exports.number().int(), resource: gltfResourceSchema, bounds: Vec36 }),
+    output: external_exports.object({
+      entity: external_exports.string(),
+      hash: external_exports.string(),
+      levels: external_exports.number().int(),
+      resource: gltfResourceSchema,
+      bounds: Vec36
+    }),
     handler: async (input, ctx) => {
       const ordered2 = [...input.lods].sort((a2, b3) => a2.distance - b3.distance);
       const resolved = ordered2.map((l2) => {
@@ -114822,11 +115548,12 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
         const body = colliderBodyId, lods = ctx.world.lods;
         ctx.world.entities.chainRuntimeDispose(entity, "asset.placeLod", () => {
           const errors = [];
-          if (body !== void 0) try {
-            ctx.world.ops.op_physics_remove_body(body);
-          } catch (error51) {
-            errors.push(error51);
-          }
+          if (body !== void 0)
+            try {
+              ctx.world.ops.op_physics_remove_body(body);
+            } catch (error51) {
+              errors.push(error51);
+            }
           if (lod !== void 0 && lods !== void 0) {
             const index = lods.indexOf(lod);
             if (index >= 0) lods.splice(index, 1);
@@ -114839,7 +115566,13 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
         });
       }
       const levelCount = lod !== void 0 ? lod.levels.length : 0;
-      ctx.emit("asset.lodPlaced", { levels: resolved.map((r2) => ({ assetId: r2.assetId, distance: r2.distance, hash: r2.hash })), position: input.position, grounded: input.ground, entity, mounted: levelCount });
+      ctx.emit("asset.lodPlaced", {
+        levels: resolved.map((r2) => ({ assetId: r2.assetId, distance: r2.distance, hash: r2.hash })),
+        position: input.position,
+        grounded: input.ground,
+        entity,
+        mounted: levelCount
+      });
       return { entity, hash: base.hash, levels: levelCount, resource, bounds };
     }
   };
@@ -114850,14 +115583,16 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
     mounted: external_exports.number().int(),
     assetHashes: external_exports.record(external_exports.string(), external_exports.string()),
     /** The computed placements (render/inspection). NOT logged — recomputed on replay. */
-    placements: external_exports.array(external_exports.object({
-      assetId: external_exports.string(),
-      x: external_exports.number(),
-      y: external_exports.number(),
-      z: external_exports.number(),
-      yaw: external_exports.number(),
-      scale: external_exports.number()
-    }))
+    placements: external_exports.array(
+      external_exports.object({
+        assetId: external_exports.string(),
+        x: external_exports.number(),
+        y: external_exports.number(),
+        z: external_exports.number(),
+        yaw: external_exports.number(),
+        scale: external_exports.number()
+      })
+    )
   });
   const scatter = {
     name: "asset.scatter",
@@ -114877,7 +115612,8 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
       const config2 = input.config;
       const paletteById = /* @__PURE__ */ new Map();
       for (const asset of config2.assets) {
-        if (asset.lods !== void 0 && asset.treeLod !== void 0) throw new RangeError(`asset.scatter: palette asset '${asset.id}' cannot combine generic lods with treeLod`);
+        if (asset.lods !== void 0 && asset.treeLod !== void 0)
+          throw new RangeError(`asset.scatter: palette asset '${asset.id}' cannot combine generic lods with treeLod`);
         if (asset.treeLod !== void 0 && !(asset.treeLod.reducedDistance < asset.treeLod.impostorDistance && asset.treeLod.impostorDistance < asset.treeLod.cullDistance)) {
           throw new RangeError(`asset.scatter: treeLod distances for '${asset.id}' must be strictly increasing`);
         }
@@ -114898,10 +115634,13 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
         paletteById.set(asset.id, previous ?? asset);
       }
       const treeSpecies = [...paletteById.values()].filter((asset) => asset.treeLod !== void 0);
-      if (treeSpecies.length > 12) throw new RangeError("asset.scatter: treeLod palette exceeds the 12-species runtime cap");
+      if (treeSpecies.length > 12)
+        throw new RangeError("asset.scatter: treeLod palette exceeds the 12-species runtime cap");
       const region = terrain.regions.get(input.regionId);
       if (region === void 0) {
-        throw new Error(`asset.scatter: unknown region '${input.regionId}' \u2014 generate it with world.generateRegion first`);
+        throw new Error(
+          `asset.scatter: unknown region '${input.regionId}' \u2014 generate it with world.generateRegion first`
+        );
       }
       const assetHashes = {};
       const referencedAssetIds = /* @__PURE__ */ new Set();
@@ -114913,13 +115652,13 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
           referencedAssetIds.add(asset.treeLod.impostorId);
         }
       }
-      for (const id4 of referencedAssetIds) {
-        const resolved = assets.resolve(id4);
-        const committed = input.assetHashes?.[id4];
+      for (const id7 of referencedAssetIds) {
+        const resolved = assets.resolve(id7);
+        const committed = input.assetHashes?.[id7];
         if (committed !== void 0 && committed !== resolved.hash) {
-          ctx.emit("asset.hash_mismatch", { assetId: id4, committed, resolved: resolved.hash });
+          ctx.emit("asset.hash_mismatch", { assetId: id7, committed, resolved: resolved.hash });
         }
-        assetHashes[id4] = resolved.hash;
+        assetHashes[id7] = resolved.hash;
       }
       const tiles = [...region.tiles.values()].sort((a2, b3) => a2.tz - b3.tz || a2.tx - b3.tx);
       const placements = [];
@@ -114929,8 +115668,10 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
         for (const inst of scatterAssets(tile, region.seed, config2)) placements.push(inst);
       }
       let treePlacementCount = 0;
-      for (const placement of placements) if (paletteById.get(placement.assetId)?.treeLod !== void 0) treePlacementCount++;
-      if (treePlacementCount > 24576) throw new RangeError("asset.scatter: treeLod placements exceed the 24,576 active-tree cap");
+      for (const placement of placements)
+        if (paletteById.get(placement.assetId)?.treeLod !== void 0) treePlacementCount++;
+      if (treePlacementCount > 24576)
+        throw new RangeError("asset.scatter: treeLod placements exceed the 24,576 active-tree cap");
       let mounted = 0;
       const scene = ctx.world.scene;
       if (scene !== void 0 && typeof scene.add === "function") {
@@ -114982,29 +115723,42 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
               errors.push(error51);
             }
           }
-          if (errors.length > 0) throw new AggregateError(errors, `asset.scatter cleanup failed in ${errors.length} operation(s)`);
+          if (errors.length > 0)
+            throw new AggregateError(errors, `asset.scatter cleanup failed in ${errors.length} operation(s)`);
         };
         try {
-          for (const [id4, list] of byId) {
-            const paletteAsset = paletteById.get(id4);
-            if (paletteAsset === void 0) throw new Error(`asset.scatter: placement references unknown palette asset '${id4}'`);
+          for (const [id7, list] of byId) {
+            const paletteAsset = paletteById.get(id7);
+            if (paletteAsset === void 0)
+              throw new Error(`asset.scatter: placement references unknown palette asset '${id7}'`);
             if (paletteAsset.treeLod !== void 0) {
               const [baseRoot, reducedRoot, impostorRoot] = await Promise.all([
-                parseGltfScene(id4, assets.resolve(id4).bytes, ctx.world.gltfCache),
-                parseGltfScene(paletteAsset.treeLod.reducedId, assets.resolve(paletteAsset.treeLod.reducedId).bytes, ctx.world.gltfCache),
-                parseGltfScene(paletteAsset.treeLod.impostorId, assets.resolve(paletteAsset.treeLod.impostorId).bytes, ctx.world.gltfCache)
+                parseGltfScene(id7, assets.resolve(id7).bytes, ctx.world.gltfCache),
+                parseGltfScene(
+                  paletteAsset.treeLod.reducedId,
+                  assets.resolve(paletteAsset.treeLod.reducedId).bytes,
+                  ctx.world.gltfCache
+                ),
+                parseGltfScene(
+                  paletteAsset.treeLod.impostorId,
+                  assets.resolve(paletteAsset.treeLod.impostorId).bytes,
+                  ctx.world.gltfCache
+                )
               ]);
               const population = new TreePopulationRuntime({
-                speciesId: id4,
+                speciesId: id7,
                 placements: list,
                 treeLod: paletteAsset.treeLod,
-                sourceHash: assetHashes[id4],
+                sourceHash: assetHashes[id7],
                 reducedHash: assetHashes[paletteAsset.treeLod.reducedId],
                 baseRoot,
                 reducedRoot,
                 impostorRoot,
                 scene,
-                onError: (error51) => ctx.emit("asset.tree_population_error", { assetId: id4, message: error51 instanceof Error ? error51.message : String(error51) })
+                onError: (error51) => ctx.emit("asset.tree_population_error", {
+                  assetId: id7,
+                  message: error51 instanceof Error ? error51.message : String(error51)
+                })
               });
               mountedTrees.push(population);
               worldLods.push(population);
@@ -115012,13 +115766,19 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
               mounted += population.draws;
             } else if (paletteAsset.lods !== void 0) {
               const levels = [
-                { assetId: id4, distance: 0, root: await parseGltfScene(id4, assets.resolve(id4).bytes, ctx.world.gltfCache) },
-                ...await Promise.all(paletteAsset.lods.map(async (level) => ({
-                  assetId: level.id,
-                  distance: level.distance,
-                  ...level.hysteresis !== void 0 ? { hysteresis: level.hysteresis } : {},
-                  root: await parseGltfScene(level.id, assets.resolve(level.id).bytes, ctx.world.gltfCache)
-                })))
+                {
+                  assetId: id7,
+                  distance: 0,
+                  root: await parseGltfScene(id7, assets.resolve(id7).bytes, ctx.world.gltfCache)
+                },
+                ...await Promise.all(
+                  paletteAsset.lods.map(async (level) => ({
+                    assetId: level.id,
+                    distance: level.distance,
+                    ...level.hysteresis !== void 0 ? { hysteresis: level.hysteresis } : {},
+                    root: await parseGltfScene(level.id, assets.resolve(level.id).bytes, ctx.world.gltfCache)
+                  }))
+                )
               ];
               const population = buildPopulationLodBatches(levels, list, config2.cellSize ?? 24);
               mountedPopulations.push(population);
@@ -115027,8 +115787,12 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
               population.update(ctx.world.camera);
               mounted += population.meshes.length;
             } else {
-              const root = await parseGltfScene(id4, assets.resolve(id4).bytes, ctx.world.gltfCache);
-              for (const mesh of buildAssetInstancedMeshes(root, list, config2.cellSize === void 0 ? void 0 : { chunkSize: config2.cellSize })) {
+              const root = await parseGltfScene(id7, assets.resolve(id7).bytes, ctx.world.gltfCache);
+              for (const mesh of buildAssetInstancedMeshes(
+                root,
+                list,
+                config2.cellSize === void 0 ? void 0 : { chunkSize: config2.cellSize }
+              )) {
                 mountedMeshes.push(mesh);
                 scene.add(mesh);
                 mounted++;
@@ -115040,7 +115804,10 @@ function registerAssetSkills(registry2, assets, terrain, layers) {
             cleanupMounted();
           } catch (cleanupError) {
             const cleanup = cleanupError instanceof AggregateError ? cleanupError.errors : [cleanupError];
-            throw new AggregateError([error51, ...cleanup], `asset.scatter mount failed and ${cleanup.length} rollback operation(s) failed`);
+            throw new AggregateError(
+              [error51, ...cleanup],
+              `asset.scatter mount failed and ${cleanup.length} rollback operation(s) failed`
+            );
           }
           throw error51;
         }
@@ -115146,7 +115913,13 @@ function registerMaterialSkills(registry2, assets, materials) {
       if (input.parallax !== void 0 && input.displacement === void 0) {
         throw new Error("material.import: parallax requires a displacement map");
       }
-      const textures = { albedo: null, normal: null, roughness: null, occlusion: null, displacement: null };
+      const textures = {
+        albedo: null,
+        normal: null,
+        roughness: null,
+        occlusion: null,
+        displacement: null
+      };
       const hashes = {};
       const maps = [];
       for (const slot of slots) {
@@ -115159,19 +115932,31 @@ function registerMaterialSkills(registry2, assets, materials) {
         maps.push(slot.id);
         textures[slot.key] = await decodeImageToDataTexture(resolved.bytes, slot.srgb);
       }
-      materials.define(input.name, {
+      materials.define(
+        input.name,
+        {
+          triplanar: input.triplanar,
+          scale: input.scale,
+          normalStrength: input.normalStrength,
+          sharpness: input.sharpness,
+          metalness: input.metalness,
+          roughness: input.baseRoughness,
+          occlusionStrength: input.occlusionStrength,
+          antiTiling: input.antiTiling,
+          parallax: input.parallax,
+          color: input.color
+        },
+        textures,
+        hashes
+      );
+      ctx.emit("material.imported", {
+        name: input.name,
+        maps,
+        hashes,
         triplanar: input.triplanar,
-        scale: input.scale,
-        normalStrength: input.normalStrength,
-        sharpness: input.sharpness,
-        metalness: input.metalness,
-        roughness: input.baseRoughness,
-        occlusionStrength: input.occlusionStrength,
         antiTiling: input.antiTiling,
-        parallax: input.parallax,
-        color: input.color
-      }, textures, hashes);
-      ctx.emit("material.imported", { name: input.name, maps, hashes, triplanar: input.triplanar, antiTiling: input.antiTiling, parallax: input.parallax !== void 0 });
+        parallax: input.parallax !== void 0
+      });
       return { name: input.name, maps, hashes };
     }
   };
@@ -115605,21 +116390,21 @@ function registerAgentSkills(registry2) {
 // src/skills/system.ts
 var Vec38 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
 var Quat2 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number(), external_exports.number()]);
-function isRecord3(value) {
+function isRecord4(value) {
   return typeof value === "object" && value !== null;
 }
 function numberField(value, key) {
-  if (!isRecord3(value)) return void 0;
+  if (!isRecord4(value)) return void 0;
   const n3 = value[key];
   return typeof n3 === "number" && Number.isFinite(n3) ? n3 : void 0;
 }
 function stringField(value, key) {
-  if (!isRecord3(value)) return void 0;
+  if (!isRecord4(value)) return void 0;
   const s2 = value[key];
   return typeof s2 === "string" ? s2 : void 0;
 }
 function booleanField(value, key) {
-  if (!isRecord3(value)) return void 0;
+  if (!isRecord4(value)) return void 0;
   const b3 = value[key];
   return typeof b3 === "boolean" ? b3 : void 0;
 }
@@ -115634,7 +116419,7 @@ function agentSnapshot(agent) {
     decisionIntervalTicks: numberField(agent, "decisionIntervalTicks") ?? 0,
     inFlight: booleanField(agent, "inFlight") ?? false,
     lastDecisionTick: numberField(agent, "lastDecisionTick") ?? 0,
-    queueLength: Array.isArray(isRecord3(agent) ? agent.queue : void 0) ? agent.queue.length : 0,
+    queueLength: Array.isArray(isRecord4(agent) ? agent.queue : void 0) ? agent.queue.length : 0,
     lastPerceptionEventId: stringField(agent, "lastPerceptionEventId")
   };
 }
@@ -115661,7 +116446,7 @@ function sceneMetadata(ctx) {
       height: ctx.world.height
     },
     scene: {
-      background: isRecord3(scene.background) && typeof scene.background.toString === "function" ? scene.background.toString() : scene.background,
+      background: isRecord4(scene.background) && typeof scene.background.toString === "function" ? scene.background.toString() : scene.background,
       position: [scene.position.x, scene.position.y, scene.position.z]
     },
     camera: {
@@ -116027,13 +116812,13 @@ function registerSystemSkills(registry2) {
           ctx.emit("dev.skill.reload.failed", { target: "skill", name: null, reason: why2, tick: ctx.tick });
           return { ok: false, target: "skill", invalidated: [], reason: why2 };
         }
-        const result = await registry2.reloadSkill(input.name);
-        if (result.ok) {
-          ctx.emit("dev.skill.reload.completed", { target: "skill", name: input.name, invalidated: result.invalidated, summary: result.summary ?? null, reason, tick: ctx.tick });
+        const result2 = await registry2.reloadSkill(input.name);
+        if (result2.ok) {
+          ctx.emit("dev.skill.reload.completed", { target: "skill", name: input.name, invalidated: result2.invalidated, summary: result2.summary ?? null, reason, tick: ctx.tick });
         } else {
-          ctx.emit("dev.skill.reload.failed", { target: "skill", name: input.name, reason: result.reason ?? "reload failed", tick: ctx.tick });
+          ctx.emit("dev.skill.reload.failed", { target: "skill", name: input.name, reason: result2.reason ?? "reload failed", tick: ctx.tick });
         }
-        return { ok: result.ok, target: "skill", invalidated: result.invalidated, reason: result.reason };
+        return { ok: result2.ok, target: "skill", invalidated: result2.invalidated, reason: result2.reason };
       }
       if (input.target === "scene") {
         const sceneName = input.name ?? registry2.sceneBuilderNames()[0];
@@ -116042,13 +116827,13 @@ function registerSystemSkills(registry2) {
           ctx.emit("dev.scene.reload.failed", { target: "scene", name: sceneName ?? null, reason: why2, tick: ctx.tick });
           return { ok: false, target: "scene", invalidated: [], reason: why2 };
         }
-        const result = await registry2.reloadScene(sceneName, ctx);
-        if (result.ok) {
-          ctx.emit("dev.scene.reload.completed", { target: "scene", name: sceneName, invalidated: result.invalidated, summary: result.summary ?? null, reason, tick: ctx.tick });
+        const result2 = await registry2.reloadScene(sceneName, ctx);
+        if (result2.ok) {
+          ctx.emit("dev.scene.reload.completed", { target: "scene", name: sceneName, invalidated: result2.invalidated, summary: result2.summary ?? null, reason, tick: ctx.tick });
         } else {
-          ctx.emit("dev.scene.reload.failed", { target: "scene", name: sceneName, reason: result.reason ?? "reload failed", tick: ctx.tick });
+          ctx.emit("dev.scene.reload.failed", { target: "scene", name: sceneName, reason: result2.reason ?? "reload failed", tick: ctx.tick });
         }
-        return { ok: result.ok, target: "scene", invalidated: result.invalidated, reason: result.reason };
+        return { ok: result2.ok, target: "scene", invalidated: result2.invalidated, reason: result2.reason };
       }
       const why = "data reload is runtime-owned and cannot be applied in-process; reload the owning skill or scene instead";
       ctx.emit("dev.data.reload.failed", { target: "data", reason: why, tick: ctx.tick });
@@ -116668,13 +117453,13 @@ function registerUiSkills(registry2, manager) {
 // src/sandbox/host.ts
 var untrustedArgsSchema = external_exports.record(external_exports.string(), external_exports.unknown());
 function parseUntrustedArgs(argsJson) {
-  let raw;
+  let raw3;
   try {
-    raw = JSON.parse(argsJson);
+    raw3 = JSON.parse(argsJson);
   } catch {
     return { input: {} };
   }
-  const parsed = untrustedArgsSchema.safeParse(raw);
+  const parsed = untrustedArgsSchema.safeParse(raw3);
   if (!parsed.success) return { input: {} };
   const claimed = parsed.data.agentId;
   return { input: parsed.data, claimedAgentId: typeof claimed === "string" ? claimed : void 0 };
@@ -116685,14 +117470,22 @@ var DEFAULT_BUDGETS = {
   maxStackBytes: 256 * 1024,
   readCaps: ["perception", "agent.getPerception", "ecs.getSelfPosition"]
 };
-var LOAD_DEADLINE_MS = 1e3;
+var MAX_EVAL_DEADLINE_MS = 1e3;
+var LOAD_DEADLINE_MS = MAX_EVAL_DEADLINE_MS;
 function finitePositive(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+function normalizeDeadline(value) {
+  const deadline = finitePositive(value, DEFAULT_BUDGETS.cpuDeadlineMs);
+  if (deadline > MAX_EVAL_DEADLINE_MS) {
+    throw new RangeError(`sandbox cpuDeadlineMs must be <= ${MAX_EVAL_DEADLINE_MS}`);
+  }
+  return deadline;
 }
 function normalizeBudgets(budgets) {
   return {
     memLimitBytes: finitePositive(budgets.memLimitBytes, DEFAULT_BUDGETS.memLimitBytes),
-    cpuDeadlineMs: finitePositive(budgets.cpuDeadlineMs, DEFAULT_BUDGETS.cpuDeadlineMs),
+    cpuDeadlineMs: normalizeDeadline(budgets.cpuDeadlineMs),
     maxStackBytes: finitePositive(budgets.maxStackBytes, DEFAULT_BUDGETS.maxStackBytes),
     readCaps: Array.isArray(budgets.readCaps) ? budgets.readCaps : DEFAULT_BUDGETS.readCaps
   };
@@ -116763,8 +117556,8 @@ var SandboxedSkillHost = class {
    *  capability intents and crossing counts come back in the envelope. */
   evalRaw(agentId, code3, opts = {}) {
     const e2 = this.entry(agentId);
-    const raw = ops.op_sandbox_eval(e2.handle, code3, opts.perceptionJson ?? "null", opts.deadlineMs ?? 0);
-    return JSON.parse(raw);
+    const raw3 = ops.op_sandbox_eval(e2.handle, code3, opts.perceptionJson ?? "null", opts.deadlineMs ?? 0);
+    return JSON.parse(raw3);
   }
   /** Run the untrusted `decide()` for one decision against `perception`, under the
    *  agent's CPU deadline. Returns the recorded mutating intents WITHOUT touching
@@ -116773,8 +117566,8 @@ var SandboxedSkillHost = class {
    *  injected perception snapshot. */
   produceCalls(agentId, perception) {
     const e2 = this.entry(agentId);
-    const raw = ops.op_sandbox_eval(e2.handle, "decide()", JSON.stringify(perception ?? null), e2.cpuDeadlineMs);
-    return JSON.parse(raw);
+    const raw3 = ops.op_sandbox_eval(e2.handle, "decide()", JSON.stringify(perception ?? null), e2.cpuDeadlineMs);
+    return JSON.parse(raw3);
   }
   /** THE BRIDGE. Run the untrusted decision, then drive each recorded MUTATING
    *  capability call through the REAL SkillRegistry.invoke under HOST-BOUND
@@ -116982,8 +117775,8 @@ var manifestSchema = external_exports.object({
   entry: external_exports.string(),
   attestation: attestationSchema.optional()
 });
-function parseManifest(raw) {
-  const parsed = manifestSchema.safeParse(raw);
+function parseManifest(raw3) {
+  const parsed = manifestSchema.safeParse(raw3);
   if (!parsed.success) return { ok: false, error: parsed.error.message };
   return { ok: true, manifest: parsed.data };
 }
@@ -117520,19 +118313,19 @@ function measureChars(n3, scale2, letterSpacing) {
   if (n3 <= 0) return 0;
   return n3 * GLYPH_ADVANCE * scale2 + (n3 - 1) * letterSpacing;
 }
-function measureLine(text2, scale2, letterSpacing) {
-  return measureChars(text2.length, scale2, letterSpacing);
+function measureLine(text4, scale2, letterSpacing) {
+  return measureChars(text4.length, scale2, letterSpacing);
 }
-function truncateToWidth(text2, maxWidth, scale2, letterSpacing) {
-  if (maxWidth <= 0 || measureLine(text2, scale2, letterSpacing) <= maxWidth) return text2;
+function truncateToWidth(text4, maxWidth, scale2, letterSpacing) {
+  if (maxWidth <= 0 || measureLine(text4, scale2, letterSpacing) <= maxWidth) return text4;
   const ellipsis = "...";
-  for (let n3 = text2.length - 1; n3 > 0; n3--) {
-    const candidate = text2.slice(0, n3) + ellipsis;
+  for (let n3 = text4.length - 1; n3 > 0; n3--) {
+    const candidate = text4.slice(0, n3) + ellipsis;
     if (measureLine(candidate, scale2, letterSpacing) <= maxWidth) return candidate;
   }
-  let m2 = text2.length;
-  while (m2 > 0 && measureLine(text2.slice(0, m2), scale2, letterSpacing) > maxWidth) m2--;
-  return text2.slice(0, m2);
+  let m2 = text4.length;
+  while (m2 > 0 && measureLine(text4.slice(0, m2), scale2, letterSpacing) > maxWidth) m2--;
+  return text4.slice(0, m2);
 }
 function hardBreak(word, maxWidth, scale2, letterSpacing, out) {
   let chunk = "";
@@ -117547,10 +118340,10 @@ function hardBreak(word, maxWidth, scale2, letterSpacing, out) {
   }
   return chunk;
 }
-function wrapText(text2, opts) {
+function wrapText(text4, opts) {
   const { scale: scale2, letterSpacing, maxWidth } = opts;
   const lines = [];
-  for (const paragraph of text2.split("\n")) {
+  for (const paragraph of text4.split("\n")) {
     if (maxWidth === void 0 || maxWidth <= 0) {
       lines.push(paragraph);
       continue;
@@ -117584,12 +118377,12 @@ function wrapText(text2, opts) {
   }
   return lines;
 }
-function layout(text2, opts) {
+function layout(text4, opts) {
   const { scale: scale2, letterSpacing, lineHeight } = opts;
   const glyphW = GLYPH_ADVANCE * scale2;
   const glyphH = GLYPH_H * scale2;
   const baseline = GLYPH_BASELINE * scale2;
-  const rendered = wrapText(text2, opts);
+  const rendered = wrapText(text4, opts);
   const lines = [];
   let maxLineWidth = 0;
   for (let i2 = 0; i2 < rendered.length; i2++) {
@@ -117813,11 +118606,11 @@ function blitGlyph(buf, w5, h2, glyph, penX, topY, scale2, color3) {
     }
   }
 }
-function blitLine(buf, w5, h2, text2, originX, topY, scale2, letterSpacing, color3) {
+function blitLine(buf, w5, h2, text4, originX, topY, scale2, letterSpacing, color3) {
   let penX = originX;
   const advance = GLYPH_W * scale2 + letterSpacing;
-  for (let i2 = 0; i2 < text2.length; i2++) {
-    blitGlyph(buf, w5, h2, glyphFor(text2.charCodeAt(i2)), penX, topY, scale2, color3);
+  for (let i2 = 0; i2 < text4.length; i2++) {
+    blitGlyph(buf, w5, h2, glyphFor(text4.charCodeAt(i2)), penX, topY, scale2, color3);
     penX += advance;
   }
 }
@@ -117881,7 +118674,7 @@ function clampToLastLines(body, maxLines, lineHeight) {
   const height = (lines.length - 1) * lineHeight + body.glyphH;
   return { ...body, lines, height };
 }
-function sizeBox(style, text2, title) {
+function sizeBox(style, text4, title) {
   const run = style.text ?? {};
   const scale2 = Math.max(1, Math.floor(run.scale ?? DEFAULT_SCALE));
   const letterSpacing = run.letterSpacing ?? 0;
@@ -117899,7 +118692,7 @@ function sizeBox(style, text2, title) {
   if (style.width !== void 0) wrapWidth = style.width - chromeX;
   else if (style.maxWidth !== void 0) wrapWidth = style.maxWidth - chromeX;
   const hasRuns = style.runs !== void 0 && style.runs.length > 0;
-  let body = hasRuns ? void 0 : layout(text2, { scale: scale2, letterSpacing, lineHeight, maxWidth: wrapWidth, noWrap: style.noWrap });
+  let body = hasRuns ? void 0 : layout(text4, { scale: scale2, letterSpacing, lineHeight, maxWidth: wrapWidth, noWrap: style.noWrap });
   if (body !== void 0 && style.maxLines !== void 0 && style.maxLines > 0 && body.lines.length > style.maxLines) {
     body = clampToLastLines(body, style.maxLines, lineHeight);
   }
@@ -118032,8 +118825,8 @@ function resolvedFill(style) {
   }
   return { r: 0, g: 0, b: 0, a: 0 };
 }
-function composite(style, text2, title) {
-  const L3 = sizeBox(style, text2, title);
+function composite(style, text4, title) {
+  const L3 = sizeBox(style, text4, title);
   const m2 = computeMargins(style, L3.boxW, L3.boxH);
   const ox = m2.left;
   const oy = m2.top;
@@ -118303,8 +119096,8 @@ var Panel = class _Panel {
   }
   /** Update the text (and optional title). Re-composites only if it changed;
    *  returns true when a re-composite happened. */
-  setText(text2, title) {
-    this.text = text2;
+  setText(text4, title) {
+    this.text = text4;
     this.title = title;
     return this.refresh();
   }
@@ -118361,8 +119154,8 @@ var Panel = class _Panel {
     oldGeometry.dispose();
     return true;
   }
-  static makeKey(style, text2, title) {
-    return JSON.stringify({ s: style, t: text2, h: title ?? null });
+  static makeKey(style, text4, title) {
+    return JSON.stringify({ s: style, t: text4, h: title ?? null });
   }
 };
 
@@ -118474,8 +119267,8 @@ function hudPanel(opts) {
     const hasTitle = opts.title !== void 0 && opts.title.length > 0;
     if (style.height === void 0) style.height = consoleHeight(style, opts.maxLines, hasTitle);
   }
-  const text2 = opts.text ?? (opts.lines ?? []).join("\n");
-  return new Panel({ style, text: text2, title: opts.title, pixelScale: opts.pixelScale });
+  const text4 = opts.text ?? (opts.lines ?? []).join("\n");
+  return new Panel({ style, text: text4, title: opts.title, pixelScale: opts.pixelScale });
 }
 
 // src/ui/anchor.ts
@@ -118793,15 +119586,15 @@ function buildPanel(kind, opts) {
   const style = opts.style;
   const pixelScale = opts.pixelScale;
   const bodyFromLines = opts.lines !== void 0 ? opts.lines.join("\n") : void 0;
-  const text2 = opts.text ?? bodyFromLines ?? "";
+  const text4 = opts.text ?? bodyFromLines ?? "";
   switch (kind) {
     case "label":
-      return label3({ text: text2, style, pixelScale });
+      return label3({ text: text4, style, pixelScale });
     case "textBox":
-      return textBox({ text: text2, title: opts.title, style, maxWidth: opts.maxWidth, pixelScale });
+      return textBox({ text: text4, title: opts.title, style, maxWidth: opts.maxWidth, pixelScale });
     case "speechBubble":
       return speechBubble({
-        text: text2,
+        text: text4,
         title: opts.title,
         style,
         maxWidth: opts.maxWidth,
@@ -118812,7 +119605,7 @@ function buildPanel(kind, opts) {
       });
     case "thoughtBubble":
       return thoughtBubble({
-        text: text2,
+        text: text4,
         style,
         maxWidth: opts.maxWidth,
         toward: opts.tail?.toward,
@@ -118822,7 +119615,7 @@ function buildPanel(kind, opts) {
       });
     case "callout":
       if (opts.leader === void 0) throw new Error("ui callout requires a `leader` vector");
-      return callout({ text: text2, title: opts.title, style, maxWidth: opts.maxWidth, leader: opts.leader, pixelScale });
+      return callout({ text: text4, title: opts.title, style, maxWidth: opts.maxWidth, leader: opts.leader, pixelScale });
     case "hudPanel":
       return hudPanel({ text: opts.text, lines: opts.lines, title: opts.title, style, width: opts.width, maxLines: opts.maxLines, pixelScale });
   }
@@ -119289,6 +120082,7 @@ var Locomotion = class {
    *  arrival, and tick the humanoid walk animation. */
   step(world, dtMs) {
     const dt2 = dtMs / 1e3;
+    let positionsChanged = false;
     for (const actor of this.actors.values()) {
       if (actor.target === void 0) {
         actor.humanoid.update(dtMs, false);
@@ -119317,12 +120111,14 @@ var Locomotion = class {
         Position.x[actor.eid] = px2 + dx * inv * advance;
         Position.z[actor.eid] = pz2 + dz * inv * advance;
         moving = advance > EPS;
+        positionsChanged ||= moving;
         const ndx = tgt[0] - Position.x[actor.eid];
         const ndz = tgt[2] - Position.z[actor.eid];
         actor.arrived = Math.sqrt(ndx * ndx + ndz * ndz) <= actor.talkDistance + EPS;
       }
       actor.humanoid.update(dtMs, moving);
     }
+    return positionsChanged;
   }
   resolveTarget(world, target) {
     if (target.kind === "point") return target.point;
@@ -119505,8 +120301,8 @@ var SPEECH_MIN_MS = 3e3;
 var SPEECH_MAX_MS = 7e4;
 var SPEECH_PADDING_MS = 1500;
 var SPEECH_CHARS_PER_SECOND = 9;
-function estimateSpeechDurationMs(text2) {
-  const spokenChars = Math.max(1, text2.trim().length);
+function estimateSpeechDurationMs(text4) {
+  const spokenChars = Math.max(1, text4.trim().length);
   const estimated = spokenChars / SPEECH_CHARS_PER_SECOND * 1e3 + SPEECH_PADDING_MS;
   return Math.min(SPEECH_MAX_MS, Math.max(SPEECH_MIN_MS, estimated));
 }
@@ -119523,20 +120319,20 @@ var AudioManager = class {
   }
   play(freq, secs, bus, volume) {
     const handle = this.next();
-    const id4 = ops.op_audio_play(freq, secs, BUS[bus], volume);
-    this.sounds.set(handle, { id: id4, spatial: false, volume, maxDistance: 0, expiresAtMs: this.finiteExpiry(secs) });
+    const id7 = ops.op_audio_play(freq, secs, BUS[bus], volume);
+    this.sounds.set(handle, { id: id7, spatial: false, volume, maxDistance: 0, expiresAtMs: this.finiteExpiry(secs) });
     return handle;
   }
   ambient(bus, volume) {
     const handle = this.next();
-    const id4 = ops.op_audio_ambient(BUS[bus], volume);
-    this.sounds.set(handle, { id: id4, spatial: false, volume, maxDistance: 0 });
+    const id7 = ops.op_audio_ambient(BUS[bus], volume);
+    this.sounds.set(handle, { id: id7, spatial: false, volume, maxDistance: 0 });
     return handle;
   }
   playAt(freq, secs, pos, bus, volume, maxDistance = 0, entityId) {
     const handle = this.next();
-    const id4 = ops.op_audio_play_spatial(freq, secs, pos[0], pos[1], pos[2], BUS[bus], volume);
-    this.sounds.set(handle, { id: id4, spatial: true, entityId, volume, maxDistance, expiresAtMs: this.finiteExpiry(secs) });
+    const id7 = ops.op_audio_play_spatial(freq, secs, pos[0], pos[1], pos[2], BUS[bus], volume);
+    this.sounds.set(handle, { id: id7, spatial: true, entityId, volume, maxDistance, expiresAtMs: this.finiteExpiry(secs) });
     return handle;
   }
   stop(handle) {
@@ -119562,17 +120358,17 @@ var AudioManager = class {
    *  a bus, optionally looping. Returns an opaque handle. */
   playBuffer(data, sampleRate, channels, bus, volume, loop) {
     const handle = this.next();
-    const id4 = ops.op_audio_play_buffer(data, sampleRate, channels, BUS[bus], volume, loop);
+    const id7 = ops.op_audio_play_buffer(data, sampleRate, channels, BUS[bus], volume, loop);
     const secs = !loop && sampleRate > 0 && channels > 0 ? data.length / channels / sampleRate : 0;
-    this.sounds.set(handle, { id: id4, spatial: false, volume, maxDistance: 0, expiresAtMs: this.finiteExpiry(secs) });
+    this.sounds.set(handle, { id: id7, spatial: false, volume, maxDistance: 0, expiresAtMs: this.finiteExpiry(secs) });
     return handle;
   }
   /** Speak a line at a world position on the voice bus (fire-and-forget TTS).
    *  `pitch` 0 = default voice; higher (≈70-90) = a cuter, sing-song voice. */
-  speak(text2, pos, volume = 0.95, pitch = 0) {
+  speak(text4, pos, volume = 0.95, pitch = 0) {
     const handle = this.next();
-    const id4 = ops.op_audio_speak(text2, pos[0], pos[1], pos[2], volume, pitch);
-    this.sounds.set(handle, { id: id4, spatial: true, volume, maxDistance: 0, expiresAtMs: Date.now() + estimateSpeechDurationMs(text2) });
+    const id7 = ops.op_audio_speak(text4, pos[0], pos[1], pos[2], volume, pitch);
+    this.sounds.set(handle, { id: id7, spatial: true, volume, maxDistance: 0, expiresAtMs: Date.now() + estimateSpeechDurationMs(text4) });
     return handle;
   }
   /** The entity a spatial handle should follow (host updates its emitter each frame). */
@@ -119829,9 +120625,9 @@ function assertExactKeys(value, expected, label4) {
     throw new Error(`${label4} requires exactly: ${wanted.join(", ")}`);
   }
 }
-function finiteInRange(value, name, minimum, maximum, integer3 = false) {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < minimum || value > maximum || integer3 && !Number.isInteger(value)) {
-    const kind = integer3 ? "integer" : "finite number";
+function finiteInRange(value, name, minimum, maximum, integer4 = false) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < minimum || value > maximum || integer4 && !Number.isInteger(value)) {
+    const kind = integer4 ? "integer" : "finite number";
     throw new Error(`erosion recipe ${name} must be a ${kind} in [${minimum}, ${maximum}]`);
   }
   return value;
@@ -120011,8 +120807,8 @@ function thermalPass2(src, dst, rows, cols, talus) {
     if (d3 > 0) dst[i2 + cols] += d3 * scale2;
   }
 }
-function erodeBlock2(raw, rows, cols, seed, p2 = DEFAULT_EROSION2, control = {}) {
-  const h2 = new Float32Array(raw);
+function erodeBlock2(raw3, rows, cols, seed, p2 = DEFAULT_EROSION2, control = {}) {
+  const h2 = new Float32Array(raw3);
   if (p2.rain > 0) {
     const whole = Math.floor(p2.rain), frac = p2.rain - whole;
     for (let r2 = 0; r2 < rows; r2++) for (let c2 = 0; c2 < cols; c2++) {
@@ -120460,12 +121256,12 @@ function rasterizeWorldMap(worldMap, opts) {
           if (inten > blight[i2]) blight[i2] = inten;
           continue;
         }
-        const id4 = biomePaintId(b3.biome);
-        if (id4 === void 0) continue;
+        const id7 = biomePaintId(b3.biome);
+        if (id7 === void 0) continue;
         const bd = distanceToSegmentBvh(b3.ring, wx, wz);
         const w5 = 0.8 * smoothstep012(bd / edgeBand);
         if (w5 > matW) {
-          matId = id4;
+          matId = id7;
           matW = w5;
         }
       }
@@ -121761,6 +122557,39 @@ var BIOME_CONTENT = {
       sizeRange: [1, 2.6],
       elevMinFrac: 0.3,
       waterGated: true
+    },
+    {
+      // VALLEY BROADLEAF — sparse oaks dotting the low benches among the meadows
+      // (broadleafs give up to conifers with altitude, so they stay below the
+      // forest's mid-band). Sparse on purpose: accents against the pine mass,
+      // not a second forest.
+      seed: 34,
+      assets: [{ role: "broadleaf" }],
+      coverage: 0.16,
+      cluster: 0.45,
+      clusterFreq: 1 / 24,
+      slopeMax: 0.6,
+      sizeRange: [0.8, 1.3],
+      elevMaxFrac: 0.4,
+      waterGated: true
+    },
+    {
+      // VALLEY MEADOW — real mountain ranges carry grass in their low valley floors
+      // and gentle benches; a "conifers and rock only" mountain reads as dead ground.
+      // Gated to gentle gradients (valley flats and benches, not eroded flanks) below
+      // the forest's densest band. The LOW bound comes from the water gate alone
+      // (waterLevel + margin), never a static elevation floor: a static floor under
+      // the flood margin yields an empty band on islands whose valleys sit low.
+      // Dense clustered drifts, not uniform carpet — a meadow reads as patches.
+      seed: 33,
+      assets: [{ role: "grass" }],
+      coverage: 0.45,
+      cluster: 0.55,
+      clusterFreq: 1 / 18,
+      slopeMax: 0.5,
+      sizeRange: [0.8, 1.6],
+      elevMaxFrac: 0.42,
+      waterGated: true
     }
   ],
   // Dense temperate woodland: broadleaf + conifer mix over a bush understorey.
@@ -121875,6 +122704,21 @@ function resolveLayer(layer, pack, survey, waterLevel, waterMargin = 0) {
   for (const { role: role2, weight } of layer.assets) {
     const bound = pack[role2];
     if (bound === void 0) continue;
+    if ("variants" in bound) {
+      const total = bound.variants.reduce((sum, v3) => sum + (v3.weight ?? 1), 0);
+      if (total <= 0) continue;
+      const roleWeight = weight ?? 1;
+      for (const v3 of bound.variants) {
+        palette.push({
+          id: v3.id,
+          weight: roleWeight * ((v3.weight ?? 1) / total),
+          ...v3.embedRadius !== void 0 ? { embedRadius: v3.embedRadius } : {},
+          ...v3.lods !== void 0 ? { lods: v3.lods } : {},
+          ...v3.treeLod !== void 0 ? { treeLod: v3.treeLod } : {}
+        });
+      }
+      continue;
+    }
     palette.push({
       id: bound.id,
       ...weight !== void 0 ? { weight } : {},
@@ -121937,13 +122781,16 @@ async function scatterBiomeContent(deps) {
   const configs = deps.cellSize === void 0 ? resolvedConfigs : resolvedConfigs.map((config2) => ({ ...config2, cellSize: deps.cellSize }));
   const layers = [];
   let total = 0;
+  let mounted = 0;
   for (const config2 of configs) {
     const res = ok(await deps.registry.invoke("asset.scatter", { regionId: deps.regionId, config: config2 }, deps.base), `asset.scatter ${deps.type}`);
     const instances = res.instances;
+    const layerMounted = res.mounted;
     total += instances;
-    layers.push({ instances, mounted: res.mounted, assetHashes: res.assetHashes, placements: res.placements });
+    mounted += layerMounted;
+    layers.push({ instances, mounted: layerMounted, assetHashes: res.assetHashes, placements: res.placements });
   }
-  return { regionId: deps.regionId, type: deps.type, survey, configs, instances: total, layers };
+  return { regionId: deps.regionId, type: deps.type, survey, configs, instances: total, mounted, layers };
 }
 
 // src/skills/terrain.ts
@@ -122018,7 +122865,8 @@ function resolveSurfaceMeshOpts(surface, relief) {
   const band = { seaLevel, minY, maxY };
   if (mode === "pbr") opts.pbr = surface?.waterline !== void 0 ? { ...band, waterline: surface.waterline } : band;
   else if (mode === "palette") opts.palette = band;
-  else if (mode === "shoreline") opts.shoreline = { ...surface?.shoreline ?? {}, seaLevel: surface?.shoreline?.seaLevel ?? seaLevel };
+  else if (mode === "shoreline")
+    opts.shoreline = { ...surface?.shoreline ?? {}, seaLevel: surface?.shoreline?.seaLevel ?? seaLevel };
   if (surface?.exaggerateY !== void 0) opts.exaggerateY = surface.exaggerateY;
   return { opts, seaLevel };
 }
@@ -122049,7 +122897,8 @@ function clearRegionRenderDisposables(region) {
       errors.push(error51);
     }
   }
-  if (errors.length > 0) throw new AggregateError(errors, `region render disposal failed in ${errors.length} operation(s)`);
+  if (errors.length > 0)
+    throw new AggregateError(errors, `region render disposal failed in ${errors.length} operation(s)`);
 }
 function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regions = /* @__PURE__ */ new Map(), assets, waterContact) {
   async function applyTile(region, regionId, tx, tz, ctx) {
@@ -122060,7 +122909,17 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
     const tile = await cache3.resolve(req, source);
     const [ox, oy, oz] = tile.origin;
     const [sx, sy, sz] = tile.scale;
-    const bodyId = ctx.world.ops.op_physics_add_heightfield(ox, oy, oz, tile.nrows, tile.ncols, sx, sy, sz, tile.heights);
+    const bodyId = ctx.world.ops.op_physics_add_heightfield(
+      ox,
+      oy,
+      oz,
+      tile.nrows,
+      tile.ncols,
+      sx,
+      sy,
+      sz,
+      tile.heights
+    );
     const eid = spawnRenderable(ctx.world.ecs, inertTransform(), ox, oy, oz);
     if (eid >= MAX_ENTITIES) {
       despawnRenderable(ctx.world.ecs, eid);
@@ -122134,20 +122993,26 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
       const regionId = regionIdOf(input.seed, input.lod, input.bounds);
       let region = regions.get(regionId);
       if (region === void 0) {
-        region = { seed: input.seed, lod: input.lod, hints: merged, type: input.type, tiles: /* @__PURE__ */ new Map() };
+        region = {
+          seed: input.seed,
+          lod: input.lod,
+          hints: merged,
+          type: input.type,
+          tiles: /* @__PURE__ */ new Map()
+        };
         regions.set(regionId, region);
       } else if (region.type === void 0 && input.type !== void 0) {
         region.type = input.type;
       }
       clearRegionRenderDisposables(region);
       const bodies = [];
-      const keys = [];
+      const keys2 = [];
       const applied = [];
       for (let tz = input.bounds.minTz; tz <= input.bounds.maxTz; tz++) {
         for (let tx = input.bounds.minTx; tx <= input.bounds.maxTx; tx++) {
           const a2 = await applyTile(region, regionId, tx, tz, ctx);
           bodies.push(a2.bodyId);
-          keys.push(a2.key);
+          keys2.push(a2.key);
           applied.push({ applied: a2.applied, tile: a2.tile });
         }
       }
@@ -122160,7 +123025,10 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
         if (minY === void 0 || maxY === void 0 || input.surface?.seaLevel === void 0) {
           let lo = Infinity, hi = -Infinity;
           for (const { applied: at2, tile } of applied) {
-            const t3 = tile ?? await cache3.resolve({ seed: region.seed, tx: at2.tx, tz: at2.tz, lod: region.lod, hints: region.hints }, source);
+            const t3 = tile ?? await cache3.resolve(
+              { seed: region.seed, tx: at2.tx, tz: at2.tz, lod: region.lod, hints: region.hints },
+              source
+            );
             const e2 = tileWorldYExtent(t3);
             if (e2.minY < lo) lo = e2.minY;
             if (e2.maxY > hi) hi = e2.maxY;
@@ -122184,7 +123052,15 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
         region.meshOpts = void 0;
       }
       ctx.emit("terrain.region.ready", { regionId, tiles: bodies.length, meshes: meshCount });
-      return { regionId, tiles: bodies.length, bodies, keys, meshes: meshCount, relief: reliefOut, seaLevel: seaLevelOut };
+      return {
+        regionId,
+        tiles: bodies.length,
+        bodies,
+        keys: keys2,
+        meshes: meshCount,
+        relief: reliefOut,
+        seaLevel: seaLevelOut
+      };
     }
   };
   const setTerrainSourceInput = external_exports.object({
@@ -122220,10 +123096,14 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
     output: setTerrainSourceOutput,
     handler: (input, ctx) => {
       if (!(source instanceof SwappableTerrainSource)) {
-        throw new Error("world.setTerrainSource: this runtime binds a FIXED terrain source (no SwappableTerrainSource holder) \u2014 rebinding is unavailable");
+        throw new Error(
+          "world.setTerrainSource: this runtime binds a FIXED terrain source (no SwappableTerrainSource holder) \u2014 rebinding is unavailable"
+        );
       }
       if (regions.size > 0) {
-        throw new Error("world.setTerrainSource: terrain regions already exist in this session \u2014 reset the world, or set the terrain source BEFORE world.generateRegion (rebinding mid-session would mix sources under the same tile-cache keys)");
+        throw new Error(
+          "world.setTerrainSource: terrain regions already exist in this session \u2014 reset the world, or set the terrain source BEFORE world.generateRegion (rebinding mid-session would mix sources under the same tile-cache keys)"
+        );
       }
       if (input.kind === "procedural") {
         if (input.seed !== void 0 || input.baseAmplitude !== void 0 || input.erosion !== void 0) {
@@ -122238,24 +123118,32 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
         throw new Error("world.setTerrainSource: kind 'map' requires mapAssetId");
       }
       if (assets === void 0) {
-        throw new Error("world.setTerrainSource: kind 'map' requires an AssetRegistry (thread one via registerTerrainSkills)");
+        throw new Error(
+          "world.setTerrainSource: kind 'map' requires an AssetRegistry (thread one via registerTerrainSkills)"
+        );
       }
       const resolved = assets.resolve(input.mapAssetId);
       let parsedJson;
       try {
         parsedJson = JSON.parse(new TextDecoder().decode(resolved.bytes));
       } catch (e2) {
-        throw new Error(`world.setTerrainSource: map asset '${input.mapAssetId}' is not valid JSON: ${e2 instanceof Error ? e2.message : String(e2)}`);
+        throw new Error(
+          `world.setTerrainSource: map asset '${input.mapAssetId}' is not valid JSON: ${e2 instanceof Error ? e2.message : String(e2)}`
+        );
       }
       const worldMap = WorldMapSchema.parse(migrateWorldMap(parsedJson));
       const verify = verifyWorldMap(worldMap);
       if (!verify.ok) {
-        throw new Error(`world.setTerrainSource: map asset '${input.mapAssetId}' content hash mismatch (expected ${verify.expected}, actual ${verify.actual}) \u2014 refusing a tampered/corrupted map`);
+        throw new Error(
+          `world.setTerrainSource: map asset '${input.mapAssetId}' content hash mismatch (expected ${verify.expected}, actual ${verify.actual}) \u2014 refusing a tampered/corrupted map`
+        );
       }
       if (input.hash !== void 0 && input.hash !== worldMap.provenance.contentHash) {
-        throw new Error(`world.setTerrainSource: map asset '${input.mapAssetId}' identity mismatch (committed ${input.hash}, resolved ${worldMap.provenance.contentHash}) \u2014 the map changed since this world was authored`);
+        throw new Error(
+          `world.setTerrainSource: map asset '${input.mapAssetId}' identity mismatch (committed ${input.hash}, resolved ${worldMap.provenance.contentHash}) \u2014 the map changed since this world was authored`
+        );
       }
-      const hash7 = worldMap.provenance.contentHash;
+      const hash9 = worldMap.provenance.contentHash;
       const nextSource = new MapTerrainSource({
         worldMap,
         ...input.seed !== void 0 ? { seed: input.seed } : {},
@@ -122271,12 +123159,12 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
         kind: "map",
         source: source.name,
         mapAssetId: input.mapAssetId,
-        hash: hash7,
+        hash: hash9,
         seed: input.seed ?? 1,
         baseAmplitude: input.baseAmplitude ?? 12,
         erosion: input.erosion ?? NO_EROSION_RECIPE
       });
-      return { kind: "map", source: source.name, hash: hash7 };
+      return { kind: "map", source: source.name, hash: hash9 };
     }
   };
   const streamFollowInput = external_exports.object({
@@ -122373,6 +123261,28 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
     output: external_exports.object({ tempC: external_exports.number(), precipMm: external_exports.number(), biome: external_exports.number().int() }),
     handler: (input) => source.sampleClimate(input.seed, input.x, input.z, input.hints)
   };
+  const biomePackAssetFields = external_exports.object({
+    id: external_exports.string(),
+    embedRadius: external_exports.number().nonnegative().optional(),
+    lods: external_exports.array(
+      external_exports.object({
+        id: external_exports.string(),
+        distance: external_exports.number().positive(),
+        hysteresis: external_exports.number().min(0).max(1).optional()
+      })
+    ).min(1).optional(),
+    treeLod: external_exports.object({
+      reducedId: external_exports.string().min(1),
+      reducedDistance: external_exports.number().positive(),
+      impostorId: external_exports.string().min(1),
+      impostorDistance: external_exports.number().positive(),
+      cullDistance: external_exports.number().positive(),
+      hysteresis: external_exports.number().min(0).max(1).optional()
+    }).refine(
+      (value) => value.reducedDistance < value.impostorDistance && value.impostorDistance < value.cullDistance,
+      { message: "treeLod distances must be strictly increasing" }
+    ).optional()
+  });
   const populateBiomeInput = external_exports.object({
     /** The region from world.generateRegion to populate (binds the scatter to its tiles). */
     regionId: external_exports.string(),
@@ -122399,26 +123309,22 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
     // defeated the whole "graceful partial pack" contract of the engine↔content decoupling.
     biomePack: external_exports.partialRecord(
       external_exports.enum(["conifer", "broadleaf", "boulder", "bush", "grass", "cactus", "palm"]),
-      external_exports.object({
-        id: external_exports.string(),
-        embedRadius: external_exports.number().nonnegative().optional(),
-        lods: external_exports.array(external_exports.object({
-          id: external_exports.string(),
-          distance: external_exports.number().positive(),
-          hysteresis: external_exports.number().min(0).max(1).optional()
-        })).min(1).optional(),
-        treeLod: external_exports.object({
-          reducedId: external_exports.string().min(1),
-          reducedDistance: external_exports.number().positive(),
-          impostorId: external_exports.string().min(1),
-          impostorDistance: external_exports.number().positive(),
-          cullDistance: external_exports.number().positive(),
-          hysteresis: external_exports.number().min(0).max(1).optional()
-        }).refine(
-          (value) => value.reducedDistance < value.impostorDistance && value.impostorDistance < value.cullDistance,
-          { message: "treeLod distances must be strictly increasing" }
-        ).optional()
-      })
+      // A role binds EITHER a single asset (the original shape — back-compat, parses unchanged)
+      // OR weighted archetype `variants` so one role scatters a population of distinct
+      // silhouettes. The single-entry branch comes FIRST so existing packs take the exact
+      // parse they always did; a `{variants}` object has no `id` and falls to the second.
+      external_exports.union([
+        biomePackAssetFields,
+        external_exports.object({
+          variants: external_exports.array(
+            biomePackAssetFields.extend({
+              /** Relative archetype share WITHIN the role (default 1). The per-instance pick is
+               *  the seeded cumulative-weight draw in scatterAssets — deterministic, replayable. */
+              weight: external_exports.number().positive().optional()
+            })
+          ).min(1)
+        })
+      ])
     ).optional()
   });
   const populateBiomeOutput = external_exports.object({
@@ -122426,6 +123332,8 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
     type: external_exports.string(),
     /** Total instances placed across all layers. */
     instances: external_exports.number().int(),
+    /** Total render meshes mounted across all layers. */
+    mounted: external_exports.number().int(),
     /** Surveyed relief the fractional elevation gates resolved against. */
     relief: external_exports.object({ minY: external_exports.number(), maxY: external_exports.number() }),
     /** Per-layer summary (instances + mounted level-mesh count). */
@@ -122442,11 +123350,15 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
     handler: async (input, ctx) => {
       const region = regions.get(input.regionId);
       if (region === void 0) {
-        throw new Error(`world.populateBiome: unknown region '${input.regionId}' \u2014 generate it with world.generateRegion first`);
+        throw new Error(
+          `world.populateBiome: unknown region '${input.regionId}' \u2014 generate it with world.generateRegion first`
+        );
       }
       const type = input.type ?? region.type;
       if (type === void 0) {
-        throw new Error(`world.populateBiome: region '${input.regionId}' has no terrain type \u2014 pass an explicit \`type\``);
+        throw new Error(
+          `world.populateBiome: region '${input.regionId}' has no terrain type \u2014 pass an explicit \`type\``
+        );
       }
       if (region.tiles.size === 0) {
         throw new Error(`world.populateBiome: region '${input.regionId}' has no applied tiles`);
@@ -122467,7 +123379,8 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
         permissions: ctx.permissions,
         tick: ctx.tick,
         world: ctx.world,
-        chainId: ctx.chainId
+        chainId: ctx.chainId,
+        chainToken: ctx.chainToken
       };
       let pack = input.biomePack ?? EMPTY_BIOME_PACK;
       if (input.biomePack === void 0) {
@@ -122497,12 +123410,14 @@ function registerTerrainSkills(registry2, source, cache3 = new TileCache(), regi
         regionId: input.regionId,
         type,
         instances: res.instances,
+        mounted: res.mounted,
         layers: res.layers.length
       });
       return {
         regionId: input.regionId,
         type,
         instances: res.instances,
+        mounted: res.mounted,
         relief: { minY: res.survey.minY, maxY: res.survey.maxY },
         layers: res.layers.map((l2) => ({ instances: l2.instances, mounted: l2.mounted }))
       };
@@ -122670,12 +123585,12 @@ function grassFieldCandidate(plan, slot) {
   });
 }
 function hashPlan(plan) {
-  let hash7 = 0xcbf29ce484222325n;
+  let hash9 = 0xcbf29ce484222325n;
   const prime = 0x100000001b3n;
   const feed = (value) => {
     let word = BigInt(value >>> 0);
     for (let i2 = 0; i2 < 4; i2++) {
-      hash7 = (hash7 ^ word & 0xffn) * prime & 0xffffffffffffffffn;
+      hash9 = (hash9 ^ word & 0xffn) * prime & 0xffffffffffffffffn;
       word >>= 8n;
     }
   };
@@ -122696,7 +123611,7 @@ function hashPlan(plan) {
   feedFloat(plan.bounds.maxX);
   feedFloat(plan.bounds.maxZ);
   for (let i2 = 0; i2 < plan.density.length; i2++) feed(plan.density[i2]);
-  return `fnv1a64:${hash7.toString(16).padStart(16, "0")}`;
+  return `fnv1a64:${hash9.toString(16).padStart(16, "0")}`;
 }
 function buildGrassFieldPlan(input) {
   const b3 = input.bounds;
@@ -123260,7 +124175,7 @@ var DEFAULT_TERRAIN = {
 function generateHeightfield(overrides = {}) {
   const cfg = { ...DEFAULT_TERRAIN, ...overrides, erosion: { ...DEFAULT_TERRAIN.erosion, ...overrides.erosion || {} } };
   const N4 = cfg.gridN, cols = N4 + 1, rows = N4 + 1, half = cfg.sizeM / 2, step3 = cfg.sizeM / N4, s2 = cfg.noiseScale, seed = cfg.seed | 0;
-  const raw = new Float32Array(rows * cols);
+  const raw3 = new Float32Array(rows * cols);
   let mn2 = Infinity, mx = -Infinity;
   for (let gz = 0; gz < rows; gz++) for (let gx = 0; gx < cols; gx++) {
     const x3 = -half + gx * step3, z4 = -half + gz * step3;
@@ -123268,13 +124183,13 @@ function generateHeightfield(overrides = {}) {
     const wz = z4 + cfg.warp / s2 * fbm3(x3 * s2 * 0.5, z4 * s2 * 0.5 + 100, seed + 9, 3, 2, 0.5);
     const n3 = fbm3(wx * s2, wz * s2, seed, cfg.octaves, cfg.lacunarity, cfg.gain);
     const v3 = (n3 * 0.5 + 0.5) ** 1.35;
-    raw[gz * cols + gx] = v3;
+    raw3[gz * cols + gx] = v3;
     if (v3 < mn2) mn2 = v3;
     if (v3 > mx) mx = v3;
   }
   const inv = 1 / (mx - mn2 || 1);
-  for (let i2 = 0; i2 < raw.length; i2++) raw[i2] = (raw[i2] - mn2) * inv;
-  const eroded = erodeBlock2(raw, rows, cols, seed, cfg.erosion);
+  for (let i2 = 0; i2 < raw3.length; i2++) raw3[i2] = (raw3[i2] - mn2) * inv;
+  const eroded = erodeBlock2(raw3, rows, cols, seed, cfg.erosion);
   const sortedE = Float32Array.from(eroded).sort();
   const plo = sortedE[Math.floor(sortedE.length * 0.02)], phi = sortedE[Math.floor(sortedE.length * 0.98)];
   const einv = 1 / (phi - plo || 1);
@@ -123444,7 +124359,7 @@ function claim(seen, value, label4) {
   if (seen.has(value)) fail3(`${label4} must not alias another object or array`);
   seen.add(value);
 }
-function exactRecord(value, keys, label4, seen, optional2 = /* @__PURE__ */ new Set()) {
+function exactRecord(value, keys2, label4, seen, optional2 = /* @__PURE__ */ new Set()) {
   if (value === null || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
     fail3(`${label4} must be a plain object`);
   }
@@ -123452,10 +124367,10 @@ function exactRecord(value, keys, label4, seen, optional2 = /* @__PURE__ */ new 
   if (Object.getOwnPropertySymbols(value).length !== 0) fail3(`${label4} must not contain symbol fields`);
   const descriptors = Object.getOwnPropertyDescriptors(value);
   for (const [key, descriptor] of Object.entries(descriptors)) {
-    if (!keys.has(key)) fail3(`${label4} has unknown field '${key}'`);
+    if (!keys2.has(key)) fail3(`${label4} has unknown field '${key}'`);
     if (!("value" in descriptor) || descriptor.enumerable !== true) fail3(`${label4}.${key} must be an enumerable data field`);
   }
-  for (const key of keys) if (!optional2.has(key) && !Object.hasOwn(value, key)) fail3(`${label4} is missing '${key}'`);
+  for (const key of keys2) if (!optional2.has(key) && !Object.hasOwn(value, key)) fail3(`${label4} is missing '${key}'`);
   return descriptors;
 }
 function denseArray(value, minimum, maximum, label4, seen) {
@@ -123512,9 +124427,9 @@ function parseBindings(value, label4 = "hydrology water artifact bindings") {
   const descriptors = exactRecord(value, BINDING_KEY_SET, label4, seen);
   const parsed = {};
   for (const key of BINDING_KEYS) {
-    const hash7 = descriptors[key].value;
-    if (typeof hash7 !== "string" || !HASH_RE.test(hash7)) fail3(`${label4}.${key} must be a lowercase sha256 content hash`);
-    parsed[key] = hash7;
+    const hash9 = descriptors[key].value;
+    if (typeof hash9 !== "string" || !HASH_RE.test(hash9)) fail3(`${label4}.${key} must be a lowercase sha256 content hash`);
+    parsed[key] = hash9;
   }
   return Object.freeze(parsed);
 }
@@ -123598,17 +124513,17 @@ function parseTopology(value) {
   let totalBasinPoints = 0, totalRings = 0, priorBasinId = "";
   const basins = basinSource.map((candidate, basinIndex) => {
     const path2 = `hydrology water topology basins[${basinIndex}]`;
-    const record5 = exactRecord(candidate, BASIN_KEYS, path2, seen);
-    const seedCell = integer2(record5.seedCell.value, 0, cells - 1, `${path2}.seedCell`);
-    const spillOutsideCell = integer2(record5.spillOutsideCell.value, 0, cells - 1, `${path2}.spillOutsideCell`);
-    const id4 = `gen-b-${spillOutsideCell.toString(36)}-${seedCell.toString(36)}`;
-    if (record5.id.value !== id4) fail3(`${path2}.id must equal '${id4}'`);
-    if (basinIds.has(id4)) fail3(`hydrology water topology has duplicate basin id '${id4}'`);
-    if (basinIndex > 0 && id4 <= priorBasinId) fail3("hydrology water topology basins must be strictly ordered by id");
-    priorBasinId = id4;
-    basinIds.add(id4);
-    if (record5.kind.value !== "lake") fail3(`${path2}.kind must be 'lake'`);
-    const footprintRecord = exactRecord(record5.footprint.value, FOOTPRINT_KEYS, `${path2}.footprint`, seen, /* @__PURE__ */ new Set(["holes"]));
+    const record6 = exactRecord(candidate, BASIN_KEYS, path2, seen);
+    const seedCell = integer2(record6.seedCell.value, 0, cells - 1, `${path2}.seedCell`);
+    const spillOutsideCell = integer2(record6.spillOutsideCell.value, 0, cells - 1, `${path2}.spillOutsideCell`);
+    const id7 = `gen-b-${spillOutsideCell.toString(36)}-${seedCell.toString(36)}`;
+    if (record6.id.value !== id7) fail3(`${path2}.id must equal '${id7}'`);
+    if (basinIds.has(id7)) fail3(`hydrology water topology has duplicate basin id '${id7}'`);
+    if (basinIndex > 0 && id7 <= priorBasinId) fail3("hydrology water topology basins must be strictly ordered by id");
+    priorBasinId = id7;
+    basinIds.add(id7);
+    if (record6.kind.value !== "lake") fail3(`${path2}.kind must be 'lake'`);
+    const footprintRecord = exactRecord(record6.footprint.value, FOOTPRINT_KEYS, `${path2}.footprint`, seen, /* @__PURE__ */ new Set(["holes"]));
     const points2 = parseRing2(footprintRecord.points.value, `${path2}.footprint.points`, seen);
     const holes = footprintRecord.holes === void 0 ? [] : denseArray(footprintRecord.holes.value, 0, WATER_LIMITS.holes, `${path2}.footprint.holes`, seen).map((ring2, index) => parseRing2(ring2, `${path2}.footprint.holes[${index}]`, seen));
     if (!(twiceArea(points2) > 0)) fail3(`${path2}.footprint.points must be counter-clockwise`);
@@ -123620,16 +124535,16 @@ function parseTopology(value) {
     totalRings += 1 + holes.length;
     if (totalBasinPoints > WATER_LIMITS.totalBodyPoints || totalRings > MAX_RING_COUNT) fail3("hydrology water topology basin geometry exceeds aggregate limits");
     return Object.freeze({
-      id: id4,
+      id: id7,
       kind: "lake",
-      spillLevelM: canonicalNumber(record5.spillLevelM.value, `${path2}.spillLevelM`, -WATER_LIMITS.absLevelM, WATER_LIMITS.absLevelM),
-      maxDepthM: canonicalNumber(record5.maxDepthM.value, `${path2}.maxDepthM`, 0, WATER_LIMITS.depthM, true),
-      areaM2: canonicalNumber(record5.areaM2.value, `${path2}.areaM2`, 0, 1e12, true),
-      cellCount: integer2(record5.cellCount.value, 1, cells, `${path2}.cellCount`),
+      spillLevelM: canonicalNumber(record6.spillLevelM.value, `${path2}.spillLevelM`, -WATER_LIMITS.absLevelM, WATER_LIMITS.absLevelM),
+      maxDepthM: canonicalNumber(record6.maxDepthM.value, `${path2}.maxDepthM`, 0, WATER_LIMITS.depthM, true),
+      areaM2: canonicalNumber(record6.areaM2.value, `${path2}.areaM2`, 0, 1e12, true),
+      cellCount: integer2(record6.cellCount.value, 1, cells, `${path2}.cellCount`),
       seedCell,
-      spillInsideCell: integer2(record5.spillInsideCell.value, 0, cells - 1, `${path2}.spillInsideCell`),
+      spillInsideCell: integer2(record6.spillInsideCell.value, 0, cells - 1, `${path2}.spillInsideCell`),
       spillOutsideCell,
-      spillOutsideDrainageRank: integer2(record5.spillOutsideDrainageRank.value, 0, cells - 1, `${path2}.spillOutsideDrainageRank`),
+      spillOutsideDrainageRank: integer2(record6.spillOutsideDrainageRank.value, 0, cells - 1, `${path2}.spillOutsideDrainageRank`),
       footprint: Object.freeze({ points: points2, ...holes.length > 0 ? { holes: Object.freeze(holes) } : {} })
     });
   });
@@ -123640,22 +124555,22 @@ function parseTopology(value) {
   let totalReachPoints = 0, totalWaterfalls = 0, priorReachStart = -1;
   const reaches = reachSource.map((candidate, reachIndex) => {
     const path2 = `hydrology water topology reaches[${reachIndex}]`;
-    const record5 = exactRecord(candidate, REACH_KEYS, path2, seen);
-    const startCell = integer2(record5.startCell.value, 0, cells - 1, `${path2}.startCell`);
-    const endCell = integer2(record5.endCell.value, 0, cells - 1, `${path2}.endCell`);
-    const id4 = `gen-r-${startCell.toString(36)}-${endCell.toString(36)}`;
-    if (record5.id.value !== id4) fail3(`${path2}.id must equal '${id4}'`);
-    if (reachIds.has(id4)) fail3(`hydrology water topology has duplicate reach id '${id4}'`);
+    const record6 = exactRecord(candidate, REACH_KEYS, path2, seen);
+    const startCell = integer2(record6.startCell.value, 0, cells - 1, `${path2}.startCell`);
+    const endCell = integer2(record6.endCell.value, 0, cells - 1, `${path2}.endCell`);
+    const id7 = `gen-r-${startCell.toString(36)}-${endCell.toString(36)}`;
+    if (record6.id.value !== id7) fail3(`${path2}.id must equal '${id7}'`);
+    if (reachIds.has(id7)) fail3(`hydrology water topology has duplicate reach id '${id7}'`);
     if (startCell <= priorReachStart) fail3("hydrology water topology reaches must be strictly ordered by startCell");
     priorReachStart = startCell;
-    reachIds.add(id4);
-    const order = integer2(record5.order.value, 1, WATER_LIMITS.streamOrder, `${path2}.order`);
+    reachIds.add(id7);
+    const order = integer2(record6.order.value, 1, WATER_LIMITS.streamOrder, `${path2}.order`);
     const className = order <= 2 ? "stream" : "river";
-    if (record5.class.value !== className) fail3(`${path2}.class is inconsistent with order`);
-    const points2 = Object.freeze(denseArray(record5.points.value, 2, WATER_LIMITS.waterwayPoints, `${path2}.points`, seen).map((point3, index) => parsePoint(point3, `${path2}.points[${index}]`, seen)));
-    const widthsSource = denseArray(record5.widths.value, points2.length, points2.length, `${path2}.widths`, seen);
-    const terrainSource = denseArray(record5.terrainElevationsM.value, points2.length, points2.length, `${path2}.terrainElevationsM`, seen);
-    const surfaceSource = denseArray(record5.surfaceElevationsM.value, points2.length, points2.length, `${path2}.surfaceElevationsM`, seen);
+    if (record6.class.value !== className) fail3(`${path2}.class is inconsistent with order`);
+    const points2 = Object.freeze(denseArray(record6.points.value, 2, WATER_LIMITS.waterwayPoints, `${path2}.points`, seen).map((point3, index) => parsePoint(point3, `${path2}.points[${index}]`, seen)));
+    const widthsSource = denseArray(record6.widths.value, points2.length, points2.length, `${path2}.widths`, seen);
+    const terrainSource = denseArray(record6.terrainElevationsM.value, points2.length, points2.length, `${path2}.terrainElevationsM`, seen);
+    const surfaceSource = denseArray(record6.surfaceElevationsM.value, points2.length, points2.length, `${path2}.surfaceElevationsM`, seen);
     const widths = Object.freeze(widthsSource.map((entry, index) => canonicalNumber(entry, `${path2}.widths[${index}]`, 0, WATER_LIMITS.widthM, true)));
     const terrainElevationsM = Object.freeze(terrainSource.map((entry, index) => canonicalNumber(entry, `${path2}.terrainElevationsM[${index}]`, -MAX_HYDROLOGY_ABS_HEIGHT_M, MAX_HYDROLOGY_ABS_HEIGHT_M)));
     const surfaceElevationsM = Object.freeze(surfaceSource.map((entry, index) => canonicalNumber(entry, `${path2}.surfaceElevationsM[${index}]`, -MAX_HYDROLOGY_ABS_HEIGHT_M, MAX_HYDROLOGY_ABS_HEIGHT_M)));
@@ -123672,7 +124587,7 @@ function parseTopology(value) {
     }
     totalReachPoints += points2.length;
     if (totalReachPoints > WATER_LIMITS.totalWaterwayPoints) fail3("hydrology water topology reach points exceed aggregate limits");
-    const waterfallSource = denseArray(record5.waterfalls.value, 0, points2.length - 1, `${path2}.waterfalls`, seen);
+    const waterfallSource = denseArray(record6.waterfalls.value, 0, points2.length - 1, `${path2}.waterfalls`, seen);
     let priorEnd = 0;
     const waterfalls = waterfallSource.map((candidateSpan, waterfallIndex) => {
       const spanPath = `${path2}.waterfalls[${waterfallIndex}]`;
@@ -123695,7 +124610,7 @@ function parseTopology(value) {
     totalWaterfalls += waterfalls.length;
     if (totalWaterfalls > WATER_LIMITS.totalWaterwayPoints) fail3("hydrology water topology waterfall metadata exceeds aggregate limits");
     return Object.freeze({
-      id: id4,
+      id: id7,
       class: className,
       order,
       startCell,
@@ -123855,10 +124770,10 @@ function decodeHydrologyWaterArtifact(bytesInput, expectedBindingsInput = void 0
     let pointCount = 0;
     const rings = [];
     for (let ring2 = ringStart; ring2 < ringStart + ringCount; ring2++) {
-      const record5 = ringRecords[ring2];
-      if (record5.basinIndex !== index || record5.role !== (ring2 === ringStart ? 0 : 1)) fail3(`hydrology water artifact basin ${index} ring ownership/role is inconsistent`);
-      rings.push(Object.freeze(allBasinPoints.slice(record5.pointStart, record5.pointStart + record5.pointCount)));
-      pointCount += record5.pointCount;
+      const record6 = ringRecords[ring2];
+      if (record6.basinIndex !== index || record6.role !== (ring2 === ringStart ? 0 : 1)) fail3(`hydrology water artifact basin ${index} ring ownership/role is inconsistent`);
+      rings.push(Object.freeze(allBasinPoints.slice(record6.pointStart, record6.pointStart + record6.pointCount)));
+      pointCount += record6.pointCount;
     }
     if (view.getUint32(offset + 24, true) !== pointCount) fail3(`hydrology water artifact basin ${index} point count is inconsistent`);
     const seedCell = view.getUint32(offset, true), spillOutsideCell = view.getUint32(offset + 8, true);
@@ -124063,26 +124978,26 @@ function plainRecord(value, label4) {
   if (prototype !== Object.prototype && prototype !== null) fail4(`${label4} must be a plain object`);
   return value;
 }
-function exactDataRecord(value, keys, label4, optional2 = /* @__PURE__ */ new Set()) {
+function exactDataRecord(value, keys2, label4, optional2 = /* @__PURE__ */ new Set()) {
   if (value === null || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
     fail4(`${label4} must be a plain object`);
   }
   if (Object.getOwnPropertySymbols(value).length !== 0) fail4(`${label4} must not contain symbol fields`);
   const descriptors = Object.getOwnPropertyDescriptors(value);
   for (const [key, descriptor] of Object.entries(descriptors)) {
-    if (!keys.has(key)) fail4(`${label4} has unknown field '${key}'`);
+    if (!keys2.has(key)) fail4(`${label4} has unknown field '${key}'`);
     if (!("value" in descriptor) || descriptor.enumerable !== true) fail4(`${label4}.${key} must be an enumerable data field`);
   }
-  for (const key of keys) if (!optional2.has(key) && !Object.hasOwn(value, key)) fail4(`${label4} is missing '${key}'`);
+  for (const key of keys2) if (!optional2.has(key) && !Object.hasOwn(value, key)) fail4(`${label4} is missing '${key}'`);
   return descriptors;
 }
 function parseBindingHashes(value, label4) {
   const descriptors = exactDataRecord(value, GENERATED_BINDING_KEYS, label4);
   const parsed = {};
   for (const key of GENERATED_BINDING_KEYS) {
-    const hash7 = descriptors[key].value;
-    if (typeof hash7 !== "string" || !DERIVED_CONTENT_HASH_RE.test(hash7)) fail4(`${label4}.${key} must be a lowercase sha256 content hash`);
-    parsed[key] = hash7;
+    const hash9 = descriptors[key].value;
+    if (typeof hash9 !== "string" || !DERIVED_CONTENT_HASH_RE.test(hash9)) fail4(`${label4}.${key} must be a lowercase sha256 content hash`);
+    parsed[key] = hash9;
   }
   return Object.freeze(parsed);
 }
@@ -124512,11 +125427,11 @@ function targetDepth(body, shoreDistanceM) {
   }
   return body.zones[low].depthM;
 }
-function frozenResult(type, isSubmerged, id4, kind, surfaceLevelM, oceanSurfaceCandidateM, authoredTargetDepthM, targetFloorLevelM, actualSubmergedDepthM, shoreDistanceM) {
+function frozenResult(type, isSubmerged, id7, kind, surfaceLevelM, oceanSurfaceCandidateM, authoredTargetDepthM, targetFloorLevelM, actualSubmergedDepthM, shoreDistanceM) {
   return Object.freeze({
     type,
     isSubmerged,
-    id: id4,
+    id: id7,
     kind,
     surfaceLevelM,
     oceanSurfaceCandidateM,
@@ -124691,18 +125606,18 @@ var WaterField = class {
         const terrainHeightM = source.terrainSampler === void 0 ? void 0 : source.terrainSampler(x3, z4, row, col);
         if (source.terrainSampler !== void 0) finite5(terrainHeightM, `water sample terrainSampler(${row},${col})`);
         const queried = this.#queryRaw(x3, z4, terrainHeightM);
-        const result = queried.result;
+        const result2 = queried.result;
         const offset = (row * cols + col) * WATER_SAMPLE_RECORD_BYTES;
-        view.setUint8(offset, result.type === "dry" ? WATER_SAMPLE_CLASS_DRY : result.type === "ocean" ? WATER_SAMPLE_CLASS_OCEAN : WATER_SAMPLE_CLASS_BASIN);
-        view.setUint8(offset + 1, result.isSubmerged === null ? WATER_SAMPLE_SUBMERGED_UNKNOWN : result.isSubmerged ? WATER_SAMPLE_SUBMERGED_YES : WATER_SAMPLE_SUBMERGED_NO);
+        view.setUint8(offset, result2.type === "dry" ? WATER_SAMPLE_CLASS_DRY : result2.type === "ocean" ? WATER_SAMPLE_CLASS_OCEAN : WATER_SAMPLE_CLASS_BASIN);
+        view.setUint8(offset + 1, result2.isSubmerged === null ? WATER_SAMPLE_SUBMERGED_UNKNOWN : result2.isSubmerged ? WATER_SAMPLE_SUBMERGED_YES : WATER_SAMPLE_SUBMERGED_NO);
         view.setUint8(offset + 2, 0);
         view.setUint8(offset + 3, 0);
         view.setInt32(offset + 4, queried.bodyIndex, true);
-        writeFloatOrCanonicalNaN(view, offset + 8, result.surfaceLevelM);
-        writeFloatOrCanonicalNaN(view, offset + 16, result.authoredTargetDepthM);
-        writeFloatOrCanonicalNaN(view, offset + 24, result.targetFloorLevelM);
-        writeFloatOrCanonicalNaN(view, offset + 32, result.actualSubmergedDepthM);
-        writeFloatOrCanonicalNaN(view, offset + 40, result.oceanSurfaceCandidateM);
+        writeFloatOrCanonicalNaN(view, offset + 8, result2.surfaceLevelM);
+        writeFloatOrCanonicalNaN(view, offset + 16, result2.authoredTargetDepthM);
+        writeFloatOrCanonicalNaN(view, offset + 24, result2.targetFloorLevelM);
+        writeFloatOrCanonicalNaN(view, offset + 32, result2.actualSubmergedDepthM);
+        writeFloatOrCanonicalNaN(view, offset + 40, result2.oceanSurfaceCandidateM);
       }
     }
     if (source.shouldCancel?.()) throw new WaterFieldCancelledError();
@@ -124973,19 +125888,19 @@ var WaterContactRuntime = class {
     }
     const terrainHeightM = finite6(active.sampleTerrainHeight(worldX, worldZ), "water contact terrain height");
     const [offsetX, offsetY, offsetZ] = active.offset;
-    const result = active.field.query(worldX - offsetX, worldZ - offsetZ, terrainHeightM - offsetY);
-    if (result.isSubmerged !== true || result.surfaceLevelM === null || result.actualSubmergedDepthM === null) {
+    const result2 = active.field.query(worldX - offsetX, worldZ - offsetZ, terrainHeightM - offsetY);
+    if (result2.isSubmerged !== true || result2.surfaceLevelM === null || result2.actualSubmergedDepthM === null) {
       return drySample(terrainHeightM);
     }
     return {
       wet: true,
-      type: result.type === "basin" ? "basin" : "ocean",
-      bodyId: result.id,
-      kind: result.kind,
-      surfaceLevelM: result.surfaceLevelM + offsetY,
-      columnDepthM: result.actualSubmergedDepthM,
+      type: result2.type === "basin" ? "basin" : "ocean",
+      bodyId: result2.id,
+      kind: result2.kind,
+      surfaceLevelM: result2.surfaceLevelM + offsetY,
+      columnDepthM: result2.actualSubmergedDepthM,
       terrainHeightM,
-      shoreDistanceM: result.shoreDistanceM
+      shoreDistanceM: result2.shoreDistanceM
     };
   }
 };
@@ -125403,13 +126318,13 @@ function registerTerrainEditSkills(registry2, layers = /* @__PURE__ */ new Map()
     input: deformInput,
     output: external_exports.object({ ok: external_exports.boolean() }),
     handler: (input, ctx) => {
-      let id4 = input.entity;
-      if (id4 === void 0) {
+      let id7 = input.entity;
+      if (id7 === void 0) {
         let last;
         for (const k3 of layers.keys()) last = k3;
-        id4 = last;
+        id7 = last;
       }
-      const layer = id4 !== void 0 ? layers.get(id4) : void 0;
+      const layer = id7 !== void 0 ? layers.get(id7) : void 0;
       if (layer === void 0) return { ok: false };
       const patch = captureHeightPatch(layer.tile, input.center, input.radius);
       const undoLayer = layer, undoWorld = ctx.world;
@@ -125419,7 +126334,7 @@ function registerTerrainEditSkills(registry2, layers = /* @__PURE__ */ new Map()
       });
       applyBrush(layer.tile, input);
       reprojectLayerHeights(ctx.world, layer, input.center[0], input.center[1], input.radius);
-      ctx.emit("terrain.deformed", { entity: id4, mode: input.mode });
+      ctx.emit("terrain.deformed", { entity: id7, mode: input.mode });
       return { ok: true };
     }
   };
@@ -125432,13 +126347,13 @@ function registerTerrainEditSkills(registry2, layers = /* @__PURE__ */ new Map()
     input: paintInput,
     output: external_exports.object({ ok: external_exports.boolean() }),
     handler: (input, ctx) => {
-      let id4 = input.entity;
-      if (id4 === void 0) {
+      let id7 = input.entity;
+      if (id7 === void 0) {
         let last;
         for (const k3 of layers.keys()) last = k3;
-        id4 = last;
+        id7 = last;
       }
-      const layer = id4 !== void 0 ? layers.get(id4) : void 0;
+      const layer = id7 !== void 0 ? layers.get(id7) : void 0;
       if (layer === void 0) return { ok: false };
       applyBrushPaint(layer.tile, input);
       if (layer.mesh?.geometry !== void 0) {
@@ -125447,7 +126362,7 @@ function registerTerrainEditSkills(registry2, layers = /* @__PURE__ */ new Map()
         applyPaintOverlay(g4, layer.tile);
       }
       layer.grass?.refreshCircle(input.center[0], input.center[1], input.radius + 3);
-      ctx.emit("terrain.painted", { entity: id4, material: input.material });
+      ctx.emit("terrain.painted", { entity: id7, material: input.material });
       return { ok: true };
     }
   };
@@ -126215,7 +127130,7 @@ function mergedMesh(pieces, materials) {
   const positions = new Float32Array(total * 3);
   const normals = new Float32Array(total * 3);
   const geometry = new BufferGeometry();
-  const raw = [];
+  const raw3 = [];
   let vstart = 0;
   for (const p2 of pieces) {
     const pa = p2.geo.attributes.position.array;
@@ -126223,13 +127138,13 @@ function mergedMesh(pieces, materials) {
     positions.set(pa, vstart * 3);
     normals.set(na, vstart * 3);
     const count = p2.geo.attributes.position.count;
-    raw.push({ start: vstart, count, mat: p2.mat });
+    raw3.push({ start: vstart, count, mat: p2.mat });
     vstart += count;
     p2.geo.dispose();
   }
   geometry.setAttribute("position", new BufferAttribute(positions, 3));
   geometry.setAttribute("normal", new BufferAttribute(normals, 3));
-  for (const g4 of raw) {
+  for (const g4 of raw3) {
     const last = geometry.groups[geometry.groups.length - 1];
     if (last !== void 0 && last.materialIndex === g4.mat && last.start + last.count === g4.start) {
       last.count += g4.count;
@@ -126809,8 +127724,8 @@ var BUILDING_ARCHETYPES = {
   [KEEP_BRIEF.id]: KEEP_BRIEF,
   [LONGHALL_BRIEF.id]: LONGHALL_BRIEF
 };
-function archetypeBrief(id4) {
-  return BUILDING_ARCHETYPES[id4];
+function archetypeBrief(id7) {
+  return BUILDING_ARCHETYPES[id7];
 }
 
 // src/skills/grass-plan.ts
@@ -126938,9 +127853,9 @@ function buildGrassGroundTint(tile, opts) {
         return dx * dx + dz * dz <= inclusion.r * inclusion.r;
       });
     }
-    let hash7 = (Math.imul(column + 1, 374761393) ^ Math.imul(row + 1, 668265263)) >>> 0;
-    hash7 = Math.imul(hash7 ^ hash7 >>> 13, 1274126177) >>> 0;
-    const jitter = 0.9 + hash7 / 4294967296 * 0.2;
+    let hash9 = (Math.imul(column + 1, 374761393) ^ Math.imul(row + 1, 668265263)) >>> 0;
+    hash9 = Math.imul(hash9 ^ hash9 >>> 13, 1274126177) >>> 0;
+    const jitter = 0.9 + hash9 / 4294967296 * 0.2;
     tint[vertex * 4] = base.r * jitter;
     tint[vertex * 4 + 1] = base.g * jitter;
     tint[vertex * 4 + 2] = base.b * jitter;
@@ -127246,7 +128161,7 @@ function makeMaterials(THREE, direction3, rng) {
       metalness: 0
     });
   };
-  const plain = (c2, roughness3) => new THREE.MeshStandardMaterial({ color: weathered ? shade(c2, 0.93) : c2, roughness: roughness3, metalness: 0 });
+  const plain2 = (c2, roughness3) => new THREE.MeshStandardMaterial({ color: weathered ? shade(c2, 0.93) : c2, roughness: roughness3, metalness: 0 });
   const timberC = col("timber", "trim", "stone");
   const mats = {
     stone: mk(paintAshlar, col("stone", "slate", "plaster"), { repeat: 2.2, rough: 0.92, normal: 1.7 }),
@@ -127256,8 +128171,8 @@ function makeMaterials(THREE, direction3, rng) {
     thatch: mk(paintThatch, col("thatch", "timber"), { repeat: 0.32, rough: 1, normal: 1.5 }),
     slate: mk(paintSlate, col("slate", "stone", "trim"), { repeat: 0.4, rough: 0.75, normal: 1.2 }),
     terracotta: mk(paintTiles, col("terracotta", "slate", "thatch"), { repeat: 0.3, rough: 0.8, normal: 1.5 }),
-    trim: plain(col("trim", "timber"), 0.8),
-    opening: plain(shade(col("trim", "slate"), 0.3), 0.95),
+    trim: plain2(col("trim", "timber"), 0.8),
+    opening: plain2(shade(col("trim", "slate"), 0.3), 0.95),
     earth: mk(paintEarth, col("timber", "trim").lerp(col("trim", "stone"), 0.45).lerp(new THREE.Color(16777215), 0.18), { repeat: 0.3, rough: 1, normal: 1.4 }),
     gravel: mk(paintGravel, col("stone", "slate").lerp(col("timber", "trim"), 0.28).lerp(new THREE.Color(16777215), 0.06), { repeat: 0.6, rough: 1, normal: 1.9 }),
     cobble: mk(paintCobble, shade(col("stone", "trim").lerp(timberC, 0.35), 0.92), { repeat: 0.32, rough: 0.9, normal: 2 })
@@ -127398,17 +128313,19 @@ var buildOutput = external_exports.object({
   assetHashes: external_exports.record(external_exports.string(), external_exports.string()),
   entities: external_exports.array(external_exports.string()),
   /** The computed placements (render/inspection). NOT the durable contract — recomputed on replay. */
-  placements: external_exports.array(external_exports.object({
-    assetId: external_exports.string(),
-    role: external_exports.string(),
-    style: external_exports.string(),
-    x: external_exports.number(),
-    y: external_exports.number(),
-    z: external_exports.number(),
-    yaw: external_exports.number(),
-    /** The authored anchor id this placement was pinned to (absent when unanchored). */
-    anchorId: external_exports.string().optional()
-  }))
+  placements: external_exports.array(
+    external_exports.object({
+      assetId: external_exports.string(),
+      role: external_exports.string(),
+      style: external_exports.string(),
+      x: external_exports.number(),
+      y: external_exports.number(),
+      z: external_exports.number(),
+      yaw: external_exports.number(),
+      /** The authored anchor id this placement was pinned to (absent when unanchored). */
+      anchorId: external_exports.string().optional()
+    })
+  )
 });
 function footprintRadius(assets, assetId) {
   const cardId = assetId.replace(/\.glb$/i, ".card.json");
@@ -127440,14 +128357,14 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
     input: buildInput,
     output: buildOutput,
     handler: async (input, ctx) => {
-      let id4 = input.terrainEntity;
-      if (id4 === void 0) {
+      let id7 = input.terrainEntity;
+      if (id7 === void 0) {
         let last;
         for (const k3 of layers.keys()) last = k3;
-        id4 = last;
+        id7 = last;
       }
-      const layer = id4 !== void 0 ? layers.get(id4) : void 0;
-      if (layer === void 0 || id4 === void 0) {
+      const layer = id7 !== void 0 ? layers.get(id7) : void 0;
+      if (layer === void 0 || id7 === void 0) {
         throw new Error("village.build: no terrain layer to build on \u2014 create one with terrain.create first");
       }
       {
@@ -127501,7 +128418,10 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
         specRanges.push({ start: radii.length, count });
         if (spec.archetype !== void 0) {
           const brief = archetypeBrief(spec.archetype);
-          if (brief === void 0) throw new Error(`village.build: unknown archetype '${spec.archetype}' \u2014 not in the shipped building-brief library`);
+          if (brief === void 0)
+            throw new Error(
+              `village.build: unknown archetype '${spec.archetype}' \u2014 not in the shipped building-brief library`
+            );
           const recipe0 = briefToRecipe(brief);
           const r3 = 0.5 * Math.hypot(recipe0.width, recipe0.depth);
           for (let i2 = 0; i2 < count; i2++) {
@@ -127583,23 +128503,32 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
         const shoulderR = plaza ? r2 + 15 : siting.terrace === "graded" ? r2 * 2 + 2 : r2 * 1.15;
         const targetH = isFocal ? Math.min(levelTargets[k3], snowSafeFocalTop) : levelTargets[k3];
         const target = targetH - oy;
-        for (const [radius, falloff] of [[shoulderR, "smooth"], [flatR, "constant"]]) {
-          const res = await registry2.invoke("terrain.deform", {
-            entity: id4,
-            center: [p2.x, p2.z],
-            radius,
-            delta: target,
-            mode: "flatten",
-            falloff
-          }, {
-            agentId: ctx.agentId,
-            sessionId: ctx.sessionId,
-            permissions: new Set(PLACE_PERMS2),
-            tick: ctx.tick,
-            world: ctx.world,
-            chainId: ctx.chainId
-          });
-          if (!res.success) throw new Error(`village.build: terrain.deform (level) failed: ${JSON.stringify(res.error)}`);
+        for (const [radius, falloff] of [
+          [shoulderR, "smooth"],
+          [flatR, "constant"]
+        ]) {
+          const res = await registry2.invoke(
+            "terrain.deform",
+            {
+              entity: id7,
+              center: [p2.x, p2.z],
+              radius,
+              delta: target,
+              mode: "flatten",
+              falloff
+            },
+            {
+              agentId: ctx.agentId,
+              sessionId: ctx.sessionId,
+              permissions: new Set(PLACE_PERMS2),
+              tick: ctx.tick,
+              world: ctx.world,
+              chainId: ctx.chainId,
+              chainToken: ctx.chainToken
+            }
+          );
+          if (!res.success)
+            throw new Error(`village.build: terrain.deform (level) failed: ${JSON.stringify(res.error)}`);
         }
       }
       const villageSeed = (input.seed ?? hashStr(JSON.stringify({ d: input.direction, s: input.steering }))) >>> 0;
@@ -127609,7 +128538,8 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
         permissions: new Set(PLACE_PERMS2),
         tick: ctx.tick,
         world: ctx.world,
-        chainId: ctx.chainId
+        chainId: ctx.chainId,
+        chainToken: ctx.chainToken
       });
       const entities = [];
       const outPlacements = [];
@@ -127620,38 +128550,66 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
         const anchorId = p2.anchorId;
         if (inst.kind === "brief") {
           const recipe = briefToRecipe(inst.brief, { rotation: p2.yaw });
-          const res = await registry2.invoke("building.assemble", {
-            position: [p2.x, y4, p2.z],
-            seed: kitSeed,
-            ...recipe
-          }, nestedCtx());
-          if (!res.success) throw new Error(`village.build: building.assemble failed for archetype '${inst.brief.id}': ${JSON.stringify(res.error)}`);
+          const res = await registry2.invoke(
+            "building.assemble",
+            {
+              position: [p2.x, y4, p2.z],
+              seed: kitSeed,
+              ...recipe
+            },
+            nestedCtx()
+          );
+          if (!res.success)
+            throw new Error(
+              `village.build: building.assemble failed for archetype '${inst.brief.id}': ${JSON.stringify(res.error)}`
+            );
           entities.push(res.result.root);
-          outPlacements.push({ assetId: `archetype:${inst.brief.id}`, role: p2.role, style: p2.style, x: p2.x, y: y4, z: p2.z, yaw: p2.yaw, anchorId });
+          outPlacements.push({
+            assetId: `archetype:${inst.brief.id}`,
+            role: p2.role,
+            style: p2.style,
+            x: p2.x,
+            y: y4,
+            z: p2.z,
+            yaw: p2.yaw,
+            anchorId
+          });
         } else if (inst.kind === "kit") {
           const [w5, d2, h2] = inst.sizeM;
-          const res = await registry2.invoke("architecture.building", {
-            position: [p2.x, y4, p2.z],
-            rotation: p2.yaw,
-            // yaw about +Y (radians) — the SAME facing the GLB path passes as rotation[1]
-            width: w5,
-            depth: d2,
-            height: h2,
-            seed: kitSeed
-          }, nestedCtx());
-          if (!res.success) throw new Error(`village.build: architecture.building failed for kit '${p2.role}': ${JSON.stringify(res.error)}`);
+          const res = await registry2.invoke(
+            "architecture.building",
+            {
+              position: [p2.x, y4, p2.z],
+              rotation: p2.yaw,
+              // yaw about +Y (radians) — the SAME facing the GLB path passes as rotation[1]
+              width: w5,
+              depth: d2,
+              height: h2,
+              seed: kitSeed
+            },
+            nestedCtx()
+          );
+          if (!res.success)
+            throw new Error(
+              `village.build: architecture.building failed for kit '${p2.role}': ${JSON.stringify(res.error)}`
+            );
           entities.push(res.result.root);
           outPlacements.push({ assetId: "kit", role: p2.role, style: p2.style, x: p2.x, y: y4, z: p2.z, yaw: p2.yaw, anchorId });
         } else {
           const assetId = inst.assetId;
-          const res = await registry2.invoke("asset.place", {
-            assetId,
-            position: [p2.x, y4, p2.z],
-            rotation: [0, p2.yaw, 0],
-            ground: true,
-            hash: assetHashes[assetId]
-          }, nestedCtx());
-          if (!res.success) throw new Error(`village.build: asset.place failed for '${assetId}': ${JSON.stringify(res.error)}`);
+          const res = await registry2.invoke(
+            "asset.place",
+            {
+              assetId,
+              position: [p2.x, y4, p2.z],
+              rotation: [0, p2.yaw, 0],
+              ground: true,
+              hash: assetHashes[assetId]
+            },
+            nestedCtx()
+          );
+          if (!res.success)
+            throw new Error(`village.build: asset.place failed for '${assetId}': ${JSON.stringify(res.error)}`);
           entities.push(res.result.entity);
           outPlacements.push({ assetId, role: p2.role, style: p2.style, x: p2.x, y: y4, z: p2.z, yaw: p2.yaw, anchorId });
         }
@@ -127659,12 +128617,17 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
       const placed = placements.map((p2) => ({ x: p2.x, z: p2.z, r: radii[p2.index] }));
       const groundGeoms = [];
       const laneBuf = siting.lane === "none" ? null : buildLaneGeometry(heightAt, placed);
-      if (laneBuf !== null) groundGeoms.push({ buf: laneBuf, kind: siting.lane === "cobble" ? "cobble" : siting.lane === "gravel" ? "gravel" : "earth" });
+      if (laneBuf !== null)
+        groundGeoms.push({
+          buf: laneBuf,
+          kind: siting.lane === "cobble" ? "cobble" : siting.lane === "gravel" ? "gravel" : "earth"
+        });
       if ((siting.yard === "earth" || siting.yard === "cobble-courtyard") && placements.length > 0) {
         const p2 = placements[0];
         const r2 = radii[p2.index];
         groundGeoms.push({ buf: buildGroundPadGeometry(heightAt, p2.x, p2.z, r2 + 16, 0.2), kind: "earth" });
-        if (siting.yard === "cobble-courtyard") groundGeoms.push({ buf: buildGroundPadGeometry(heightAt, p2.x, p2.z, r2 + 4, 0.32), kind: "cobble" });
+        if (siting.yard === "cobble-courtyard")
+          groundGeoms.push({ buf: buildGroundPadGeometry(heightAt, p2.x, p2.z, r2 + 4, 0.32), kind: "cobble" });
       }
       const groundSeed = (input.seed ?? hashStr(JSON.stringify({ d: input.direction, s: input.steering }))) >>> 0;
       const hasCanvas = typeof OffscreenCanvas !== "undefined" || typeof document !== "undefined";
@@ -127672,7 +128635,10 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
       for (const spec of groundGeoms) {
         let mesh;
         if (canRender && mats !== null) {
-          const m2 = meshFromBuffers(spec.buf, spec.kind === "cobble" ? mats.cobble : spec.kind === "gravel" ? mats.gravel : mats.earth);
+          const m2 = meshFromBuffers(
+            spec.buf,
+            spec.kind === "cobble" ? mats.cobble : spec.kind === "gravel" ? mats.gravel : mats.earth
+          );
           scene.add(m2);
           mesh = m2;
         }
@@ -127681,16 +128647,21 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
           despawnRenderable(ctx.world.ecs, geid);
           throw new Error("village.build: entity capacity exceeded (MAX_ENTITIES) placing ground geometry");
         }
-        const groundEntity = ctx.world.entities.create({ eid: geid, mesh, origin: { tool: "village.build", input: { ground: true } } });
+        const groundEntity = ctx.world.entities.create({
+          eid: geid,
+          mesh,
+          origin: { tool: "village.build", input: { ground: true } }
+        });
         entities.push(groundEntity);
       }
       if (siting.yard === "lawn") {
         const lawnIncl = placements.map((p2) => ({ x: p2.x, z: p2.z, r: radii[p2.index] + 12 }));
         const lawnExcl = placements.map((p2) => ({ x: p2.x, z: p2.z, r: radii[p2.index] * 0.6 }));
         const elevMin = sampler3.seaLevel - 5, elevMax = oy + hi + 12;
-        const lawnBladeBudget = canRenderGrass ? Math.max(3, Math.floor(
-          grassVisualPackage.profile("performance").maxResidentBlades / Math.max(1, placements.length)
-        )) : 0;
+        const lawnBladeBudget = canRenderGrass ? Math.max(
+          3,
+          Math.floor(grassVisualPackage.profile("performance").maxResidentBlades / Math.max(1, placements.length))
+        ) : 0;
         for (let lawnIndex = 0; lawnIndex < placements.length; lawnIndex++) {
           const p2 = placements[lawnIndex];
           let lawnMesh;
@@ -127722,7 +128693,13 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
             despawnRenderable(ctx.world.ecs, leid);
             throw new Error("village.build: entity capacity exceeded (lawn)");
           }
-          entities.push(ctx.world.entities.create({ eid: leid, mesh: lawnMesh, origin: { tool: "village.build", input: { lawn: true } } }));
+          entities.push(
+            ctx.world.entities.create({
+              eid: leid,
+              mesh: lawnMesh,
+              origin: { tool: "village.build", input: { lawn: true } }
+            })
+          );
         }
         {
           let tintMesh;
@@ -127746,9 +128723,18 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
             despawnRenderable(ctx.world.ecs, teid);
             throw new Error("village.build: entity capacity exceeded (lawn tint)");
           }
-          entities.push(ctx.world.entities.create({ eid: teid, mesh: tintMesh, origin: { tool: "village.build", input: { lawn: true } } }));
+          entities.push(
+            ctx.world.entities.create({
+              eid: teid,
+              mesh: tintMesh,
+              origin: { tool: "village.build", input: { lawn: true } }
+            })
+          );
         }
-        const decoAssets = siting.lawnVegetation.map((a2) => ({ id: a2.id, weight: a2.weight }));
+        const decoAssets = siting.lawnVegetation.map((a2) => ({
+          id: a2.id,
+          weight: a2.weight
+        }));
         if (decoAssets.length > 0) {
           const decoConfig = {
             seed: (villageSeed ^ 5369106) >>> 0,
@@ -127772,11 +128758,11 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
             }
             l2.push(inst);
           }
-          for (const [id5, list] of byId) {
+          for (const [id8, list] of byId) {
             let decoMesh;
             if (canRenderGrass) {
               try {
-                const root = await parseGltfScene(id5, assets.resolve(id5).bytes, ctx.world.gltfCache);
+                const root = await parseGltfScene(id8, assets.resolve(id8).bytes, ctx.world.gltfCache);
                 const built = buildAssetInstancedMeshes(root, list, { normalizeHeight: 0.5 });
                 if (built.length > 0) {
                   const group = new Group();
@@ -127785,7 +128771,10 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
                   decoMesh = group;
                 }
               } catch (error51) {
-                ctx.emit("village.lawn_deco_failed", { assetId: id5, message: error51 instanceof Error ? error51.message : String(error51) });
+                ctx.emit("village.lawn_deco_failed", {
+                  assetId: id8,
+                  message: error51 instanceof Error ? error51.message : String(error51)
+                });
               }
             }
             const deid = spawnRenderable(ctx.world.ecs, inertTransform4(), 0, 0, 0);
@@ -127793,7 +128782,13 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
               despawnRenderable(ctx.world.ecs, deid);
               throw new Error("village.build: entity capacity exceeded (lawn decoration)");
             }
-            entities.push(ctx.world.entities.create({ eid: deid, mesh: decoMesh, origin: { tool: "village.build", input: { lawnDeco: true } } }));
+            entities.push(
+              ctx.world.entities.create({
+                eid: deid,
+                mesh: decoMesh,
+                origin: { tool: "village.build", input: { lawnDeco: true } }
+              })
+            );
           }
         }
       }
@@ -127833,36 +128828,37 @@ function registerVillageSkills(registry2, layers, assets, footprints = /* @__PUR
         }
       }
       {
-        const prior = footprints.get(id4);
-        const undoTerrainId = id4;
+        const prior = footprints.get(id7);
+        const undoTerrainId = id7;
         ctx.undo("village.build footprints", () => {
           if (prior === void 0) footprints.delete(undoTerrainId);
           else footprints.set(undoTerrainId, prior);
           for (const clear of vegetationClears.get(undoTerrainId) ?? []) {
             try {
               const r2 = clear();
-              if (r2 instanceof Promise) r2.catch(() => {
-              });
+              if (r2 instanceof Promise)
+                r2.catch(() => {
+                });
             } catch {
             }
           }
         });
       }
-      footprints.set(id4, exclusions);
-      const clears = vegetationClears.get(id4);
+      footprints.set(id7, exclusions);
+      const clears = vegetationClears.get(id7);
       if (clears !== void 0) {
         for (const clear of clears) await clear();
       }
       const seed = input.seed ?? hashStr(JSON.stringify({ d: input.direction, s: input.steering }));
       ctx.emit("village.built", {
-        terrainEntity: id4,
+        terrainEntity: id7,
         seed,
         direction: input.direction,
         steering: input.steering,
         assetHashes,
         placements: placements.length
       });
-      return { terrainEntity: id4, placed: placements.length, assetHashes, entities, placements: outPlacements };
+      return { terrainEntity: id7, placed: placements.length, assetHashes, entities, placements: outPlacements };
     }
   };
   registry2.register(build);
@@ -128018,7 +129014,7 @@ function registerVegetationSkills(registry2, layers, assets, footprints = /* @__
         const config2 = {
           seed: input.seed,
           density: input.density,
-          assets: paletteIds.map((id4) => ({ id: id4 })),
+          assets: paletteIds.map((id7) => ({ id: id7 })),
           slopeMax: input.slopeMax,
           sizeRange: input.sizeRange,
           coverage: input.coverage,
@@ -128084,35 +129080,35 @@ function registerVegetationSkills(registry2, layers, assets, footprints = /* @__
           list.push(inst);
         }
         let treePlacementCount = 0;
-        for (const [id4, list] of byId) if (paletteById.get(id4)?.treeLod !== void 0) treePlacementCount += list.length;
+        for (const [id7, list] of byId) if (paletteById.get(id7)?.treeLod !== void 0) treePlacementCount += list.length;
         if (treePlacementCount > 24576) throw new RangeError("vegetation.scatter: treeLod placements exceed the 24,576 active-tree cap");
         disposeMeshes();
         let idx = 0;
         const totalArchetypes = byId.size;
-        for (const [id4, list] of byId) {
+        for (const [id7, list] of byId) {
           if (!active) return;
           idx++;
-          ctx.emit("vegetation.mounting", { archetype: id4, index: idx, total: totalArchetypes, instances: list.length });
+          ctx.emit("vegetation.mounting", { archetype: id7, index: idx, total: totalArchetypes, instances: list.length });
           try {
-            const entry = paletteById.get(id4);
-            if (entry === void 0) throw new Error(`vegetation.scatter: placement references unknown archetype '${id4}'`);
+            const entry = paletteById.get(id7);
+            if (entry === void 0) throw new Error(`vegetation.scatter: placement references unknown archetype '${id7}'`);
             if (entry.treeLod !== void 0) {
               const [baseRoot, reducedRoot, impostorRoot] = await Promise.all([
-                parseGltfScene(id4, assets.resolve(id4).bytes, ctx.world.gltfCache),
+                parseGltfScene(id7, assets.resolve(id7).bytes, ctx.world.gltfCache),
                 parseGltfScene(entry.treeLod.reducedId, assets.resolve(entry.treeLod.reducedId).bytes, ctx.world.gltfCache),
                 parseGltfScene(entry.treeLod.impostorId, assets.resolve(entry.treeLod.impostorId).bytes, ctx.world.gltfCache)
               ]);
               const population = new TreePopulationRuntime({
-                speciesId: id4,
+                speciesId: id7,
                 placements: list,
                 treeLod: entry.treeLod,
-                sourceHash: assetHashes[id4],
+                sourceHash: assetHashes[id7],
                 reducedHash: assetHashes[entry.treeLod.reducedId],
                 baseRoot,
                 reducedRoot,
                 impostorRoot,
                 scene,
-                onError: (error51) => ctx.emit("vegetation.tree_population_error", { archetype: id4, message: error51 instanceof Error ? error51.message : String(error51) })
+                onError: (error51) => ctx.emit("vegetation.tree_population_error", { archetype: id7, message: error51 instanceof Error ? error51.message : String(error51) })
               });
               if (!active) {
                 population.dispose();
@@ -128125,7 +129121,7 @@ function registerVegetationSkills(registry2, layers, assets, footprints = /* @__
               await nextFrame();
               continue;
             }
-            const root = await parseGltfScene(id4, assets.resolve(id4).bytes, ctx.world.gltfCache);
+            const root = await parseGltfScene(id7, assets.resolve(id7).bytes, ctx.world.gltfCache);
             const living = [];
             const dead = [];
             for (const inst of list) (blightAtWorld(inst.x, inst.z) > 0.5 ? dead : living).push(inst);
@@ -128144,7 +129140,7 @@ function registerVegetationSkills(registry2, layers, assets, footprints = /* @__
               }
             }
           } catch (err) {
-            ctx.emit("vegetation.mount_failed", { archetype: id4, message: err instanceof Error ? err.message : String(err) });
+            ctx.emit("vegetation.mount_failed", { archetype: id7, message: err instanceof Error ? err.message : String(err) });
           }
           await nextFrame();
         }
@@ -128367,9 +129363,9 @@ function prepareTiles(layer, input, exclusions, visualPackage) {
   return bounded;
 }
 function aggregateHash(tiles) {
-  let hash7 = 0xcbf29ce484222325n;
+  let hash9 = 0xcbf29ce484222325n;
   const feed = (byte) => {
-    hash7 = (hash7 ^ BigInt(byte & 255)) * 0x100000001b3n & 0xffffffffffffffffn;
+    hash9 = (hash9 ^ BigInt(byte & 255)) * 0x100000001b3n & 0xffffffffffffffffn;
   };
   const encoder2 = new TextEncoder();
   const floatBytes = new DataView(new ArrayBuffer(4));
@@ -128380,7 +129376,7 @@ function aggregateHash(tiles) {
       for (let index = 0; index < 4; index++) feed(floatBytes.getUint8(index));
     }
   }
-  return `fnv1a64:${hash7.toString(16).padStart(16, "0")}`;
+  return `fnv1a64:${hash9.toString(16).padStart(16, "0")}`;
 }
 function cpuTile(entry, input, visualPackage) {
   const placements = [];
@@ -129031,13 +130027,13 @@ function direction(a2, b3) {
 }
 function joins(points2, miterLimit) {
   const directions = Array.from({ length: points2.length - 1 }, (_3, index) => direction(points2[index], points2[index + 1]));
-  const result = [];
+  const result2 = [];
   for (let index = 0; index < points2.length; index++) {
     const halfWidth = points2[index].widthM / 2;
     if (index === 0 || index === points2.length - 1) {
       const d2 = directions[index === 0 ? 0 : directions.length - 1];
       const normal2 = [-d2[1] * halfWidth, d2[0] * halfWidth];
-      result.push({ incoming: normal2, outgoing: normal2, bevel: false, turn: 0 });
+      result2.push({ incoming: normal2, outgoing: normal2, bevel: false, turn: 0 });
       continue;
     }
     const previous = directions[index - 1], next = directions[index];
@@ -129052,18 +130048,18 @@ function joins(points2, miterLimit) {
       const scale2 = Math.abs(denominator) > 1e-6 ? halfWidth / denominator : Infinity;
       if (Number.isFinite(scale2) && Math.abs(scale2) <= halfWidth * miterLimit) {
         const offset = [unitMiter[0] * scale2, unitMiter[1] * scale2];
-        result.push({ incoming: offset, outgoing: offset, bevel: false, turn });
+        result2.push({ incoming: offset, outgoing: offset, bevel: false, turn });
         continue;
       }
     }
-    result.push({
+    result2.push({
       incoming: [previousNormal[0] * halfWidth, previousNormal[1] * halfWidth],
       outgoing: [nextNormal[0] * halfWidth, nextNormal[1] * halfWidth],
       bevel: true,
       turn
     });
   }
-  return { joins: result, directions };
+  return { joins: result2, directions };
 }
 function riverPointNormals(points2, offsets) {
   return points2.map((point3, index) => {
@@ -129288,7 +130284,7 @@ function createWaterMaterial(options) {
     depthWrite: false,
     side: options.kind === "river" ? DoubleSide : FrontSide
   });
-  material.envMapIntensity = options.kind === "river" ? 1.65 : 1;
+  material.envMapIntensity = options.kind === "river" ? 1.65 : 0.5;
   try {
     const base = new Color(options.color);
     const deep = T16.vec3(base.r, base.g, base.b);
@@ -129298,7 +130294,7 @@ function createWaterMaterial(options) {
       Math.min(1, base.b * 1.15 + 0.1)
     );
     const facing = T16.clamp(T16.cameraPosition.sub(T16.positionWorld).normalize().y, 0, 1);
-    const fresnel = T16.oneMinus(facing).pow(4);
+    const fresnel = T16.oneMinus(facing).pow(options.kind === "river" ? 4 : 6);
     const waves = [
       { dx: 0.8, dz: 0.6, frequency: 0.3, speed: 0.9, amplitude: 1 },
       { dx: -0.6, dz: 0.8, frequency: 0.42, speed: 1.1, amplitude: 0.8 },
@@ -129350,7 +130346,9 @@ function createWaterMaterial(options) {
         material.userData.liminaWaterFlowAlignedNormals = true;
         material.userData.liminaWaterNormalOctaves = octaveCount;
       }
-    } else {
+    }
+    let detailSlopeX = T16.float(0), detailSlopeZ = T16.float(0);
+    if (options.kind !== "river") {
       for (let index = 0; index < waveCount; index++) {
         const wave = waves[index];
         const phase = localX.mul(wave.dx * wave.frequency).add(localZ.mul(wave.dz * wave.frequency)).add(T16.time.mul(wave.speed));
@@ -129359,16 +130357,45 @@ function createWaterMaterial(options) {
         slopeX = slopeX.add(derivative.mul(wave.dx * wave.frequency));
         slopeZ = slopeZ.add(derivative.mul(wave.dz * wave.frequency));
       }
+      if (waveCount > 0 && options.peek !== true) {
+        const metreStep = 0.35;
+        const detailAt = (dx, dz) => T16.mx_noise_float(T16.vec2(
+          localX.add(dx).mul(0.34).add(T16.time.mul(0.26)),
+          localZ.add(dz).mul(0.34).sub(T16.time.mul(0.21))
+        ));
+        detailSlopeX = detailAt(metreStep, 0).sub(detailAt(-metreStep, 0)).div(2 * metreStep).mul(1.2);
+        detailSlopeZ = detailAt(0, metreStep).sub(detailAt(0, -metreStep)).div(2 * metreStep).mul(1.2);
+      }
     }
     const normalStrength = options.peek === true ? 0 : options.kind === "river" ? 0.14 : 0.34;
-    const localNormal = orientation === "xy" ? T16.vec3(slopeX.mul(-normalStrength), slopeZ.mul(-normalStrength), 1).normalize() : options.kind === "river" ? T16.normalLocal.add(T16.vec3(slopeX.mul(-normalStrength), 0, slopeZ.mul(-normalStrength))).normalize() : T16.vec3(slopeX.mul(-normalStrength), 1, slopeZ.mul(-normalStrength)).normalize();
+    const viewDistance = T16.positionView.z.mul(-1);
+    let normalSlopeX = slopeX, normalSlopeZ = slopeZ;
+    if (options.kind !== "river" && options.peek !== true) {
+      const swellDamp = T16.mix(T16.float(1), T16.float(0.3), T16.smoothstep(80, 380, viewDistance));
+      const detailDamp = T16.oneMinus(T16.smoothstep(55, 240, viewDistance));
+      normalSlopeX = slopeX.mul(swellDamp).add(detailSlopeX.mul(detailDamp));
+      normalSlopeZ = slopeZ.mul(swellDamp).add(detailSlopeZ.mul(detailDamp));
+    }
+    const localNormal = orientation === "xy" ? T16.vec3(normalSlopeX.mul(-normalStrength), normalSlopeZ.mul(-normalStrength), 1).normalize() : options.kind === "river" ? T16.normalLocal.add(T16.vec3(slopeX.mul(-normalStrength), 0, slopeZ.mul(-normalStrength))).normalize() : T16.vec3(normalSlopeX.mul(-normalStrength), 1, normalSlopeZ.mul(-normalStrength)).normalize();
     material.normalNode = T16.transformNormalToView(localNormal);
+    const halfSize = options.edgeFadeHalfSizeM;
+    let edgeFeather = T16.float(1);
     if (orientation === "xy" && waveCount > 0 && options.kind === "ocean") {
-      material.positionNode = T16.positionLocal.add(T16.vec3(0, 0, height.mul(0.06)));
+      let displacement = height.mul(0.06);
+      if (halfSize !== void 0 && halfSize > 0) {
+        const rim = T16.max(T16.abs(T16.positionLocal.x), T16.abs(T16.positionLocal.y)).div(halfSize);
+        displacement = displacement.mul(T16.oneMinus(T16.smoothstep(0.6, 0.82, rim)));
+      }
+      material.positionNode = T16.positionLocal.add(T16.vec3(0, 0, displacement));
+    }
+    if (orientation === "xy" && options.kind === "ocean" && halfSize !== void 0 && halfSize > 0) {
+      const rim = T16.max(T16.abs(T16.positionLocal.x), T16.abs(T16.positionLocal.y)).div(halfSize);
+      edgeFeather = T16.oneMinus(T16.smoothstep(0.85, 0.99, rim));
     }
     const height01 = T16.clamp(height.mul(0.18).add(0.5), 0, 1);
-    material.roughnessNode = options.peek === true ? T16.float(0.9) : options.kind === "river" ? T16.mix(T16.float(0.19), T16.float(0.07), fresnel).add(height01.mul(0.05)) : T16.float(0.05).add(height01.mul(0.07));
+    material.roughnessNode = options.peek === true ? T16.float(0.9) : options.kind === "river" ? T16.mix(T16.float(0.19), T16.float(0.07), fresnel).add(height01.mul(0.05)) : T16.float(0.085).add(height01.mul(0.055)).add(T16.smoothstep(140, 420, viewDistance).mul(0.09));
     let riverTransmittance, riverClarity, riverWetBand;
+    let oceanTransmittance, oceanClarity, oceanAbyss, oceanCaustic;
     const riverEdgeCoverage = options.kind === "river" ? T16.oneMinus(T16.smoothstep(0.72, 1, T16.abs(riverCrossRatio))) : T16.float(1);
     if (options.kind === "river" && options.depth !== void 0) {
       const { minX, minZ, maxX, maxZ } = options.depth.bounds;
@@ -129411,22 +130438,49 @@ function createWaterMaterial(options) {
       const sampled = T16.texture(options.depth.texture, T16.vec2(u4, v3));
       const outsideU = T16.max(u4.mul(-1), u4.sub(1));
       const outsideV = T16.max(v3.mul(-1), v3.sub(1));
-      const outside = T16.clamp(T16.max(outsideU, outsideV).mul(40), 0, 1);
+      const outside = T16.clamp(T16.max(outsideU, outsideV).mul(8), 0, 1);
       const depth01 = options.depth.outsideAsDeep === true ? T16.mix(sampled.r, T16.float(1), outside) : sampled.r;
       const ownership = options.depth.coverageChannel === true ? sampled.g : T16.float(1);
-      const colourDeep = T16.smoothstep(0.05, 0.42, depth01);
-      let waterColor = T16.mix(shallow, deep, T16.clamp(colourDeep.add(fresnel.mul(0.25)), 0, 1));
+      const maxDepthM = options.depth.maxDepthM ?? 6;
+      const pathM = T16.min(depth01.mul(maxDepthM).div(T16.max(facing, 0.1)), 60);
+      const transmittance = T16.exp(pathM.mul(T16.vec3(-0.41, -0.155, -0.093)));
+      const clarity = T16.clamp(T16.dot(transmittance, T16.vec3(0.25, 0.4, 0.35)), 0, 1);
+      const abyss = T16.vec3(base.r * 0.1, base.g * 0.24, base.b * 0.5);
+      let waterColor = T16.mix(shallow, abyss, T16.clamp(T16.oneMinus(clarity).add(fresnel.mul(0.18)), 0, 1));
       const shoreBand = T16.oneMinus(T16.smoothstep(0.025, 0.16, depth01)).mul(ownership);
-      const ripple = T16.positionWorld.x.mul(0.73).add(T16.positionWorld.z.mul(0.57)).sub(T16.time.mul(0.8)).sin().mul(0.5).add(0.5);
-      const foam = shoreBand.mul(T16.smoothstep(0.2, 0.78, ripple));
-      const caustic = T16.oneMinus(T16.smoothstep(0.08, 0.48, depth01)).mul(T16.positionWorld.x.mul(1.8).add(T16.positionWorld.z.mul(-1.35)).add(T16.time.mul(0.7)).sin().mul(0.5).add(0.5)).mul(ownership);
+      const foamBreak = T16.mx_noise_float(T16.vec2(
+        T16.positionWorld.x.mul(0.55).add(T16.time.mul(0.22)),
+        T16.positionWorld.z.mul(0.55).sub(T16.time.mul(0.17))
+      )).mul(0.5).add(0.5);
+      const ripple = T16.positionWorld.x.mul(0.73).add(T16.positionWorld.z.mul(0.57)).sub(T16.time.mul(0.8)).add(foamBreak.mul(7)).sin().mul(0.5).add(0.5);
+      const foam = shoreBand.mul(T16.smoothstep(0.56, 0.9, ripple.mul(0.28).add(foamBreak.mul(0.78))));
+      const causticWarp = T16.mx_noise_float(T16.vec2(
+        T16.positionWorld.x.mul(0.21).sub(T16.time.mul(0.09)),
+        T16.positionWorld.z.mul(0.21).add(T16.time.mul(0.12))
+      ));
+      const caustic = T16.oneMinus(T16.smoothstep(0.08, 0.48, depth01)).mul(T16.positionWorld.x.mul(1.8).add(T16.positionWorld.z.mul(-1.35)).add(T16.time.mul(0.7)).add(causticWarp.mul(9)).sin().mul(0.5).add(0.5)).mul(T16.smoothstep(0.25, 0.75, causticWarp.mul(0.5).add(0.5))).mul(ownership);
       waterColor = waterColor.add(T16.vec3(0.08, 0.16, 0.12).mul(caustic));
-      material.colorNode = T16.mix(waterColor, T16.vec3(0.82, 0.94, 0.9), foam.mul(0.72));
-      const opacity = T16.float(0.22).add(T16.smoothstep(0, 0.55, depth01).mul(0.75));
-      material.opacityNode = T16.max(opacity, foam.mul(0.92)).mul(ownership);
-      material.roughnessNode = T16.max(material.roughnessNode, foam.mul(0.72));
+      oceanCaustic = caustic;
+      const crestLift = height01.sub(0.5).mul(T16.oneMinus(T16.smoothstep(60, 280, viewDistance))).mul(0.14);
+      waterColor = waterColor.mul(T16.float(1).add(crestLift));
+      const hazeMix = T16.smoothstep(240, 500, viewDistance).mul(0.92);
+      waterColor = T16.mix(waterColor, T16.vec3(0.804, 0.851, 0.902), hazeMix);
+      const whitecapMask = T16.mx_noise_float(T16.vec2(
+        T16.positionWorld.x.mul(0.035).add(T16.time.mul(0.05)),
+        T16.positionWorld.z.mul(0.16).sub(T16.time.mul(0.035))
+      )).mul(0.5).add(0.5);
+      const whitecap = T16.smoothstep(0.7, 0.94, height01).mul(T16.smoothstep(0.6, 0.86, whitecapMask)).mul(T16.smoothstep(0.22, 0.45, depth01)).mul(T16.oneMinus(hazeMix)).mul(ownership);
+      const foamAll = T16.max(foam, whitecap.mul(0.8));
+      material.colorNode = T16.mix(waterColor, T16.vec3(0.82, 0.94, 0.9), foamAll.mul(0.72));
+      const opacity = T16.max(T16.float(0.34).add(T16.oneMinus(clarity).mul(0.64)), hazeMix.mul(0.95));
+      material.opacityNode = T16.max(opacity, foamAll.mul(0.92)).mul(ownership).mul(edgeFeather);
+      material.roughnessNode = T16.max(material.roughnessNode, foamAll.mul(0.72));
+      oceanTransmittance = transmittance;
+      oceanClarity = clarity;
+      oceanAbyss = abyss;
       material.userData.liminaWaterShoreFoam = true;
       material.userData.liminaWaterCaustics = true;
+      material.userData.liminaWaterVolumetricAbsorption = true;
       trackWaterMaterialTexture(material, options.depth.texture);
     } else if (options.kind === "river") {
       const arc = T16.attribute("waterArcDistance", "float");
@@ -129441,13 +130495,18 @@ function createWaterMaterial(options) {
     }
     const optics = options.sceneOptics ?? "none";
     if (optics !== "none" && options.peek !== true) {
-      const distortion = T16.vec2(slopeX, slopeZ).mul(options.kind === "river" ? 0.013 : 9e-3);
+      const distortion = options.kind === "river" ? T16.vec2(slopeX, slopeZ).mul(0.013) : T16.vec2(normalSlopeX, normalSlopeZ).mul(0.02);
       const refractedUv = T16.viewportSafeUV(T16.screenUV.add(distortion));
       const refracted = T16.viewportSharedTexture(refractedUv);
       let backdrop = refracted.rgb;
       if (options.kind === "river" && riverTransmittance !== void 0) {
         backdrop = backdrop.mul(riverTransmittance).add(deep.mul(T16.oneMinus(riverClarity)).mul(0.85));
         backdrop = backdrop.mul(T16.mix(T16.float(1), T16.float(0.45), riverWetBand));
+      } else if (oceanTransmittance !== void 0) {
+        backdrop = backdrop.mul(oceanTransmittance).add(oceanAbyss.mul(T16.oneMinus(oceanClarity)).mul(0.9));
+        if (oceanCaustic !== void 0) {
+          backdrop = backdrop.mul(T16.mix(T16.float(0.88), T16.float(1.12), oceanCaustic));
+        }
       }
       if (optics === "refraction-reflection" && options.kind !== "river") {
         const reflection = T16.reflector({
@@ -129461,7 +130520,7 @@ function createWaterMaterial(options) {
         material.userData.liminaWaterPlanarReflection = true;
       }
       material.backdropNode = backdrop;
-      material.backdropAlphaNode = (options.kind === "river" && riverClarity !== void 0 ? T16.mix(T16.float(0.08), T16.float(0.85), riverClarity).mul(T16.oneMinus(fresnel.mul(0.55))) : T16.float(options.kind === "river" ? 0.24 : 0.58).mul(T16.oneMinus(fresnel.mul(0.45)))).mul(riverEdgeCoverage);
+      material.backdropAlphaNode = (options.kind === "river" && riverClarity !== void 0 ? T16.mix(T16.float(0.08), T16.float(0.85), riverClarity).mul(T16.oneMinus(fresnel.mul(0.55))) : oceanClarity !== void 0 ? T16.mix(T16.float(0.06), T16.float(0.8), oceanClarity).mul(T16.oneMinus(fresnel.mul(0.85))) : T16.float(options.kind === "river" ? 0.24 : 0.58).mul(T16.oneMinus(fresnel.mul(0.45)))).mul(riverEdgeCoverage);
       material.userData.liminaWaterSceneDepthRefraction = true;
     }
     return material;
@@ -129520,7 +130579,8 @@ function buildWaterSurface(opts) {
       depth: baked === void 0 ? void 0 : { ...baked, outsideAsDeep: true },
       peek: opts.peek,
       waveCount: opts.waveCount,
-      sceneOptics: opts.sceneOptics
+      sceneOptics: opts.sceneOptics,
+      edgeFadeHalfSizeM: size / 2
     });
     const mesh = new Mesh(geometry, material);
     attachWaterMaterialAuxiliaries(mesh);
@@ -129592,11 +130652,11 @@ function buildRiverRibbon(opts) {
     mesh.receiveShadow = false;
     mesh.renderOrder = 3;
     mesh.name = "limina:river";
-    const object4 = mesh;
-    object4.userData.waterwayClass = opts.class ?? "river";
-    if (opts.order !== void 0) object4.userData.waterwayOrder = opts.order;
-    object4.userData.waterwayLengthM = built.lengthM;
-    object4.userData.waterwayPointCount = built.pointCount;
+    const object5 = mesh;
+    object5.userData.waterwayClass = opts.class ?? "river";
+    if (opts.order !== void 0) object5.userData.waterwayOrder = opts.order;
+    object5.userData.waterwayLengthM = built.lengthM;
+    object5.userData.waterwayPointCount = built.pointCount;
     return mesh;
   } catch (error51) {
     material?.dispose();
@@ -129654,10 +130714,10 @@ function disposeMeshResources(mesh) {
   const nodes = /* @__PURE__ */ new Set();
   const materials = /* @__PURE__ */ new Set();
   const geometries = /* @__PURE__ */ new Set();
-  mesh.traverse((object4) => {
-    if (!(object4 instanceof Mesh)) return;
-    geometries.add(object4.geometry);
-    for (const material of Array.isArray(object4.material) ? object4.material : [object4.material]) {
+  mesh.traverse((object5) => {
+    if (!(object5 instanceof Mesh)) return;
+    geometries.add(object5.geometry);
+    for (const material of Array.isArray(object5.material) ? object5.material : [object5.material]) {
       materials.add(material);
       const owned = material.userData[WATER_OWNED_TEXTURES_KEY];
       if (Array.isArray(owned)) for (const texture3 of owned) {
@@ -129847,7 +130907,10 @@ var waterRegionInput = external_exports.object({
    *  Merged over the type defaults so the depth field is baked against the ACTUAL surface
    *  the terrain was built with — without it a region generated with overrides (e.g. an
    *  island falloff + erosion) bakes its depth against a flat type-default surface, and the
-   *  shoreline depth-fade reads wrong (a pale shelf where the real coast tapers). */
+   *  shoreline depth-fade reads wrong (a pale shelf where the real coast tapers). When
+   *  OMITTED, the skill defaults to the recorded merged hints of the already-generated
+   *  region matching (seed, bounds) in the live region table (generateRegion precedes
+   *  addWater in every log, so replay re-derives the same map). */
   hints: external_exports.record(external_exports.string(), external_exports.number()).optional(),
   resolution: external_exports.number().int().positive().max(1024).optional()
 });
@@ -129919,6 +130982,23 @@ function deriveDepthFromRegions(source, regions) {
   };
   return { sampleHeight: sampleHeight2, bounds: { minX: uMinX, minZ: uMinZ, maxX: uMaxX, maxZ: uMaxZ } };
 }
+function recordedRegionHints(regions, seed, bounds) {
+  if (regions === void 0) return void 0;
+  for (const r2 of regions.values()) {
+    if (r2.seed !== seed || r2.hints === void 0) continue;
+    let minTx = Infinity, minTz = Infinity, maxTx = -Infinity, maxTz = -Infinity;
+    for (const t3 of r2.tiles.values()) {
+      if (t3.tx < minTx) minTx = t3.tx;
+      if (t3.tx > maxTx) maxTx = t3.tx;
+      if (t3.tz < minTz) minTz = t3.tz;
+      if (t3.tz > maxTz) maxTz = t3.tz;
+    }
+    if (minTx === bounds.minTx && minTz === bounds.minTz && maxTx === bounds.maxTx && maxTz === bounds.maxTz) {
+      return r2.hints;
+    }
+  }
+  return void 0;
+}
 function deriveDepthFromLayer(layer) {
   const tile = layer.tile;
   const sizeX = tile.scale[0], sizeZ = tile.scale[2];
@@ -129926,9 +131006,9 @@ function deriveDepthFromLayer(layer) {
   const sampleHeight2 = (x3, z4) => sampleTileSurfaceHeight(tile, x3, z4);
   return { sampleHeight: sampleHeight2, bounds: { minX: x0, minZ: z0, maxX: x0 + sizeX, maxZ: z0 + sizeZ } };
 }
-function pickLayer(layers, id4) {
+function pickLayer(layers, id7) {
   if (layers === void 0) return void 0;
-  if (id4 !== void 0) return layers.get(id4);
+  if (id7 !== void 0) return layers.get(id7);
   let last;
   for (const v3 of layers.values()) last = v3;
   return last;
@@ -130021,7 +131101,11 @@ function registerWaterSkills(registry2, terrainSource, terrainRegions, terrainLa
       let depth3;
       const region = input.region;
       if (region !== void 0 && terrainSource !== void 0 && isTerrainType(region.type)) {
-        const hints = { ...terrainTypeHints(region.type, region.bounds), ...region.hints ?? {} };
+        const hints = {
+          ...terrainTypeHints(region.type, region.bounds),
+          ...recordedRegionHints(terrainRegions, region.seed, region.bounds) ?? {},
+          ...region.hints ?? {}
+        };
         const b3 = region.bounds;
         depth3 = {
           sampleHeight: (x3, z4) => terrainSource.sampleHeight(region.seed, x3, z4, 0, hints),
@@ -130205,12 +131289,12 @@ function registerWaterSkills(registry2, terrainSource, terrainRegions, terrainLa
     output: addMapWaterOutput,
     handler: (input, ctx) => {
       const worldMap = resolveVerifiedMap(assets, input.mapAssetId, input.mapHash, "world.addMapWater");
-      const hash7 = worldMap.provenance.contentHash;
+      const hash9 = worldMap.provenance.contentHash;
       const manager = managerFor(ctx.world.scene);
       const requestedKeys = [
-        `authored:${hash7}:ocean`,
-        ...(worldMap.waterBodies ?? []).map((body) => `authored:${hash7}:body:${body.id}`),
-        ...worldMap.waterways.map((_waterway, index) => `authored:${hash7}:waterway:${index}`)
+        `authored:${hash9}:ocean`,
+        ...(worldMap.waterBodies ?? []).map((body) => `authored:${hash9}:body:${body.id}`),
+        ...worldMap.waterways.map((_waterway, index) => `authored:${hash9}:waterway:${index}`)
       ];
       const newFragmentCount = requestedKeys.reduce((count, key) => count + (manager.has(key) ? 0 : 1), 0);
       if (newFragmentCount > manager.quality.maxResidentFragments - manager.size) {
@@ -130223,7 +131307,7 @@ function registerWaterSkills(registry2, terrainSource, terrainRegions, terrainLa
       const maxX = minX + worldMap.extent.w * worldMap.unitsPerMeter;
       const maxZ = minZ + worldMap.extent.h * worldMap.unitsPerMeter;
       const oceanLevel = input.level ?? worldMap.seaLevel;
-      const oceanKey = `authored:${hash7}:ocean`;
+      const oceanKey = `authored:${hash9}:ocean`;
       try {
         const ocean = manager.mount(oceanKey, "ocean", (waterQuality) => buildWaterSurface({
           level: oceanLevel,
@@ -130239,7 +131323,7 @@ function registerWaterSkills(registry2, terrainSource, terrainRegions, terrainLa
             sampleHeight: (x3, z4) => terrainSource.sampleHeight(1, x3, z4, 0)
           },
           peek: ctx.world.peek === true
-        }), { mapHash: hash7 }, semanticIdentity2("authored-ocean", hash7, oceanLevel, input.color ?? null));
+        }), { mapHash: hash9 }, semanticIdentity2("authored-ocean", hash9, oceanLevel, input.color ?? null));
         if (ocean.mounted) {
           mountedKeys.push(oceanKey);
           surfaces.push({
@@ -130253,7 +131337,7 @@ function registerWaterSkills(registry2, terrainSource, terrainRegions, terrainLa
         }
         let field;
         for (const body of worldMap.waterBodies ?? []) {
-          const key = `authored:${hash7}:body:${body.id}`;
+          const key = `authored:${hash9}:body:${body.id}`;
           const points2 = body.footprint.points.map((entry) => mapPoint(worldMap, entry));
           const holes = body.footprint.holes?.map((hole) => hole.map((entry) => mapPoint(worldMap, entry)));
           const bounds = footprintBounds([points2, ...holes ?? []]);
@@ -130277,7 +131361,7 @@ function registerWaterSkills(registry2, terrainSource, terrainRegions, terrainLa
               sceneOptics: waterQuality.sceneOptics,
               depth: { texture: texture3, bounds, coverageChannel: true }
             });
-          }, { mapHash: hash7, bodyId: body.id, bodyKind: body.kind }, semanticIdentity2("authored-body", hash7, body.id, input.color ?? null));
+          }, { mapHash: hash9, bodyId: body.id, bodyKind: body.kind }, semanticIdentity2("authored-body", hash9, body.id, input.color ?? null));
           if (mounted.mounted) {
             mountedKeys.push(key);
             surfaces.push({
@@ -130305,8 +131389,8 @@ function registerWaterSkills(registry2, terrainSource, terrainRegions, terrainLa
             level: oceanLevel,
             terrainEntity: input.terrainEntity,
             mapDerived: true,
-            key: `authored:${hash7}:waterway:${index}`,
-            identity: semanticIdentity2("authored-waterway", hash7, index, input.widthScale, input.color ?? null, oceanLevel, input.terrainEntity ?? null),
+            key: `authored:${hash9}:waterway:${index}`,
+            identity: semanticIdentity2("authored-waterway", hash9, index, input.widthScale, input.color ?? null, oceanLevel, input.terrainEntity ?? null),
             onMounted: (key) => mountedKeys.push(key)
           }, ctx);
           pointCount += points2.length;
@@ -130316,7 +131400,7 @@ function registerWaterSkills(registry2, terrainSource, terrainRegions, terrainLa
           bodies: worldMap.waterBodies?.length ?? 0,
           rivers: worldMap.waterways.length,
           points: pointCount,
-          mapHash: hash7
+          mapHash: hash9
         };
       } catch (error51) {
         surfaces.length = surfaceCountBefore;
@@ -130377,7 +131461,7 @@ var AgentRegistry = class {
     this.orderedCache = void 0;
   }
   add(spec) {
-    const record5 = {
+    const record6 = {
       id: spec.id,
       type: spec.type,
       entityId: spec.entityId,
@@ -130392,12 +131476,12 @@ var AgentRegistry = class {
       // due immediately
       queue: []
     };
-    this.agents.set(record5.id, record5);
+    this.agents.set(record6.id, record6);
     this.invalidate();
-    return record5;
+    return record6;
   }
-  get(id4) {
-    return this.agents.get(id4);
+  get(id7) {
+    return this.agents.get(id7);
   }
   /** All registered agents, memoized per membership change. Callers must treat the
    *  result as read-only: never sort/splice/push it, as that would poison the shared
@@ -130649,14 +131733,15 @@ var defaultAgentScheduler = new AgentScheduler();
 
 // src/agents/systems.ts
 function promptTrace(agent) {
-  const hash7 = ops.op_sha256(agent.llm.systemPrompt);
+  const hash9 = ops.op_sha256(agent.llm.systemPrompt);
   return {
     model: agent.llm.model,
     promptId: agent.llm.promptId ?? "unversioned",
     promptVersion: agent.llm.promptVersion ?? "unversioned",
-    promptHash: hash7.length > 0 ? `sha256:${hash7}` : void 0
+    promptHash: hash9.length > 0 ? `sha256:${hash9}` : void 0
   };
 }
+var MAX_PERCEPTION_ENTITIES = 256;
 function buildPerception(agent, world, tracer, tick, batched) {
   let selfPos = batched?.selfPos;
   let nearby = batched?.nearby;
@@ -130670,7 +131755,7 @@ function buildPerception(agent, world, tracer, tick, batched) {
       radius: selfPos === void 0 ? void 0 : agent.perceptionRadius,
       excludeEntity: agent.entityId,
       sortBy: "distance"
-    }).entities.map((entity) => ({ id: entity.entity, position: entity.position, distance: entity.distance }));
+    }).entities.slice(0, MAX_PERCEPTION_ENTITIES).map((entity) => ({ id: entity.entity, position: entity.position, distance: entity.distance }));
   }
   const recentEvents = tracer.trace(agent.id).slice(-5).map((e2) => ({ type: e2.type }));
   return { selfId: agent.id, selfEntity: agent.entityId, position: selfPos, nearby, recentEvents, tick };
@@ -130685,6 +131770,13 @@ function notifyBoundedObserverError(options, err) {
   try {
     options.onError?.(err);
   } catch {
+  }
+}
+function notifyBoundedStep(options, step3) {
+  try {
+    options.onStep?.(step3);
+  } catch (err) {
+    notifyBoundedObserverError(options, err);
   }
 }
 function timeoutAfter(ms) {
@@ -130777,19 +131869,17 @@ async function runBoundedMultiTurn(agent, registry2, providers, world, tracer, o
         const rejected = tracer.emit({ type: "agent.toolcall.rejected", actorId: agent.id, threadId: agent.sessionId, parentEventId: null, causedBy: [decisionId], payload: { reason: "unknown_tool", tool: call3.tool } });
         lastToolResultId = rejected;
         previousResults.push({ success: false, error: { code: "not_found", message: `unknown skill: ${call3.tool}` } });
+        notifyBoundedStep(options, { tool: call3.tool, label: call3.tool, status: "rejected", detail: `unknown skill: ${call3.tool}` });
         continue;
       }
       if (!skill.input.safeParse(call3.input).success) {
         const rejected = tracer.emit({ type: "agent.toolcall.rejected", actorId: agent.id, threadId: agent.sessionId, parentEventId: null, causedBy: [decisionId], payload: { reason: "invalid_args", tool: call3.tool } });
         lastToolResultId = rejected;
         previousResults.push({ success: false, error: { code: "invalid_input", message: `invalid input: ${call3.tool}` } });
+        notifyBoundedStep(options, { tool: call3.tool, label: call3.tool, status: "rejected", detail: `invalid input: ${call3.tool}` });
         continue;
       }
-      try {
-        options.onStep?.({ tool: call3.tool, label: call3.tool });
-      } catch (err) {
-        notifyBoundedObserverError(options, err);
-      }
+      notifyBoundedStep(options, { tool: call3.tool, label: call3.tool });
       let response;
       try {
         response = await invokeTool(call3.tool, call3.input, {
@@ -130806,11 +131896,19 @@ async function runBoundedMultiTurn(agent, registry2, providers, world, tracer, o
         const rejected = tracer.emit({ type: "agent.toolcall.rejected", actorId: agent.id, threadId: agent.sessionId, parentEventId: null, causedBy: [decisionId], payload: { reason: "handler_threw", tool: call3.tool, message } });
         lastToolResultId = rejected;
         previousResults.push({ success: false, error: { code: "handler_error", message } });
+        notifyBoundedStep(options, { tool: call3.tool, label: call3.tool, status: "failed", detail: message });
         continue;
       }
       toolCalls++;
       lastToolResultId = emitToolResult(tracer, agent, response, response.metadata?.eventsEmitted.length ? [decisionId, ...response.metadata.eventsEmitted] : [decisionId]);
       previousResults.push(response);
+      if (response.success) {
+        notifyBoundedStep(options, { tool: call3.tool, label: call3.tool, status: "ok", result: response.result });
+      } else if (response.error?.code === "pending_approval") {
+        notifyBoundedStep(options, { tool: call3.tool, label: call3.tool, status: "held", detail: response.error.message });
+      } else {
+        notifyBoundedStep(options, { tool: call3.tool, label: call3.tool, status: "failed", detail: response.error?.message ?? "tool call failed" });
+      }
     }
   }
   return { steps, toolCalls, tokensUsed, reason: "max_steps" };
@@ -130900,18 +131998,18 @@ function registerOrchestrationSkills(registry2, deps) {
         timeoutMs: input.timeoutMs,
         maxTokens: input.maxTokens
       };
-      const result = await runBoundedMultiTurn(worker, registry2, deps.providers, world, registry2.tracer, bounds);
+      const result2 = await runBoundedMultiTurn(worker, registry2, deps.providers, world, registry2.tracer, bounds);
       ctx.emit("agent.delegated", {
         workerId,
         type: input.type,
         bundle: [...input.bundle].sort(),
         task: input.task,
         depth: childDepth,
-        steps: result.steps,
-        toolCalls: result.toolCalls,
-        reason: result.reason
+        steps: result2.steps,
+        toolCalls: result2.toolCalls,
+        reason: result2.reason
       });
-      return { workerId, steps: result.steps, toolCalls: result.toolCalls, reason: result.reason };
+      return { workerId, steps: result2.steps, toolCalls: result2.toolCalls, reason: result2.reason };
     }
   });
 }
@@ -131650,8 +132748,8 @@ var CameraManager = class {
     }
   }
 };
-function resolveTargetPos(world, id4) {
-  const entry = world.entities.resolve(id4);
+function resolveTargetPos(world, id7) {
+  const entry = world.entities.resolve(id7);
   if (entry === void 0) return void 0;
   return [Position.x[entry.eid], Position.y[entry.eid], Position.z[entry.eid]];
 }
@@ -131845,20 +132943,20 @@ var AnimationManager = class {
   /** Animator parameters per entity (drive state-machine transitions). */
   params = /* @__PURE__ */ new Map();
   /** Register a REAL THREE.AnimationClip under an id (shared by all entities). */
-  registerClip(id4, clip) {
-    this.clips.set(id4, clip);
+  registerClip(id7, clip) {
+    this.clips.set(id7, clip);
   }
   /** Register a track-less clip of a given duration (animation.load with only metadata).
    *  A valid clip the mixer will RUN (time advances) but that samples nothing — real clips
    *  carry tracks (from a glTF or registerClip). */
-  loadClip(id4, name, duration3) {
-    this.clips.set(id4, new AnimationClip(name, duration3, []));
+  loadClip(id7, name, duration3) {
+    this.clips.set(id7, new AnimationClip(name, duration3, []));
   }
-  hasClip(id4) {
-    return this.clips.has(id4);
+  hasClip(id7) {
+    return this.clips.has(id7);
   }
   listClips() {
-    return [...this.clips.entries()].map(([id4, c2]) => ({ id: id4, name: c2.name, duration: c2.duration }));
+    return [...this.clips.entries()].map(([id7, c2]) => ({ id: id7, name: c2.name, duration: c2.duration }));
   }
   /** Resolve a clip id to a real THREE.AnimationClip: a registered clip first, else the
    *  entity glTF object's own `.animations` (standard rigged-glTF path). */
@@ -132337,8 +133435,8 @@ var InteractionManager = class {
     if (typeof tickOrCtx !== "number") {
       const handler = this.handlers.get(entity);
       if (handler !== void 0) {
-        const result = handler(actorEntity, tickOrCtx);
-        return { ok: result.ok !== false, result };
+        const result2 = handler(actorEntity, tickOrCtx);
+        return { ok: result2.ok !== false, result: result2 };
       }
     }
     return { ok: true, result: { type: def.type, prompt: def.prompt, ...def.state } };
@@ -132437,9 +133535,9 @@ function registerInteractionSkills(registry2, opts) {
     input: interactInput,
     output: external_exports.object({ ok: external_exports.boolean(), result: external_exports.record(external_exports.string(), external_exports.unknown()).optional() }),
     handler: (input, ctx) => {
-      const result = mgr.interact(input.entity, input.actorEntity ?? ctx.agentId, ctx);
+      const result2 = mgr.interact(input.entity, input.actorEntity ?? ctx.agentId, ctx);
       ctx.emit("interaction.performed", { entity: input.entity, actor: input.actorEntity ?? ctx.agentId, data: input.data, ...input.meta });
-      return result;
+      return result2;
     }
   };
   const pickupInput = external_exports.object({
@@ -132458,11 +133556,11 @@ function registerInteractionSkills(registry2, opts) {
     output: external_exports.object({ ok: external_exports.boolean(), slot: external_exports.number().optional(), reason: external_exports.string().optional() }),
     handler: (input, ctx) => {
       if (inv === void 0) return { ok: false, reason: "no inventory system on this world" };
-      const result = inv.addItem(input.actorEntity, { itemId: input.itemEntity, quantity: 1, slot: input.slot });
-      if (!result.ok) return { ok: false, reason: `actor "${input.actorEntity}" inventory rejected the item (full or invalid slot)` };
+      const result2 = inv.addItem(input.actorEntity, { itemId: input.itemEntity, quantity: 1, slot: input.slot });
+      if (!result2.ok) return { ok: false, reason: `actor "${input.actorEntity}" inventory rejected the item (full or invalid slot)` };
       teardownEntity(ctx.world, input.itemEntity);
-      ctx.emit("interaction.pickedUp", { itemEntity: input.itemEntity, actorEntity: input.actorEntity, slot: result.slot, ...input.meta });
-      return { ok: true, slot: result.slot };
+      ctx.emit("interaction.pickedUp", { itemEntity: input.itemEntity, actorEntity: input.actorEntity, slot: result2.slot, ...input.meta });
+      return { ok: true, slot: result2.slot };
     }
   };
   const dropInput = external_exports.object({
@@ -132611,8 +133709,8 @@ var InventoryManager = class {
   defineItem(def) {
     this.itemDefs.set(def.id, def);
   }
-  getItemDef(id4) {
-    return this.itemDefs.get(id4);
+  getItemDef(id7) {
+    return this.itemDefs.get(id7);
   }
   /** Whether an inventory may hold `itemId` under its type restrictions. No
    *  restrictions -> anything is allowed; otherwise the item must be DEFINED and its
@@ -132885,13 +133983,13 @@ function registerInventorySkills(registry2, opts) {
     input: addItemInput,
     output: external_exports.object({ ok: external_exports.boolean(), slot: external_exports.number().optional(), reason: external_exports.string().optional() }),
     handler: (input, ctx) => {
-      const result = mgr.addItem(input.entity, { itemId: input.itemId, quantity: input.quantity, slot: input.slot });
-      if (result.ok) {
-        ctx.emit("inventory.added", { entity: input.entity, itemId: input.itemId, quantity: input.quantity, slot: result.slot, ...input.meta });
+      const result2 = mgr.addItem(input.entity, { itemId: input.itemId, quantity: input.quantity, slot: input.slot });
+      if (result2.ok) {
+        ctx.emit("inventory.added", { entity: input.entity, itemId: input.itemId, quantity: input.quantity, slot: result2.slot, ...input.meta });
       } else {
-        ctx.emit("inventory.add.rejected", { entity: input.entity, itemId: input.itemId, reason: result.reason, ...input.meta });
+        ctx.emit("inventory.add.rejected", { entity: input.entity, itemId: input.itemId, reason: result2.reason, ...input.meta });
       }
-      return result;
+      return result2;
     }
   };
   const removeItem = {
@@ -133054,9 +134152,9 @@ function tokenize(src) {
     if (c2 >= "0" && c2 <= "9") {
       let j3 = i2;
       while (j3 < src.length && /[0-9.]/.test(src[j3])) j3++;
-      const raw = src.slice(i2, j3);
-      const n3 = Number(raw);
-      if (!Number.isFinite(n3)) throw new Error(`bad number: ${raw}`);
+      const raw3 = src.slice(i2, j3);
+      const n3 = Number(raw3);
+      if (!Number.isFinite(n3)) throw new Error(`bad number: ${raw3}`);
       toks.push({ t: "num", v: n3 });
       i2 = j3;
       continue;
@@ -133184,9 +134282,9 @@ function evalBoolExpr(src, env) {
     }
     return v3;
   }
-  const result = parseOr();
+  const result2 = parseOr();
   if (pos !== toks.length) throw new Error("trailing tokens after expression");
-  return truthy(result);
+  return truthy(result2);
 }
 function truthy(v3) {
   return typeof v3 === "boolean" ? v3 : typeof v3 === "number" ? v3 !== 0 : v3 !== "";
@@ -133418,24 +134516,24 @@ function registerGameStateSkills(registry2, opts) {
     input: counterInput,
     output: external_exports.object({ value: external_exports.number() }),
     handler: (input, ctx) => {
-      let result = mgr.getCounter(input.name);
+      let result2 = mgr.getCounter(input.name);
       switch (input.action) {
         case "get":
-          return { value: result };
+          return { value: result2 };
         // pure read → no emit
         case "set":
-          result = input.value ?? result;
-          mgr.setCounter(input.name, result);
+          result2 = input.value ?? result2;
+          mgr.setCounter(input.name, result2);
           break;
         case "increment":
-          result = mgr.modifyCounter(input.name, input.value ?? 1);
+          result2 = mgr.modifyCounter(input.name, input.value ?? 1);
           break;
         case "decrement":
-          result = mgr.modifyCounter(input.name, -(input.value ?? 1));
+          result2 = mgr.modifyCounter(input.name, -(input.value ?? 1));
           break;
       }
-      ctx.emit("game.counter.modified", { name: input.name, action: input.action, value: result, ...input.meta });
-      return { value: result };
+      ctx.emit("game.counter.modified", { name: input.name, action: input.action, value: result2, ...input.meta });
+      return { value: result2 };
     }
   };
   const timerInput = external_exports.object({
@@ -133570,21 +134668,21 @@ var TriggerManager = class {
   triggers = /* @__PURE__ */ new Map();
   seq = 0;
   create(zone) {
-    const id4 = `trigger_${this.seq++}`;
-    this.triggers.set(id4, { ...zone, id: id4, entitiesInside: /* @__PURE__ */ new Set() });
-    return id4;
+    const id7 = `trigger_${this.seq++}`;
+    this.triggers.set(id7, { ...zone, id: id7, entitiesInside: /* @__PURE__ */ new Set() });
+    return id7;
   }
-  get(id4) {
-    return this.triggers.get(id4);
+  get(id7) {
+    return this.triggers.get(id7);
   }
-  remove(id4) {
-    return this.triggers.delete(id4);
+  remove(id7) {
+    return this.triggers.delete(id7);
   }
   list() {
     return [...this.triggers.values()].map((t3) => ({ id: t3.id, shape: t3.shape, center: t3.center }));
   }
-  addAction(id4, phase, action) {
-    const trigger = this.triggers.get(id4);
+  addAction(id7, phase, action) {
+    const trigger = this.triggers.get(id7);
     if (trigger === void 0) return false;
     trigger.actions[phase].push(action);
     return true;
@@ -133623,7 +134721,7 @@ var TriggerManager = class {
         }
       }
       trigger.entitiesInside.clear();
-      for (const id4 of stillInside) trigger.entitiesInside.add(id4);
+      for (const id7 of stillInside) trigger.entitiesInside.add(id7);
     }
     return { entered, exited, stayed, fired };
   }
@@ -133677,12 +134775,12 @@ var EventManager = class {
   listeners = /* @__PURE__ */ new Map();
   seq = 0;
   register(eventName, action) {
-    const id4 = `listener_${this.seq++}`;
-    this.listeners.set(id4, { id: id4, eventName, action });
-    return id4;
+    const id7 = `listener_${this.seq++}`;
+    this.listeners.set(id7, { id: id7, eventName, action });
+    return id7;
   }
-  remove(id4) {
-    return this.listeners.delete(id4);
+  remove(id7) {
+    return this.listeners.delete(id7);
   }
   /** DISPATCH the named event to every registered listener for it. The bus is the
    *  WHEN: it returns the matched listeners' agent-authored action descriptors (the
@@ -133763,15 +134861,15 @@ function registerTriggerEventSkills(registry2, opts) {
     input: createTriggerInput,
     output: external_exports.object({ triggerId: external_exports.string() }),
     handler: (input, ctx) => {
-      const id4 = triggerManager.create({
+      const id7 = triggerManager.create({
         shape: input.shape,
         center: input.center,
         size: input.size,
         actions: { onEnter: [], onExit: [], onStay: [] },
         config: input.config
       });
-      ctx.emit("trigger.created", { triggerId: id4, shape: input.shape, center: input.center, ...input.meta });
-      return { triggerId: id4 };
+      ctx.emit("trigger.created", { triggerId: id7, shape: input.shape, center: input.center, ...input.meta });
+      return { triggerId: id7 };
     }
   };
   function makeAttach(name, phase, description) {
@@ -133828,9 +134926,9 @@ function registerTriggerEventSkills(registry2, opts) {
     input: listenInput,
     output: external_exports.object({ listenerId: external_exports.string() }),
     handler: (input, ctx) => {
-      const id4 = eventManager.register(input.eventName, input.action);
-      ctx.emit("event.listened", { eventName: input.eventName, listenerId: id4, actionType: input.action.type, ...input.meta });
-      return { listenerId: id4 };
+      const id7 = eventManager.register(input.eventName, input.action);
+      ctx.emit("event.listened", { eventName: input.eventName, listenerId: id7, actionType: input.action.type, ...input.meta });
+      return { listenerId: id7 };
     }
   };
   const emitEvent2 = {
@@ -133878,20 +134976,20 @@ var CutsceneManager = class {
   active;
   /** Register (or replace) a cutscene definition. Keyframes are sorted ascending by atTick so the
    *  pump can fire them in deterministic order regardless of authoring order. */
-  define(id4, keyframes, loop) {
+  define(id7, keyframes, loop) {
     const sorted = [...keyframes].sort((a2, b3) => a2.atTick - b3.atTick || 0);
     const durationTicks = sorted.length > 0 ? sorted[sorted.length - 1].atTick : 0;
-    this.defs.set(id4, { keyframes: sorted, durationTicks, loop });
+    this.defs.set(id7, { keyframes: sorted, durationTicks, loop });
     return { keyframes: sorted.length, durationTicks };
   }
-  has(id4) {
-    return this.defs.has(id4);
+  has(id7) {
+    return this.defs.has(id7);
   }
   /** Start playing `id` with its timeline anchored at `startTick`. Returns false if unknown. A new
    *  play supersedes any in-progress playback. */
-  play(id4, startTick) {
-    if (!this.defs.has(id4)) return false;
-    this.active = { id: id4, startTick, firedThrough: 0 };
+  play(id7, startTick) {
+    if (!this.defs.has(id7)) return false;
+    this.active = { id: id7, startTick, firedThrough: 0 };
     return true;
   }
   /** Stop the active playback. Returns whether something was playing. */
@@ -133949,7 +135047,7 @@ var CutsceneManager = class {
    *  silently truncate an in-flight cutscene. */
   captureSnapshot() {
     return {
-      cutscenes: [...this.defs.entries()].sort((a2, b3) => a2[0] < b3[0] ? -1 : a2[0] > b3[0] ? 1 : 0).map(([id4, d2]) => ({ id: id4, keyframes: d2.keyframes.map((k3) => ({ atTick: k3.atTick, action: { ...k3.action } })), durationTicks: d2.durationTicks, loop: d2.loop })),
+      cutscenes: [...this.defs.entries()].sort((a2, b3) => a2[0] < b3[0] ? -1 : a2[0] > b3[0] ? 1 : 0).map(([id7, d2]) => ({ id: id7, keyframes: d2.keyframes.map((k3) => ({ atTick: k3.atTick, action: { ...k3.action } })), durationTicks: d2.durationTicks, loop: d2.loop })),
       active: this.active === void 0 ? void 0 : { ...this.active }
     };
   }
@@ -134206,11 +135304,13 @@ var FUNCTIONAL_BUILDING_CONTRACT_V2 = "limina.functional-building/v2";
 var GLB_MAGIC2 = 1179937895;
 var CHUNK_JSON2 = 1313821514;
 function object2(value, label4) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error(`functional building: ${label4} must be an object`);
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    throw new Error(`functional building: ${label4} must be an object`);
   return value;
 }
 function string4(value, label4) {
-  if (typeof value !== "string" || value.trim() === "") throw new Error(`functional building: ${label4} must be a non-empty string`);
+  if (typeof value !== "string" || value.trim() === "")
+    throw new Error(`functional building: ${label4} must be a non-empty string`);
   return value;
 }
 var STABLE_ID = /^[a-z0-9][a-z0-9._/-]{0,159}$/;
@@ -134220,7 +135320,8 @@ function stableId(value, label4) {
   return out;
 }
 function finite8(value, label4) {
-  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`functional building: ${label4} must be finite`);
+  if (typeof value !== "number" || !Number.isFinite(value))
+    throw new Error(`functional building: ${label4} must be finite`);
   return value;
 }
 function vec34(value, label4, positive4 = false) {
@@ -134235,8 +135336,22 @@ function vec23(value, label4, positive4 = false) {
   if (positive4 && out.some((axis) => axis <= 0)) throw new Error(`functional building: ${label4} axes must be positive`);
   return out;
 }
+function quaternion(value, label4) {
+  if (!Array.isArray(value) || value.length !== 4)
+    throw new Error(`functional building: ${label4} must be a quaternion`);
+  const out = [
+    finite8(value[0], `${label4}[0]`),
+    finite8(value[1], `${label4}[1]`),
+    finite8(value[2], `${label4}[2]`),
+    finite8(value[3], `${label4}[3]`)
+  ];
+  if (Math.abs(Math.sqrt(out.reduce((sum, axis) => sum + axis * axis, 0)) - 1) > 1e-5)
+    throw new Error(`functional building: ${label4} must be normalized`);
+  return out;
+}
 function stringArray(value, label4) {
-  if (!Array.isArray(value) || value.length === 0) throw new Error(`functional building: ${label4} must be a non-empty array`);
+  if (!Array.isArray(value) || value.length === 0)
+    throw new Error(`functional building: ${label4} must be a non-empty array`);
   const out = value.map((item, index) => string4(item, `${label4}[${index}]`));
   if (new Set(out).size !== out.length) throw new Error(`functional building: ${label4} contains duplicate ids`);
   return out;
@@ -134244,10 +135359,12 @@ function stringArray(value, label4) {
 function exactKeys(value, required2, optional2, label4) {
   const allowed = /* @__PURE__ */ new Set([...required2, ...optional2]);
   for (const key of required2) if (!(key in value)) throw new Error(`functional building: ${label4}.${key} is required`);
-  for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`functional building: ${label4}.${key} is unsupported`);
+  for (const key of Object.keys(value))
+    if (!allowed.has(key)) throw new Error(`functional building: ${label4}.${key} is unsupported`);
 }
 function boundedArray(value, label4, minimum, maximum) {
-  if (!Array.isArray(value) || value.length < minimum || value.length > maximum) throw new Error(`functional building: ${label4} must contain ${minimum}..${maximum} entries`);
+  if (!Array.isArray(value) || value.length < minimum || value.length > maximum)
+    throw new Error(`functional building: ${label4} must contain ${minimum}..${maximum} entries`);
   return value;
 }
 function coefficient(value, label4) {
@@ -134261,7 +135378,9 @@ function positive3(value, label4) {
   return out;
 }
 function contains(room, point3, tolerance = 1e-6) {
-  return point3.every((axis, index) => Math.abs(axis - room.bounds.center[index]) <= room.bounds.halfExtents[index] + tolerance);
+  return point3.every(
+    (axis, index) => Math.abs(axis - room.bounds.center[index]) <= room.bounds.halfExtents[index] + tolerance
+  );
 }
 function gltfJson2(bytes) {
   if (bytes.byteLength < 2) throw new Error("functional building: empty glTF bytes");
@@ -134286,22 +135405,44 @@ function gltfJson2(bytes) {
   try {
     return object2(JSON.parse(new TextDecoder().decode(jsonBytes).trim()), "glTF root");
   } catch (error51) {
-    throw new Error(`functional building: invalid glTF JSON: ${error51 instanceof Error ? error51.message : String(error51)}`);
+    throw new Error(
+      `functional building: invalid glTF JSON: ${error51 instanceof Error ? error51.message : String(error51)}`
+    );
   }
 }
 function parseFunctionalBuildingContract(bytes) {
   const json2 = gltfJson2(bytes);
   const asset = object2(json2.asset, "asset");
-  const authority = object2(object2(asset.extras, "asset.extras").liminaFunctionalBuilding, "asset.extras.liminaFunctionalBuilding");
-  const isV2 = authority.schema === FUNCTIONAL_BUILDING_CONTRACT_V2;
-  if (authority.schema !== FUNCTIONAL_BUILDING_CONTRACT && !isV2) throw new Error(`functional building: unsupported schema ${String(authority.schema)}`);
-  if (isV2) exactKeys(
-    authority,
-    ["schema", "units", "up", "buildingId", "rootNodeId", "roomIds", "portalIds", "entryAnchor", "rooms", "portals", "verticalLinks", "spawnAnchors", "visibilityCells"],
-    ["site"],
+  const authority = object2(
+    object2(asset.extras, "asset.extras").liminaFunctionalBuilding,
     "asset.extras.liminaFunctionalBuilding"
   );
-  if (authority.units !== "meter" || authority.up !== "Y") throw new Error("functional building: units must be meter and up must be Y");
+  const isV2 = authority.schema === FUNCTIONAL_BUILDING_CONTRACT_V2;
+  if (authority.schema !== FUNCTIONAL_BUILDING_CONTRACT && !isV2)
+    throw new Error(`functional building: unsupported schema ${String(authority.schema)}`);
+  if (isV2)
+    exactKeys(
+      authority,
+      [
+        "schema",
+        "units",
+        "up",
+        "buildingId",
+        "rootNodeId",
+        "roomIds",
+        "portalIds",
+        "entryAnchor",
+        "rooms",
+        "portals",
+        "verticalLinks",
+        "spawnAnchors",
+        "visibilityCells"
+      ],
+      ["site"],
+      "asset.extras.liminaFunctionalBuilding"
+    );
+  if (authority.units !== "meter" || authority.up !== "Y")
+    throw new Error("functional building: units must be meter and up must be Y");
   const buildingId = string4(authority.buildingId, "buildingId");
   const rootNodeId = string4(authority.rootNodeId, "rootNodeId");
   const roomIds = stringArray(authority.roomIds, "roomIds");
@@ -134314,7 +135455,8 @@ function parseFunctionalBuildingContract(bytes) {
     const terrainClearance = finite8(rawSite.terrainClearance, "site.terrainClearance");
     const vegetationClearance = finite8(rawSite.vegetationClearance, "site.vegetationClearance");
     const maximumTerrainRelief = finite8(rawSite.maximumTerrainRelief, "site.maximumTerrainRelief");
-    if (terrainClearance < 0.05 || terrainClearance > 1 || vegetationClearance < 0 || vegetationClearance > 5 || maximumTerrainRelief <= 0 || maximumTerrainRelief > 5) throw new Error("functional building: site policy is outside bounded construction limits");
+    if (terrainClearance < 0.05 || terrainClearance > 1 || vegetationClearance < 0 || vegetationClearance > 5 || maximumTerrainRelief <= 0 || maximumTerrainRelief > 5)
+      throw new Error("functional building: site policy is outside bounded construction limits");
     site = {
       footprintCenter: vec23(rawSite.footprintCenter, "site.footprintCenter"),
       footprintHalfExtents: vec23(rawSite.footprintHalfExtents, "site.footprintHalfExtents", true),
@@ -134360,40 +135502,57 @@ function parseFunctionalBuildingContract(bytes) {
   const root = semantic.get(rootNodeId);
   if (root?.role !== "root") throw new Error("functional building: rootNodeId does not resolve to a root node");
   const scenes = Array.isArray(json2.scenes) ? json2.scenes : [], sceneIndex = json2.scene === void 0 ? 0 : finite8(json2.scene, "scene");
-  if (!Number.isSafeInteger(sceneIndex) || scenes.length !== 1 || sceneIndex !== 0) throw new Error("functional building: asset requires exactly one canonical scene");
+  if (!Number.isSafeInteger(sceneIndex) || scenes.length !== 1 || sceneIndex !== 0)
+    throw new Error("functional building: asset requires exactly one canonical scene");
   const scene = object2(scenes[sceneIndex], `scenes[${sceneIndex}]`), sceneRoots = scene.nodes;
-  if (!Array.isArray(sceneRoots) || sceneRoots.length !== 1 || sceneRoots[0] !== root.index) throw new Error("functional building: semantic root must be the sole scene root");
+  if (!Array.isArray(sceneRoots) || sceneRoots.length !== 1 || sceneRoots[0] !== root.index)
+    throw new Error("functional building: semantic root must be the sole scene root");
   const descendants = /* @__PURE__ */ new Set(), visiting = /* @__PURE__ */ new Set();
   const visit = (index) => {
-    if (!Number.isSafeInteger(index) || index < 0 || index >= nodes.length) throw new Error("functional building: scene graph has an invalid child index");
+    if (!Number.isSafeInteger(index) || index < 0 || index >= nodes.length)
+      throw new Error("functional building: scene graph has an invalid child index");
     if (visiting.has(index)) throw new Error("functional building: scene graph contains a cycle");
     if (descendants.has(index)) return;
     visiting.add(index);
     descendants.add(index);
-    const raw = object2(nodes[index], `nodes[${index}]`);
-    if (raw.children !== void 0) {
-      if (!Array.isArray(raw.children)) throw new Error(`functional building: nodes[${index}].children must be an array`);
-      for (const child of raw.children) visit(finite8(child, `nodes[${index}].children`));
+    const raw3 = object2(nodes[index], `nodes[${index}]`);
+    if (raw3.children !== void 0) {
+      if (!Array.isArray(raw3.children))
+        throw new Error(`functional building: nodes[${index}].children must be an array`);
+      for (const child of raw3.children) visit(finite8(child, `nodes[${index}].children`));
     }
     visiting.delete(index);
   };
   visit(root.index);
-  for (const item of semantic.values()) if (!descendants.has(item.index)) throw new Error(`functional building: semantic node ${item.nodeId} is outside the building root`);
-  for (const roomId of roomIds) if (semantic.get(roomId)?.role !== "room") throw new Error(`functional building: room ${roomId} is unresolved`);
-  for (const portalId of portalIds) if (semantic.get(portalId)?.role !== "portal") throw new Error(`functional building: portal ${portalId} is unresolved`);
+  for (const item of semantic.values())
+    if (!descendants.has(item.index))
+      throw new Error(`functional building: semantic node ${item.nodeId} is outside the building root`);
+  for (const roomId of roomIds)
+    if (semantic.get(roomId)?.role !== "room") throw new Error(`functional building: room ${roomId} is unresolved`);
+  for (const portalId of portalIds)
+    if (semantic.get(portalId)?.role !== "portal")
+      throw new Error(`functional building: portal ${portalId} is unresolved`);
   const colliders = [];
   const doors = [];
   for (const item of semantic.values()) {
     if (item.role === "collider") {
       if (item.data.shape !== "box") throw new Error(`functional building: collider ${item.nodeId} must be a box`);
-      colliders.push({ id: item.nodeId, nodeId: item.nodeId, halfExtents: vec34(item.data.halfExtents, `${item.nodeId}.halfExtents`, true), center: vec34(item.data.center, `${item.nodeId}.center`) });
+      colliders.push({
+        id: item.nodeId,
+        nodeId: item.nodeId,
+        halfExtents: vec34(item.data.halfExtents, `${item.nodeId}.halfExtents`, true),
+        center: vec34(item.data.center, `${item.nodeId}.center`),
+        ...item.data.rotation === void 0 ? {} : { rotation: quaternion(item.data.rotation, `${item.nodeId}.rotation`) }
+      });
     } else if (item.role === "door") {
       const roomId = string4(item.data.roomId, `${item.nodeId}.roomId`);
       const portalId = string4(item.data.portalId, `${item.nodeId}.portalId`);
-      if (!roomIds.includes(roomId) || !portalIds.includes(portalId)) throw new Error(`functional building: door ${item.nodeId} has unresolved room/portal`);
+      if (!roomIds.includes(roomId) || !portalIds.includes(portalId))
+        throw new Error(`functional building: door ${item.nodeId} has unresolved room/portal`);
       const closedYaw = finite8(item.data.closedYaw, `${item.nodeId}.closedYaw`);
       const openYaw = finite8(item.data.openYaw, `${item.nodeId}.openYaw`);
-      if (Math.abs(openYaw - closedYaw) < 0.5) throw new Error(`functional building: door ${item.nodeId} has no useful open sweep`);
+      if (Math.abs(openYaw - closedYaw) < 0.5)
+        throw new Error(`functional building: door ${item.nodeId} has no useful open sweep`);
       doors.push({
         id: item.nodeId,
         nodeId: item.nodeId,
@@ -134407,123 +135566,309 @@ function parseFunctionalBuildingContract(bytes) {
       });
     }
   }
-  if (colliders.length < 5) throw new Error("functional building: decomposed shell requires at least five box colliders");
+  if (colliders.length < 5)
+    throw new Error("functional building: decomposed shell requires at least five box colliders");
   if (doors.length === 0) throw new Error("functional building: at least one operable door is required");
   if (site?.entranceSupport) {
     const support2 = site.entranceSupport, item = semantic.get(support2.sourcePrimitiveId), boxData = item?.data.box === void 0 ? void 0 : object2(item.data.box, `${support2.sourcePrimitiveId}.box`);
-    if (item?.role !== "architecture-primitive" || boxData === void 0) throw new Error("functional building: entrance support source primitive is unresolved");
+    if (item?.role !== "architecture-primitive" || boxData === void 0)
+      throw new Error("functional building: entrance support source primitive is unresolved");
     const center = vec34(boxData.center, `${support2.sourcePrimitiveId}.box.center`), halfExtents = vec34(boxData.halfExtents, `${support2.sourcePrimitiveId}.box.halfExtents`, true), yaw = finite8(boxData.yawRadians, `${support2.sourcePrimitiveId}.box.yawRadians`);
     if (Math.abs(center[0] - support2.center[0]) > 1e-3 || Math.abs(center[2] - support2.center[1]) > 1e-3 || Math.abs(halfExtents[0] - support2.halfExtents[0]) > 1e-3 || Math.abs(halfExtents[2] - support2.halfExtents[1]) > 1e-3 || Math.abs(yaw - support2.yawRadians) > 1e-3 || Math.abs(center[1] - halfExtents[1] - (support2.exteriorGradeY - support2.bearingDepth)) > 1e-3)
       throw new Error("functional building: entrance support does not match its structural source primitive");
     const c2 = Math.cos(support2.yawRadians), s2 = Math.sin(support2.yawRadians), limitX = site.footprintHalfExtents[0] + site.vegetationClearance, limitZ = site.footprintHalfExtents[1] + site.vegetationClearance;
-    for (const sx of [-support2.halfExtents[0], support2.halfExtents[0]]) for (const sz of [-support2.halfExtents[1], support2.halfExtents[1]]) {
-      const x3 = support2.center[0] + sx * c2 + sz * s2 - site.footprintCenter[0], z4 = support2.center[1] - sx * s2 + sz * c2 - site.footprintCenter[1];
-      if (Math.abs(x3) > limitX + 1e-9 || Math.abs(z4) > limitZ + 1e-9) throw new Error("functional building: entrance support leaves the ecology exclusion");
-    }
+    for (const sx of [-support2.halfExtents[0], support2.halfExtents[0]])
+      for (const sz of [-support2.halfExtents[1], support2.halfExtents[1]]) {
+        const x3 = support2.center[0] + sx * c2 + sz * s2 - site.footprintCenter[0], z4 = support2.center[1] - sx * s2 + sz * c2 - site.footprintCenter[1];
+        if (Math.abs(x3) > limitX + 1e-9 || Math.abs(z4) > limitZ + 1e-9)
+          throw new Error("functional building: entrance support leaves the ecology exclusion");
+      }
   }
   const animations = Array.isArray(json2.animations) ? json2.animations : [];
   for (const door of doors) {
     const nodeIndex = semantic.get(door.nodeId).index;
     const clip = animations.find((value) => object2(value, "animation").name === `${door.id}/open`);
-    if (clip === void 0) throw new Error(`functional building: door ${door.id} is missing canonical clip ${door.id}/open`);
+    if (clip === void 0)
+      throw new Error(`functional building: door ${door.id} is missing canonical clip ${door.id}/open`);
     const channels = Array.isArray(object2(clip, `${door.id} clip`).channels) ? object2(clip, `${door.id} clip`).channels : [];
     const rotatesLeaf = channels.some((value) => {
       const target = object2(object2(value, `${door.id} channel`).target, `${door.id} channel target`);
       return target.node === nodeIndex && target.path === "rotation";
     });
-    if (!rotatesLeaf) throw new Error(`functional building: canonical clip ${door.id}/open does not rotate its semantic leaf`);
+    if (!rotatesLeaf)
+      throw new Error(`functional building: canonical clip ${door.id}/open does not rotate its semantic leaf`);
   }
-  if (!isV2) return { schema: FUNCTIONAL_BUILDING_CONTRACT, buildingId, rootNodeId, roomIds, portalIds, entryAnchor, site, colliders, doors };
-  const rooms = boundedArray(authority.rooms, "rooms", 1, 32).map((raw, index) => {
-    const label4 = `rooms[${index}]`, value = object2(raw, label4);
-    exactKeys(value, ["id", "bounds", "finishedFloorY", "ceilingY", "storey", "visibilityCellId", "acoustics"], [], label4);
-    const id4 = stableId(value.id, `${label4}.id`), boundsRaw = object2(value.bounds, `${label4}.bounds`);
+  if (!isV2)
+    return {
+      schema: FUNCTIONAL_BUILDING_CONTRACT,
+      buildingId,
+      rootNodeId,
+      roomIds,
+      portalIds,
+      entryAnchor,
+      site,
+      colliders,
+      doors
+    };
+  const rooms = boundedArray(authority.rooms, "rooms", 1, 32).map((raw3, index) => {
+    const label4 = `rooms[${index}]`, value = object2(raw3, label4);
+    exactKeys(
+      value,
+      ["id", "bounds", "finishedFloorY", "ceilingY", "storey", "visibilityCellId", "acoustics"],
+      [],
+      label4
+    );
+    const id7 = stableId(value.id, `${label4}.id`), boundsRaw = object2(value.bounds, `${label4}.bounds`);
     exactKeys(boundsRaw, ["center", "halfExtents"], [], `${label4}.bounds`);
-    const bounds = { center: vec34(boundsRaw.center, `${label4}.bounds.center`), halfExtents: vec34(boundsRaw.halfExtents, `${label4}.bounds.halfExtents`, true) };
+    const bounds = {
+      center: vec34(boundsRaw.center, `${label4}.bounds.center`),
+      halfExtents: vec34(boundsRaw.halfExtents, `${label4}.bounds.halfExtents`, true)
+    };
     const finishedFloorY = finite8(value.finishedFloorY, `${label4}.finishedFloorY`), ceilingY = finite8(value.ceilingY, `${label4}.ceilingY`);
     const storey = finite8(value.storey, `${label4}.storey`);
-    if (!Number.isSafeInteger(storey) || storey < 0 || storey > 63) throw new Error(`functional building: ${label4}.storey must be an integer within [0,63]`);
+    if (!Number.isSafeInteger(storey) || storey < 0 || storey > 63)
+      throw new Error(`functional building: ${label4}.storey must be an integer within [0,63]`);
     if (ceilingY - finishedFloorY < 1.8 || Math.abs(bounds.center[1] - bounds.halfExtents[1] - finishedFloorY) > 1e-4 || Math.abs(bounds.center[1] + bounds.halfExtents[1] - ceilingY) > 1e-4)
-      throw new Error(`functional building: ${label4} bounds must span its finished floor and ceiling with at least 1.8m headroom`);
+      throw new Error(
+        `functional building: ${label4} bounds must span its finished floor and ceiling with at least 1.8m headroom`
+      );
     const acousticsRaw = object2(value.acoustics, `${label4}.acoustics`);
     exactKeys(acousticsRaw, ["absorption", "reverb"], [], `${label4}.acoustics`);
-    return { id: id4, bounds, finishedFloorY, ceilingY, storey, visibilityCellId: stableId(value.visibilityCellId, `${label4}.visibilityCellId`), acoustics: { absorption: coefficient(acousticsRaw.absorption, `${label4}.acoustics.absorption`), reverb: coefficient(acousticsRaw.reverb, `${label4}.acoustics.reverb`) } };
+    return {
+      id: id7,
+      bounds,
+      finishedFloorY,
+      ceilingY,
+      storey,
+      visibilityCellId: stableId(value.visibilityCellId, `${label4}.visibilityCellId`),
+      acoustics: {
+        absorption: coefficient(acousticsRaw.absorption, `${label4}.acoustics.absorption`),
+        reverb: coefficient(acousticsRaw.reverb, `${label4}.acoustics.reverb`)
+      }
+    };
   });
   const roomMap = new Map(rooms.map((room) => [room.id, room]));
-  if (roomMap.size !== rooms.length || roomIds.length !== rooms.length || roomIds.some((id4) => !roomMap.has(id4))) throw new Error("functional building: rooms must exactly cover roomIds");
-  const portals = boundedArray(authority.portals, "portals", 1, 64).map((raw, index) => {
-    const label4 = `portals[${index}]`, value = object2(raw, label4);
-    exactKeys(value, ["id", "kind", "exterior", "roomIds", "center", "halfExtents", "acousticTransmission"], ["doorId"], label4);
-    const id4 = stableId(value.id, `${label4}.id`), kind = string4(value.kind, `${label4}.kind`);
+  if (roomMap.size !== rooms.length || roomIds.length !== rooms.length || roomIds.some((id7) => !roomMap.has(id7)))
+    throw new Error("functional building: rooms must exactly cover roomIds");
+  const portals = boundedArray(authority.portals, "portals", 1, 64).map((raw3, index) => {
+    const label4 = `portals[${index}]`, value = object2(raw3, label4);
+    exactKeys(
+      value,
+      ["id", "kind", "exterior", "roomIds", "center", "halfExtents", "acousticTransmission"],
+      ["doorId"],
+      label4
+    );
+    const id7 = stableId(value.id, `${label4}.id`), kind = string4(value.kind, `${label4}.kind`);
     if (kind !== "door" && kind !== "passage") throw new Error(`functional building: ${label4}.kind is unsupported`);
-    if (!Array.isArray(value.roomIds) || value.roomIds.length !== 2) throw new Error(`functional building: ${label4}.roomIds must be a pair`);
-    const endpoints = value.roomIds.map((entry, endpoint) => entry === null ? null : string4(entry, `${label4}.roomIds[${endpoint}]`));
-    if (endpoints[0] === null && endpoints[1] === null || endpoints[0] === endpoints[1] || endpoints.some((entry) => entry !== null && !roomMap.has(entry))) throw new Error(`functional building: ${label4}.roomIds has unresolved or degenerate endpoints`);
-    if (typeof value.exterior !== "boolean" || value.exterior !== endpoints.includes(null)) throw new Error(`functional building: ${label4}.exterior must exactly match its null exterior endpoint`);
+    if (!Array.isArray(value.roomIds) || value.roomIds.length !== 2)
+      throw new Error(`functional building: ${label4}.roomIds must be a pair`);
+    const endpoints = value.roomIds.map(
+      (entry, endpoint) => entry === null ? null : string4(entry, `${label4}.roomIds[${endpoint}]`)
+    );
+    if (endpoints[0] === null && endpoints[1] === null || endpoints[0] === endpoints[1] || endpoints.some((entry) => entry !== null && !roomMap.has(entry)))
+      throw new Error(`functional building: ${label4}.roomIds has unresolved or degenerate endpoints`);
+    if (typeof value.exterior !== "boolean" || value.exterior !== endpoints.includes(null))
+      throw new Error(`functional building: ${label4}.exterior must exactly match its null exterior endpoint`);
     const center = vec34(value.center, `${label4}.center`), halfExtents = vec34(value.halfExtents, `${label4}.halfExtents`, true);
-    for (const endpoint of endpoints) if (endpoint !== null) {
-      const room = roomMap.get(endpoint);
-      if (!center.every((axis, dimension) => Math.abs(axis - room.bounds.center[dimension]) <= room.bounds.halfExtents[dimension] + halfExtents[dimension] + 1e-6)) throw new Error(`functional building: ${label4} does not touch room ${endpoint}`);
-    }
+    for (const endpoint of endpoints)
+      if (endpoint !== null) {
+        const room = roomMap.get(endpoint);
+        if (!center.every(
+          (axis, dimension) => Math.abs(axis - room.bounds.center[dimension]) <= room.bounds.halfExtents[dimension] + halfExtents[dimension] + 1e-6
+        ))
+          throw new Error(`functional building: ${label4} does not touch room ${endpoint}`);
+      }
     const doorId = value.doorId === void 0 ? void 0 : stableId(value.doorId, `${label4}.doorId`);
-    if (kind === "door" !== (doorId !== void 0)) throw new Error(`functional building: ${label4} door portals require doorId and passages prohibit it`);
-    return { id: id4, kind, exterior: value.exterior, roomIds: endpoints, center, halfExtents, acousticTransmission: coefficient(value.acousticTransmission, `${label4}.acousticTransmission`), ...doorId === void 0 ? {} : { doorId } };
+    if (kind === "door" !== (doorId !== void 0))
+      throw new Error(`functional building: ${label4} door portals require doorId and passages prohibit it`);
+    return {
+      id: id7,
+      kind,
+      exterior: value.exterior,
+      roomIds: endpoints,
+      center,
+      halfExtents,
+      acousticTransmission: coefficient(value.acousticTransmission, `${label4}.acousticTransmission`),
+      ...doorId === void 0 ? {} : { doorId }
+    };
   });
   const portalMap = new Map(portals.map((portal) => [portal.id, portal]));
-  if (portalMap.size !== portals.length || portalIds.length !== portals.length || portalIds.some((id4) => !portalMap.has(id4))) throw new Error("functional building: portals must exactly cover portalIds");
-  const verticalLinks = boundedArray(authority.verticalLinks, "verticalLinks", 0, 32).map((raw, index) => {
-    const label4 = `verticalLinks[${index}]`, value = object2(raw, label4);
-    exactKeys(value, ["id", "kind", "fromRoomId", "toRoomId", "from", "to", "clearWidth", "clearHeight", "rise", "run", "riserCount", "treadDepth", "upperFloorOpening"], [], label4);
-    const id4 = stableId(value.id, `${label4}.id`), kind = string4(value.kind, `${label4}.kind`);
-    if (kind !== "stairs") throw new Error(`functional building: ${label4}.kind must be stairs`);
-    const fromRoomId = string4(value.fromRoomId, `${label4}.fromRoomId`), toRoomId = string4(value.toRoomId, `${label4}.toRoomId`), from = vec34(value.from, `${label4}.from`), to = vec34(value.to, `${label4}.to`);
-    const fromRoom = roomMap.get(fromRoomId), toRoom = roomMap.get(toRoomId);
-    if (!fromRoom || !toRoom || fromRoom === toRoom || !contains(fromRoom, from) || !contains(toRoom, to)) throw new Error(`functional building: ${label4} endpoints must resolve inside two distinct rooms`);
-    const rise = positive3(value.rise, `${label4}.rise`), run = positive3(value.run, `${label4}.run`), actualRise = Math.abs(to[1] - from[1]);
-    const riserCount = finite8(value.riserCount, `${label4}.riserCount`), treadDepth = positive3(value.treadDepth, `${label4}.treadDepth`);
-    const clearWidth = positive3(value.clearWidth, `${label4}.clearWidth`), clearHeight = positive3(value.clearHeight, `${label4}.clearHeight`);
-    const openingRaw = object2(value.upperFloorOpening, `${label4}.upperFloorOpening`);
-    exactKeys(openingRaw, ["center", "halfExtents"], [], `${label4}.upperFloorOpening`);
-    const upperFloorOpening = { center: vec23(openingRaw.center, `${label4}.upperFloorOpening.center`), halfExtents: vec23(openingRaw.halfExtents, `${label4}.upperFloorOpening.halfExtents`, true) };
-    const dx = to[0] - from[0], dz = to[2] - from[2];
-    if (!Number.isSafeInteger(riserCount) || riserCount < 2 || riserCount > 64 || rise / riserCount > 0.2 || treadDepth < 0.25 || treadDepth > 0.45 || clearWidth < 0.8 || clearHeight < 1.9 || Math.abs(run - treadDepth * riserCount) > 1e-4 || Math.abs(Math.hypot(dx, dz) - run) > 1e-4 || Math.abs(dx) > 1e-4 && Math.abs(dz) > 1e-4 || Math.abs(from[1] - fromRoom.finishedFloorY) > 1e-4 || Math.abs(to[1] - toRoom.finishedFloorY) > 1e-4 || toRoom.finishedFloorY <= fromRoom.finishedFloorY || toRoom.storey <= fromRoom.storey || Math.abs(to[0] - upperFloorOpening.center[0]) > upperFloorOpening.halfExtents[0] + 1e-6 || Math.abs(to[2] - upperFloorOpening.center[1]) > upperFloorOpening.halfExtents[1] + 1e-6 || upperFloorOpening.halfExtents[0] * 2 < clearWidth - 1e-6 || upperFloorOpening.halfExtents[1] * 2 < clearWidth - 1e-6 || Math.abs(upperFloorOpening.center[0] - toRoom.bounds.center[0]) + upperFloorOpening.halfExtents[0] > toRoom.bounds.halfExtents[0] + 1e-6 || Math.abs(upperFloorOpening.center[1] - toRoom.bounds.center[2]) + upperFloorOpening.halfExtents[1] > toRoom.bounds.halfExtents[2] + 1e-6 || Math.abs(rise - actualRise) > 1e-4 || Math.abs(actualRise - Math.abs(toRoom.finishedFloorY - fromRoom.finishedFloorY)) > 1e-4)
-      throw new Error(`functional building: ${label4} stair construction/rise/storey authority is inconsistent`);
-    return { id: id4, kind: "stairs", fromRoomId, toRoomId, from, to, clearWidth, clearHeight, rise, run, riserCount, treadDepth, upperFloorOpening };
-  });
-  if (new Set(verticalLinks.map((link) => link.id)).size !== verticalLinks.length) throw new Error("functional building: verticalLinks contains duplicate ids");
-  const spawnAnchors = boundedArray(authority.spawnAnchors, "spawnAnchors", 1, 256).map((raw, index) => {
-    const label4 = `spawnAnchors[${index}]`, value = object2(raw, label4);
-    exactKeys(value, ["id", "roomId", "kind", "position", "direction", "clearanceRadius", "clearanceHeight"], [], label4);
-    const id4 = stableId(value.id, `${label4}.id`), roomId = stableId(value.roomId, `${label4}.roomId`), kind = string4(value.kind, `${label4}.kind`), position = vec34(value.position, `${label4}.position`), direction3 = vec34(value.direction, `${label4}.direction`), length3 = Math.hypot(...direction3);
-    if (kind !== "player" && kind !== "npc" && kind !== "item") throw new Error(`functional building: ${label4}.kind is unsupported`);
-    const clearanceRadius = positive3(value.clearanceRadius, `${label4}.clearanceRadius`), clearanceHeight = positive3(value.clearanceHeight, `${label4}.clearanceHeight`);
-    const room = roomMap.get(roomId);
-    if (!room || clearanceRadius > 1 || clearanceHeight > 3 || clearanceHeight < 0.1 || position[1] < room.finishedFloorY - 1e-4 || position[1] + clearanceHeight > room.ceilingY + 1e-4 || Math.abs(position[0] - room.bounds.center[0]) + clearanceRadius > room.bounds.halfExtents[0] + 1e-6 || Math.abs(position[2] - room.bounds.center[2]) + clearanceRadius > room.bounds.halfExtents[2] + 1e-6)
-      throw new Error(`functional building: ${label4} clearance must be contained by its room`);
-    if (Math.abs(length3 - 1) > 1e-4 || Math.abs(direction3[1]) > 1e-4) throw new Error(`functional building: ${label4}.direction must be normalized and horizontal`);
-    return { id: id4, roomId, kind, position, direction: direction3, clearanceRadius, clearanceHeight };
-  });
-  if (new Set(spawnAnchors.map((anchor2) => anchor2.id)).size !== spawnAnchors.length || rooms.some((room) => !spawnAnchors.some((anchor2) => anchor2.roomId === room.id))) throw new Error("functional building: spawnAnchors must have unique ids and cover every room");
-  const visibilityCells = boundedArray(authority.visibilityCells, "visibilityCells", 1, 32).map((raw, index) => {
-    const label4 = `visibilityCells[${index}]`, value = object2(raw, label4);
-    exactKeys(value, ["id", "roomIds", "nodeIds"], [], label4);
-    const id4 = stableId(value.id, `${label4}.id`), coveredRooms = stringArray(value.roomIds, `${label4}.roomIds`), nodeIds = stringArray(value.nodeIds, `${label4}.nodeIds`);
-    if (coveredRooms.some((roomId) => !roomMap.has(roomId)) || nodeIds.some((nodeId) => !semantic.has(nodeId))) throw new Error(`functional building: ${label4} contains unresolved room or node ids`);
-    return { id: id4, roomIds: coveredRooms, nodeIds };
-  });
+  if (portalMap.size !== portals.length || portalIds.length !== portals.length || portalIds.some((id7) => !portalMap.has(id7)))
+    throw new Error("functional building: portals must exactly cover portalIds");
+  const verticalLinks = boundedArray(authority.verticalLinks, "verticalLinks", 0, 32).map(
+    (raw3, index) => {
+      const label4 = `verticalLinks[${index}]`, value = object2(raw3, label4);
+      exactKeys(
+        value,
+        [
+          "id",
+          "kind",
+          "fromRoomId",
+          "toRoomId",
+          "from",
+          "to",
+          "clearWidth",
+          "clearHeight",
+          "rise",
+          "run",
+          "riserCount",
+          "treadDepth",
+          "upperFloorOpening"
+        ],
+        ["bottomLandingDepth", "topLandingDepth", "clearancePolicy", "flights", "intermediateLandings", "approaches"],
+        label4
+      );
+      const id7 = stableId(value.id, `${label4}.id`), kind = string4(value.kind, `${label4}.kind`);
+      if (kind !== "stairs") throw new Error(`functional building: ${label4}.kind must be stairs`);
+      const fromRoomId = string4(value.fromRoomId, `${label4}.fromRoomId`), toRoomId = string4(value.toRoomId, `${label4}.toRoomId`), from = vec34(value.from, `${label4}.from`), to = vec34(value.to, `${label4}.to`);
+      const fromRoom = roomMap.get(fromRoomId), toRoom = roomMap.get(toRoomId);
+      if (!fromRoom || !toRoom || fromRoom === toRoom || !contains(fromRoom, from) || !contains(toRoom, to))
+        throw new Error(`functional building: ${label4} endpoints must resolve inside two distinct rooms`);
+      const rise = positive3(value.rise, `${label4}.rise`), run = positive3(value.run, `${label4}.run`), actualRise = Math.abs(to[1] - from[1]);
+      const riserCount = finite8(value.riserCount, `${label4}.riserCount`), treadDepth = positive3(value.treadDepth, `${label4}.treadDepth`);
+      const clearWidth = positive3(value.clearWidth, `${label4}.clearWidth`), clearHeight = positive3(value.clearHeight, `${label4}.clearHeight`);
+      const openingRaw = object2(value.upperFloorOpening, `${label4}.upperFloorOpening`);
+      exactKeys(openingRaw, ["center", "halfExtents"], [], `${label4}.upperFloorOpening`);
+      const upperFloorOpening = {
+        center: vec23(openingRaw.center, `${label4}.upperFloorOpening.center`),
+        halfExtents: vec23(openingRaw.halfExtents, `${label4}.upperFloorOpening.halfExtents`, true)
+      };
+      const flights = value.flights === void 0 ? void 0 : boundedArray(value.flights, `${label4}.flights`, 2, 4).map((rawFlight, flightIndex) => {
+        const flight = object2(rawFlight, `${label4}.flights[${flightIndex}]`);
+        exactKeys(flight, ["from", "to", "riserCount"], [], `${label4}.flights[${flightIndex}]`);
+        return {
+          from: vec34(flight.from, `${label4}.flights[${flightIndex}].from`),
+          to: vec34(flight.to, `${label4}.flights[${flightIndex}].to`),
+          riserCount: finite8(flight.riserCount, `${label4}.flights[${flightIndex}].riserCount`)
+        };
+      }), intermediateLandings = value.intermediateLandings === void 0 ? void 0 : boundedArray(value.intermediateLandings, `${label4}.intermediateLandings`, 1, 3).map(
+        (rawLanding, landingIndex) => {
+          const landing = object2(rawLanding, `${label4}.intermediateLandings[${landingIndex}]`);
+          exactKeys(
+            landing,
+            ["center", "halfExtents", "yawRadians"],
+            [],
+            `${label4}.intermediateLandings[${landingIndex}]`
+          );
+          return {
+            center: vec34(landing.center, `${label4}.intermediateLandings[${landingIndex}].center`),
+            halfExtents: vec23(
+              landing.halfExtents,
+              `${label4}.intermediateLandings[${landingIndex}].halfExtents`,
+              true
+            ),
+            yawRadians: finite8(landing.yawRadians, `${label4}.intermediateLandings[${landingIndex}].yawRadians`)
+          };
+        }
+      );
+      const parseApproach = (raw4, socket) => {
+        const approach = object2(raw4, `${label4}.approaches.${socket}`);
+        exactKeys(approach, ["center", "direction", "halfExtents"], [], `${label4}.approaches.${socket}`);
+        return {
+          center: vec34(approach.center, `${label4}.approaches.${socket}.center`),
+          direction: vec34(approach.direction, `${label4}.approaches.${socket}.direction`),
+          halfExtents: vec23(approach.halfExtents, `${label4}.approaches.${socket}.halfExtents`, true)
+        };
+      }, approachesRaw = value.approaches === void 0 ? void 0 : object2(value.approaches, `${label4}.approaches`), approaches = approachesRaw && (exactKeys(approachesRaw, ["bottom", "top"], [], `${label4}.approaches`), { bottom: parseApproach(approachesRaw.bottom, "bottom"), top: parseApproach(approachesRaw.top, "top") }), bottomLandingDepth = value.bottomLandingDepth === void 0 ? void 0 : positive3(value.bottomLandingDepth, `${label4}.bottomLandingDepth`), topLandingDepth = value.topLandingDepth === void 0 ? void 0 : positive3(value.topLandingDepth, `${label4}.topLandingDepth`), clearancePolicy = value.clearancePolicy === void 0 ? void 0 : string4(value.clearancePolicy, `${label4}.clearancePolicy`), dx = to[0] - from[0], dz = to[2] - from[2], actualRun = flights ? flights.reduce(
+        (sum, flight) => sum + Math.hypot(flight.to[0] - flight.from[0], flight.to[2] - flight.from[2]),
+        0
+      ) : Math.hypot(dx, dz), multiValid = !flights || clearancePolicy === "structural-footprints-and-controller-sockets-v1" && intermediateLandings?.length === flights.length - 1 && approaches && bottomLandingDepth && topLandingDepth && flights.reduce((sum, flight) => sum + flight.riserCount, 0) === riserCount && flights.every((flight) => flight.to[1] > flight.from[1] && Number.isSafeInteger(flight.riserCount));
+      if (!Number.isSafeInteger(riserCount) || riserCount < 2 || riserCount > 64 || rise / riserCount > 0.2 || treadDepth < 0.25 || treadDepth > 0.45 || clearWidth < 0.8 || clearHeight < 1.9 || Math.abs(run - treadDepth * riserCount) > 1e-4 || Math.abs(actualRun - run) > 1e-4 || !flights && Math.abs(dx) > 1e-4 && Math.abs(dz) > 1e-4 || !multiValid || Math.abs(from[1] - fromRoom.finishedFloorY) > 1e-4 || Math.abs(to[1] - toRoom.finishedFloorY) > 1e-4 || toRoom.finishedFloorY <= fromRoom.finishedFloorY || toRoom.storey <= fromRoom.storey || Math.abs(to[0] - upperFloorOpening.center[0]) > upperFloorOpening.halfExtents[0] + 1e-6 || Math.abs(to[2] - upperFloorOpening.center[1]) > upperFloorOpening.halfExtents[1] + 1e-6 || upperFloorOpening.halfExtents[0] * 2 < clearWidth - 1e-6 || upperFloorOpening.halfExtents[1] * 2 < clearWidth - 1e-6 || Math.abs(upperFloorOpening.center[0] - toRoom.bounds.center[0]) + upperFloorOpening.halfExtents[0] > toRoom.bounds.halfExtents[0] + 1e-6 || Math.abs(upperFloorOpening.center[1] - toRoom.bounds.center[2]) + upperFloorOpening.halfExtents[1] > toRoom.bounds.halfExtents[2] + 1e-6 || Math.abs(rise - actualRise) > 1e-4 || Math.abs(actualRise - Math.abs(toRoom.finishedFloorY - fromRoom.finishedFloorY)) > 1e-4)
+        throw new Error(`functional building: ${label4} stair construction/rise/storey authority is inconsistent`);
+      return {
+        id: id7,
+        kind: "stairs",
+        fromRoomId,
+        toRoomId,
+        from,
+        to,
+        clearWidth,
+        clearHeight,
+        rise,
+        run,
+        riserCount,
+        treadDepth,
+        ...flights ? {
+          bottomLandingDepth,
+          topLandingDepth,
+          clearancePolicy: "structural-footprints-and-controller-sockets-v1",
+          flights,
+          intermediateLandings,
+          approaches
+        } : {},
+        upperFloorOpening
+      };
+    }
+  );
+  if (new Set(verticalLinks.map((link) => link.id)).size !== verticalLinks.length)
+    throw new Error("functional building: verticalLinks contains duplicate ids");
+  const spawnAnchors = boundedArray(authority.spawnAnchors, "spawnAnchors", 1, 256).map(
+    (raw3, index) => {
+      const label4 = `spawnAnchors[${index}]`, value = object2(raw3, label4);
+      exactKeys(
+        value,
+        ["id", "roomId", "kind", "position", "direction", "clearanceRadius", "clearanceHeight"],
+        [],
+        label4
+      );
+      const id7 = stableId(value.id, `${label4}.id`), roomId = stableId(value.roomId, `${label4}.roomId`), kind = string4(value.kind, `${label4}.kind`), position = vec34(value.position, `${label4}.position`), direction3 = vec34(value.direction, `${label4}.direction`), length3 = Math.hypot(...direction3);
+      if (kind !== "player" && kind !== "npc" && kind !== "item")
+        throw new Error(`functional building: ${label4}.kind is unsupported`);
+      const clearanceRadius = positive3(value.clearanceRadius, `${label4}.clearanceRadius`), clearanceHeight = positive3(value.clearanceHeight, `${label4}.clearanceHeight`);
+      const room = roomMap.get(roomId);
+      if (!room || clearanceRadius > 1 || clearanceHeight > 3 || clearanceHeight < 0.1 || position[1] < room.finishedFloorY - 1e-4 || position[1] + clearanceHeight > room.ceilingY + 1e-4 || Math.abs(position[0] - room.bounds.center[0]) + clearanceRadius > room.bounds.halfExtents[0] + 1e-6 || Math.abs(position[2] - room.bounds.center[2]) + clearanceRadius > room.bounds.halfExtents[2] + 1e-6)
+        throw new Error(`functional building: ${label4} clearance must be contained by its room`);
+      if (Math.abs(length3 - 1) > 1e-4 || Math.abs(direction3[1]) > 1e-4)
+        throw new Error(`functional building: ${label4}.direction must be normalized and horizontal`);
+      return {
+        id: id7,
+        roomId,
+        kind,
+        position,
+        direction: direction3,
+        clearanceRadius,
+        clearanceHeight
+      };
+    }
+  );
+  if (new Set(spawnAnchors.map((anchor2) => anchor2.id)).size !== spawnAnchors.length || rooms.some((room) => !spawnAnchors.some((anchor2) => anchor2.roomId === room.id)))
+    throw new Error("functional building: spawnAnchors must have unique ids and cover every room");
+  const visibilityCells = boundedArray(authority.visibilityCells, "visibilityCells", 1, 32).map(
+    (raw3, index) => {
+      const label4 = `visibilityCells[${index}]`, value = object2(raw3, label4);
+      exactKeys(value, ["id", "roomIds", "nodeIds"], [], label4);
+      const id7 = stableId(value.id, `${label4}.id`), coveredRooms = stringArray(value.roomIds, `${label4}.roomIds`), nodeIds = stringArray(value.nodeIds, `${label4}.nodeIds`);
+      if (coveredRooms.some((roomId) => !roomMap.has(roomId)) || nodeIds.some((nodeId) => !semantic.has(nodeId)))
+        throw new Error(`functional building: ${label4} contains unresolved room or node ids`);
+      return { id: id7, roomIds: coveredRooms, nodeIds };
+    }
+  );
   const cellMap = new Map(visibilityCells.map((cell) => [cell.id, cell]));
   const visibleNodeIds = visibilityCells.flatMap((cell) => cell.nodeIds);
-  if (cellMap.size !== visibilityCells.length || new Set(visibleNodeIds).size !== visibleNodeIds.length || rooms.some((room) => !cellMap.get(room.visibilityCellId)?.roomIds.includes(room.id)) || roomIds.some((roomId) => visibilityCells.filter((cell) => cell.roomIds.includes(roomId)).length !== 1)) throw new Error("functional building: visibility cells must uniquely own every room/node and match room visibilityCellId");
-  const authorityIds = [...rooms.map((entry) => entry.id), ...portals.map((entry) => entry.id), ...verticalLinks.map((entry) => entry.id), ...spawnAnchors.map((entry) => entry.id), ...visibilityCells.map((entry) => entry.id)];
-  if (new Set(authorityIds).size !== authorityIds.length) throw new Error("functional building: v2 topology ids must be globally unique");
+  if (cellMap.size !== visibilityCells.length || new Set(visibleNodeIds).size !== visibleNodeIds.length || rooms.some((room) => !cellMap.get(room.visibilityCellId)?.roomIds.includes(room.id)) || roomIds.some((roomId) => visibilityCells.filter((cell) => cell.roomIds.includes(roomId)).length !== 1))
+    throw new Error(
+      "functional building: visibility cells must uniquely own every room/node and match room visibilityCellId"
+    );
+  const authorityIds = [
+    ...rooms.map((entry) => entry.id),
+    ...portals.map((entry) => entry.id),
+    ...verticalLinks.map((entry) => entry.id),
+    ...spawnAnchors.map((entry) => entry.id),
+    ...visibilityCells.map((entry) => entry.id)
+  ];
+  if (new Set(authorityIds).size !== authorityIds.length)
+    throw new Error("functional building: v2 topology ids must be globally unique");
   const doorById = new Map(doors.map((door) => [door.id, door]));
   if (doorById.size !== doors.length) throw new Error("functional building: doors contains duplicate ids");
   for (const door of doors) {
     const portal = portalMap.get(door.portalId);
-    if (portal?.kind !== "door" || portal.doorId !== door.id || !portal.roomIds.includes(door.roomId)) throw new Error(`functional building: door ${door.id} is inconsistent with portal ${door.portalId}`);
+    if (portal?.kind !== "door" || portal.doorId !== door.id || !portal.roomIds.includes(door.roomId))
+      throw new Error(`functional building: door ${door.id} is inconsistent with portal ${door.portalId}`);
   }
-  for (const portal of portals) if (portal.kind === "door" && doorById.get(portal.doorId)?.portalId !== portal.id) throw new Error(`functional building: portal ${portal.id} has no consistent door`);
-  const adjacency = new Map(roomIds.map((id4) => [id4, /* @__PURE__ */ new Set()])), exterior = /* @__PURE__ */ new Set();
+  for (const portal of portals)
+    if (portal.kind === "door" && doorById.get(portal.doorId)?.portalId !== portal.id)
+      throw new Error(`functional building: portal ${portal.id} has no consistent door`);
+  const adjacency = new Map(roomIds.map((id7) => [id7, /* @__PURE__ */ new Set()])), exterior = /* @__PURE__ */ new Set();
   for (const portal of portals) {
     const [a2, b3] = portal.roomIds;
     if (a2 === null) exterior.add(b3);
@@ -134539,12 +135884,30 @@ function parseFunctionalBuildingContract(bytes) {
   }
   if (exterior.size === 0) throw new Error("functional building: at least one exterior portal is required");
   const reached = new Set(exterior), queue = [...exterior];
-  while (queue.length) for (const next of adjacency.get(queue.shift())) if (!reached.has(next)) {
-    reached.add(next);
-    queue.push(next);
-  }
-  if (reached.size !== roomIds.length) throw new Error("functional building: every room must be connected to an exterior portal");
-  return { schema: FUNCTIONAL_BUILDING_CONTRACT_V2, buildingId, rootNodeId, roomIds, portalIds, entryAnchor, site, colliders, doors, rooms, portals, verticalLinks, spawnAnchors, visibilityCells };
+  while (queue.length)
+    for (const next of adjacency.get(queue.shift()))
+      if (!reached.has(next)) {
+        reached.add(next);
+        queue.push(next);
+      }
+  if (reached.size !== roomIds.length)
+    throw new Error("functional building: every room must be connected to an exterior portal");
+  return {
+    schema: FUNCTIONAL_BUILDING_CONTRACT_V2,
+    buildingId,
+    rootNodeId,
+    roomIds,
+    portalIds,
+    entryAnchor,
+    site,
+    colliders,
+    doors,
+    rooms,
+    portals,
+    verticalLinks,
+    spawnAnchors,
+    visibilityCells
+  };
 }
 
 // src/skills/functional-building-lod.ts
@@ -134584,10 +135947,10 @@ function finitePosition(value) {
 function resolveFunctionalBuildingLodRoots(root, doorNodeIds) {
   const byLevel = /* @__PURE__ */ new Map();
   root.traverse?.((node) => {
-    const raw = node.userData?.liminaLod?.level;
-    if (raw === void 0) return;
-    if (!Number.isInteger(raw) || raw < 0) throw new Error("functional building LOD: invalid semantic level");
-    const level = raw;
+    const raw3 = node.userData?.liminaLod?.level;
+    if (raw3 === void 0) return;
+    if (!Number.isInteger(raw3) || raw3 < 0) throw new Error("functional building LOD: invalid semantic level");
+    const level = raw3;
     if (byLevel.has(level)) throw new Error(`functional building LOD: duplicate LOD${level} root`);
     byLevel.set(level, node);
   });
@@ -134660,7 +136023,15 @@ function add3(a2, b3) {
 function quatYaw(yaw) {
   return [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)];
 }
-function spawnBodyEntity(world, position, half, yaw, origin, mesh) {
+function multiplyQuat(a2, b3) {
+  return [
+    a2[3] * b3[0] + a2[0] * b3[3] + a2[1] * b3[2] - a2[2] * b3[1],
+    a2[3] * b3[1] - a2[0] * b3[2] + a2[1] * b3[3] + a2[2] * b3[0],
+    a2[3] * b3[2] + a2[0] * b3[1] - a2[1] * b3[0] + a2[2] * b3[3],
+    a2[3] * b3[3] - a2[0] * b3[0] - a2[1] * b3[1] - a2[2] * b3[2]
+  ];
+}
+function spawnBodyEntity(world, position, half, orientation, origin, mesh) {
   if (mesh !== void 0) world.scene.add(mesh);
   const eid = spawnRenderable(world.ecs, mesh ?? inert(), ...position);
   if (eid >= MAX_ENTITIES) {
@@ -134668,7 +136039,7 @@ function spawnBodyEntity(world, position, half, yaw, origin, mesh) {
     if (mesh !== void 0) world.scene.remove(mesh);
     throw new Error("functional building: entity capacity exceeded");
   }
-  const q3 = quatYaw(yaw);
+  const q3 = typeof orientation === "number" ? quatYaw(orientation) : orientation;
   Rotation.x[eid] = q3[0];
   Rotation.y[eid] = q3[1];
   Rotation.z[eid] = q3[2];
@@ -134726,18 +136097,67 @@ function registerFunctionalBuildingSkills(registry2, assets, deps) {
       else nav.setPortalOpen(state.portalRuntimeId, state.open);
     }
   };
+  const copyDoorState = (state) => ({
+    ...state,
+    position: [...state.position],
+    door: {
+      ...state.door,
+      hinge: [...state.door.hinge],
+      center: [...state.door.center],
+      halfExtents: [...state.door.halfExtents]
+    }
+  });
+  const copyInteraction = (entity) => {
+    const value = deps?.interaction?.get(entity);
+    return value === void 0 ? void 0 : { ...value, state: { ...value.state } };
+  };
+  const registerDoorStateUndo = (ctx, entity, state) => {
+    const previous = copyDoorState(state), previousTags = new Set(ctx.world.tags.get(ctx.world.entities.resolve(entity).eid) ?? []), previousInteraction = copyInteraction(entity), topologyRevision = deps?.topology?.getRevision(), navRevision = deps?.nav?.getRevision(), previousNavOpen = deps?.nav?.isPortalOpen(state.portalRuntimeId);
+    ctx.undo(`functional door '${entity}' state`, () => {
+      const entry = ctx.world.entities.resolve(entity);
+      if (entry === void 0) throw new Error(`functional door rollback: '${entity}' disappeared`);
+      const collider = ctx.world.entities.resolve(previous.colliderEntity);
+      if (collider?.bodyId === void 0) throw new Error(`functional door rollback: '${entity}' lost its collider`);
+      const pose = doorPose(previous.door, previous.position, previous.buildingYaw, previous.open), q3 = quatYaw(pose.yaw);
+      Position.x[entry.eid] = pose.hinge[0];
+      Position.y[entry.eid] = pose.hinge[1];
+      Position.z[entry.eid] = pose.hinge[2];
+      Rotation.x[entry.eid] = q3[0];
+      Rotation.y[entry.eid] = q3[1];
+      Rotation.z[entry.eid] = q3[2];
+      Rotation.w[entry.eid] = q3[3];
+      Position.x[collider.eid] = pose.center[0];
+      Position.y[collider.eid] = pose.center[1];
+      Position.z[collider.eid] = pose.center[2];
+      Rotation.x[collider.eid] = q3[0];
+      Rotation.y[collider.eid] = q3[1];
+      Rotation.z[collider.eid] = q3[2];
+      Rotation.w[collider.eid] = q3[3];
+      ctx.world.ops.op_physics_set_body_transform(collider.bodyId, ...pose.center, ...q3);
+      entry.origin = doorOrigin(copyDoorState(previous));
+      ctx.world.tags.set(entry.eid, new Set(previousTags));
+      if (entry.parent !== void 0) ctx.world.entities.setParent(entity, entry.parent, computeLocalOffset(ctx.world, entry.parent, entry.eid));
+      if (collider.parent !== void 0) ctx.world.entities.setParent(previous.colliderEntity, collider.parent, computeLocalOffset(ctx.world, collider.parent, collider.eid));
+      derive(ctx.world, entity, previous);
+      if (previousInteraction === void 0) deps?.interaction?.unregister(entity);
+      else deps?.interaction?.register({ ...previousInteraction, state: { ...previousInteraction.state } });
+      if (previousNavOpen === void 0) deps?.nav?.unregisterPortal(previous.portalRuntimeId);
+      if (topologyRevision !== void 0) deps?.topology?.restoreRevisionAfterRollback(topologyRevision);
+      if (navRevision !== void 0) deps?.nav?.restoreRevisionAfterRollback(navRevision);
+    });
+  };
   const reconcile = (world) => {
     if (reconciledVersions.get(world) === world.entities.version) return;
-    for (const id4 of world.entities.ids()) {
-      const entry = world.entities.resolve(id4);
-      if (entry?.origin?.tool !== "building.placeFunctional" || deps?.topology?.hasBuilding(id4)) continue;
+    for (const id7 of world.entities.ids()) {
+      const entry = world.entities.resolve(id7);
+      if (entry?.origin?.tool !== "building.placeFunctional" || deps?.topology?.hasBuilding(id7)) continue;
       const input = entry.origin.input;
       if (input.functionalSchema !== FUNCTIONAL_BUILDING_CONTRACT_V2 || !Array.isArray(input.position) || input.position.length !== 3 || typeof input.yaw !== "number" || input.topologyContract?.schema !== FUNCTIONAL_BUILDING_CONTRACT_V2) continue;
-      deps?.topology?.registerBuilding(id4, input.topologyContract, { position: input.position, yaw: input.yaw });
+      deps?.topology?.registerBuilding(id7, input.topologyContract, { position: input.position, yaw: input.yaw });
     }
-    for (const id4 of world.entities.ids()) {
-      const entry = world.entities.resolve(id4);
-      if (entry?.origin?.tool === "building.functionalDoor") derive(world, id4, entry.origin.input);
+    for (const id7 of world.entities.ids()) {
+      const entry = world.entities.resolve(id7);
+      if (entry?.origin?.tool === "building.functionalDoor") derive(world, id7, entry.origin.input);
     }
     reconciledVersions.set(world, world.entities.version);
   };
@@ -134769,10 +136189,25 @@ function registerFunctionalBuildingSkills(registry2, assets, deps) {
       const contract = parseFunctionalBuildingContract(resolved.bytes);
       const staticBatch = parseFunctionalBuildingStaticBatch(resolved.bytes);
       const created = [];
+      const registeredDoors = [];
+      const topologyRevision = deps?.topology?.getRevision(), navRevision = deps?.nav?.getRevision();
+      let registeredRoot;
+      const rollbackRuntimeRegistrations = () => {
+        for (let index = registeredDoors.length - 1; index >= 0; index--) {
+          const registered = registeredDoors[index];
+          deps?.interaction?.unregister(registered.entity);
+          deps?.nav?.unregisterPortal(registered.state.portalRuntimeId);
+        }
+        if (registeredRoot !== void 0) deps?.topology?.unregisterBuilding(registeredRoot);
+        if (topologyRevision !== void 0) deps?.topology?.restoreRevisionAfterRollback(topologyRevision);
+        if (navRevision !== void 0) deps?.nav?.restoreRevisionAfterRollback(navRevision);
+      };
       try {
         const loaded = await loadGltfIntoScene(ctx, input.assetId, resolved.bytes, resolved.hash, { position: input.position, rotationEuler: [0, input.yaw, 0] });
         const root = loaded.entity;
         created.push(root);
+        registeredRoot = root;
+        ctx.undo(`building.placeFunctional '${root}' runtime registrations`, rollbackRuntimeRegistrations);
         ctx.world.entities.bindOrigin(root, { tool: "building.placeFunctional", input: {
           ...input,
           hash: resolved.hash,
@@ -134815,11 +136250,12 @@ function registerFunctionalBuildingSkills(registry2, assets, deps) {
         const parts = [];
         for (const collider of contract.colliders) {
           const center = add3(input.position, rotateY(collider.center, input.yaw));
+          const rotation = collider.rotation === void 0 ? quatYaw(input.yaw) : multiplyQuat(quatYaw(input.yaw), collider.rotation);
           const entity = spawnBodyEntity(
             ctx.world,
             center,
             collider.halfExtents,
-            input.yaw,
+            rotation,
             { tool: "building.functionalCollider", input: { assetId: input.assetId, hash: resolved.hash, semanticId: collider.id } }
           );
           created.push(entity);
@@ -134861,13 +136297,18 @@ function registerFunctionalBuildingSkills(registry2, assets, deps) {
           tags.add("functional-door");
           tags.add("door-closed");
           ctx.world.entities.setParent(entity, root, computeLocalOffset(ctx.world, root, entry.eid));
+          registeredDoors.push({ entity, state });
           derive(ctx.world, entity, state);
         }
         ctx.emit("building.functionalPlaced", { root, buildingId: contract.buildingId, assetId: input.assetId, hash: resolved.hash, parts: parts.length, doors: doors.length });
         return { root, doors, parts, hash: resolved.hash };
       } catch (error51) {
         const failures = [error51];
-        if (created[0] !== void 0) deps?.topology?.unregisterBuilding(created[0]);
+        try {
+          rollbackRuntimeRegistrations();
+        } catch (failure) {
+          failures.push(failure);
+        }
         for (const entity of created.reverse()) try {
           teardownEntity(ctx.world, entity);
         } catch (failure) {
@@ -134884,8 +136325,8 @@ function registerFunctionalBuildingSkills(registry2, assets, deps) {
     const count = world.ops.op_physics_overlap_box(...pose.center, ...state.door.halfExtents, ...q3, collider?.bodyId ?? -1, out);
     if (count === out.length) return true;
     const occupantBodies = /* @__PURE__ */ new Set();
-    for (const id4 of world.entities.ids()) {
-      const entity = world.entities.resolve(id4);
+    for (const id7 of world.entities.ids()) {
+      const entity = world.entities.resolve(id7);
       if (entity?.bodyId !== void 0 && !world.tags.get(entity.eid)?.has("functional-building-part")) occupantBodies.add(entity.bodyId);
     }
     for (let i2 = 0; i2 < count; i2++) if (occupantBodies.has(out[i2])) return true;
@@ -134895,10 +136336,10 @@ function registerFunctionalBuildingSkills(registry2, assets, deps) {
     const entry = ctx.world.entities.resolve(doorId);
     if (entry === void 0 || entry.origin?.tool !== "building.functionalDoor") throw new Error(`door.setOpen: '${doorId}' is not a functional door`);
     const state = entry.origin.input;
-    derive(ctx.world, doorId, state);
     if (!open && state.open && occupied(ctx.world, state)) return { door: doorId, open: true, ok: false, reason: "occupied" };
     const collider = ctx.world.entities.resolve(state.colliderEntity);
     if (collider?.bodyId === void 0) throw new Error(`door.setOpen: '${doorId}' lost its authored collider`);
+    registerDoorStateUndo(ctx, doorId, state);
     const pose = doorPose(state.door, state.position, state.buildingYaw, open), q3 = quatYaw(pose.yaw);
     Position.x[entry.eid] = pose.hinge[0];
     Position.y[entry.eid] = pose.hinge[1];
@@ -134947,17 +136388,17 @@ function registerFunctionalBuildingSkills(registry2, assets, deps) {
     if (Math.sqrt(dx * dx + dy * dy + dz * dz) > 3) return { door, open: state.open, ok: false, reason: "out-of-range" };
     if (state.locked && (state.keyId === void 0 || !deps?.inventory?.hasItem(actorEntity, state.keyId))) return { door, open: state.open, ok: false, reason: "locked" };
     if (!targetOpen && occupied(ctx.world, state)) return { door, open: state.open, ok: false, reason: "occupied" };
-    const result = applyOpen(door, targetOpen, ctx);
-    if (result.ok) {
+    const result2 = applyOpen(door, targetOpen, ctx);
+    if (result2.ok) {
       if (state.locked) {
         state.locked = false;
         entry.origin = doorOrigin(state);
         derive(ctx.world, door, state);
       }
-      const position = doorPose(state.door, state.position, state.buildingYaw, result.open).hinge;
-      deps?.audio?.playAt(result.open ? 240 : 160, 0.18, position, "sfx", 0.7, 12, door);
+      const position = doorPose(state.door, state.position, state.buildingYaw, result2.open).hinge;
+      deps?.audio?.playAt(result2.open ? 240 : 160, 0.18, position, "sfx", 0.7, 12, door);
     }
-    return result;
+    return result2;
   };
   const interactInput = external_exports.object({ door: external_exports.string(), actorEntity: external_exports.string() });
   const interact = {
@@ -134983,6 +136424,7 @@ function registerFunctionalBuildingSkills(registry2, assets, deps) {
       const entry = ctx.world.entities.resolve(input.door);
       if (entry?.origin?.tool !== "building.functionalDoor") throw new Error("door.setLocked: invalid door");
       const state = entry.origin.input;
+      registerDoorStateUndo(ctx, input.door, state);
       state.locked = input.locked;
       state.keyId = input.keyId ?? state.keyId;
       entry.origin = doorOrigin(state);
@@ -135060,8 +136502,8 @@ function registerFunctionalBuildingSkills(registry2, assets, deps) {
     input: cellsInput,
     output: external_exports.object({ found: external_exports.boolean(), roomId: external_exports.string().optional(), cellIds: external_exports.array(external_exports.string()) }),
     handler: (input) => {
-      const result = deps?.topology?.queryResidentCells(input.position, input.root, input.maxConnections, input.maxCells);
-      return result === void 0 ? { found: false, cellIds: [] } : { found: true, roomId: result.roomId, cellIds: result.cellIds };
+      const result2 = deps?.topology?.queryResidentCells(input.position, input.root, input.maxConnections, input.maxCells);
+      return result2 === void 0 ? { found: false, cellIds: [] } : { found: true, roomId: result2.roomId, cellIds: result2.cellIds };
     }
   };
   const acousticInput = external_exports.object({ root: external_exports.string(), sourceRoomId: external_exports.string(), listenerRoomId: external_exports.string() });
@@ -135123,14 +136565,23 @@ var FunctionalBuildingTopologyManager = class {
   getRevision() {
     return this.revision;
   }
+  /** Transaction-only seam used by the registry's per-chain undo ledger. The
+   *  caller must first restore the affected building/portal contents. Head-chain
+   *  overlap is rejected by SkillRegistry before any undo runs, so rewinding the
+   *  monotonic invalidation counter cannot clobber another authoring chain. */
+  restoreRevisionAfterRollback(revision) {
+    if (!Number.isSafeInteger(revision) || revision < 0 || revision > this.revision)
+      throw new Error(`functional building topology: invalid rollback revision ${revision}`);
+    this.revision = revision;
+  }
   size() {
     return this.buildings.size;
   }
-  hasBuilding(id4) {
-    return this.buildings.has(id4);
+  hasBuilding(id7) {
+    return this.buildings.has(id7);
   }
-  registerBuilding(id4, contract, transform2, initialPortalState = {}) {
-    if (id4.trim() === "" || this.buildings.has(id4) || this.buildings.size >= MAX_BUILDINGS || contract.schema !== FUNCTIONAL_BUILDING_CONTRACT_V2 || contract.rooms.length > MAX_ROOMS || contract.visibilityCells.length > MAX_CELLS || contract.portals.length > MAX_PORTALS || contract.verticalLinks.length > MAX_VERTICAL_LINKS || contract.spawnAnchors.length > MAX_SPAWN_ANCHORS || !finite32(transform2.position) || !Number.isFinite(transform2.yaw)) return false;
+  registerBuilding(id7, contract, transform2, initialPortalState = {}) {
+    if (id7.trim() === "" || this.buildings.has(id7) || this.buildings.size >= MAX_BUILDINGS || contract.schema !== FUNCTIONAL_BUILDING_CONTRACT_V2 || contract.rooms.length > MAX_ROOMS || contract.visibilityCells.length > MAX_CELLS || contract.portals.length > MAX_PORTALS || contract.verticalLinks.length > MAX_VERTICAL_LINKS || contract.spawnAnchors.length > MAX_SPAWN_ANCHORS || !finite32(transform2.position) || !Number.isFinite(transform2.yaw)) return false;
     const portalIds = new Set(contract.portals.map((portal) => portal.id));
     if (Object.entries(initialPortalState).some(([portalId, open]) => !portalIds.has(portalId) || typeof open !== "boolean")) return false;
     const owned = {
@@ -135152,7 +136603,7 @@ var FunctionalBuildingTopologyManager = class {
       portalOpen.set(portal.id, requested ?? portal.kind === "passage");
     }
     const instance3 = {
-      id: id4,
+      id: id7,
       contract: owned,
       transform: { position: copy3(transform2.position), yaw: transform2.yaw },
       cos: Math.cos(transform2.yaw),
@@ -135161,12 +136612,12 @@ var FunctionalBuildingTopologyManager = class {
       roomById: new Map(owned.rooms.map((room) => [room.id, room])),
       cellByRoom: new Map(owned.rooms.map((room) => [room.id, room.visibilityCellId]))
     };
-    this.buildings.set(id4, instance3);
+    this.buildings.set(id7, instance3);
     this.revision++;
     return true;
   }
-  unregisterBuilding(id4) {
-    if (!this.buildings.delete(id4)) return false;
+  unregisterBuilding(id7) {
+    if (!this.buildings.delete(id7)) return false;
     this.revision++;
     return true;
   }
@@ -135474,8 +136925,8 @@ function lodProof(value, fingerprint, label4) {
   const d2 = record2(value, /* @__PURE__ */ new Set(["schema", "articulatedDoorPolicy", "articulatedDoorRootIndex", "levels"]), /* @__PURE__ */ new Set(), label4);
   if (d2.schema.value !== FUNCTIONAL_BUILDING_LOD_PROOF_SCHEMA) fail5(`${label4}.schema is unsupported`);
   if (d2.articulatedDoorPolicy.value !== "shared-outside-static-lods") fail5(`${label4}.articulatedDoorPolicy must isolate doors from static LODs`);
-  const levels = denseArray2(d2.levels.value, 2, FUNCTIONAL_BUILDING_CATALOG_LIMITS.lodLevels, `${label4}.levels`).map((raw, index) => {
-    const level = record2(raw, /* @__PURE__ */ new Set(["level", "rootIndex", "semanticFingerprint"]), /* @__PURE__ */ new Set(), `${label4}.levels[${index}]`);
+  const levels = denseArray2(d2.levels.value, 2, FUNCTIONAL_BUILDING_CATALOG_LIMITS.lodLevels, `${label4}.levels`).map((raw3, index) => {
+    const level = record2(raw3, /* @__PURE__ */ new Set(["level", "rootIndex", "semanticFingerprint"]), /* @__PURE__ */ new Set(), `${label4}.levels[${index}]`);
     if (level.level.value !== index) fail5(`${label4}.levels must be contiguous from zero`);
     const semanticFingerprint = hash4(level.semanticFingerprint.value, `${label4}.levels[${index}].semanticFingerprint`);
     if (semanticFingerprint !== fingerprint) fail5(`${label4}.levels[${index}] does not preserve the catalog semantic fingerprint`);
@@ -135695,17 +137146,20 @@ function record3(value, required2, optional2, label4) {
   const allowed = /* @__PURE__ */ new Set([...required2, ...optional2]), descriptors = Object.getOwnPropertyDescriptors(value);
   for (const [key, descriptor] of Object.entries(descriptors)) {
     if (!allowed.has(key)) fail6(`${label4} has unknown field '${key}'`);
-    if (!("value" in descriptor) || descriptor.enumerable !== true) fail6(`${label4}.${key} must be an enumerable data field`);
+    if (!("value" in descriptor) || descriptor.enumerable !== true)
+      fail6(`${label4}.${key} must be an enumerable data field`);
   }
   for (const key of required2) if (!Object.hasOwn(value, key)) fail6(`${label4} is missing '${key}'`);
   return descriptors;
 }
 function array4(value, length3, label4) {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length !== length3 || Object.getOwnPropertySymbols(value).length || Object.getOwnPropertyNames(value).length !== length3 + 1) fail6(`${label4} must be a dense, field-free ${length3}-vector`);
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length !== length3 || Object.getOwnPropertySymbols(value).length || Object.getOwnPropertyNames(value).length !== length3 + 1)
+    fail6(`${label4} must be a dense, field-free ${length3}-vector`);
   return value;
 }
 function finite9(value, minimum, maximum, label4) {
-  if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || value < minimum || value > maximum) fail6(`${label4} must be a bounded finite number`);
+  if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || value < minimum || value > maximum)
+    fail6(`${label4} must be a bounded finite number`);
   return value;
 }
 function uint4(value, maximum, label4) {
@@ -135713,7 +137167,8 @@ function uint4(value, maximum, label4) {
   return value;
 }
 function id2(value, label4) {
-  if (typeof value !== "string" || !ID2.test(value) || value.length > FUNCTIONAL_BUILDING_SITE_LIMITS.idChars || value.split("/").some((part) => part === "" || part === "." || part === "..")) fail6(`${label4} is invalid`);
+  if (typeof value !== "string" || !ID2.test(value) || value.length > FUNCTIONAL_BUILDING_SITE_LIMITS.idChars || value.split("/").some((part) => part === "" || part === "." || part === ".."))
+    fail6(`${label4} is invalid`);
   return value;
 }
 function hash5(value, label4) {
@@ -135725,35 +137180,188 @@ function path(value, label4) {
   return value;
 }
 function vector(value, length3, label4, magnitude = FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude) {
-  return Object.freeze(array4(value, length3, label4).map((item, index) => finite9(item, -magnitude, magnitude, `${label4}[${index}]`)));
+  return Object.freeze(
+    array4(value, length3, label4).map((item, index) => finite9(item, -magnitude, magnitude, `${label4}[${index}]`))
+  );
 }
 function metrics(value, label4) {
-  const d2 = record3(value, /* @__PURE__ */ new Set(["terrainMinimum", "terrainMaximum", "terrainRelief", "sampleCount"]), /* @__PURE__ */ new Set(), label4);
-  const terrainMinimum = finite9(d2.terrainMinimum.value, -FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude, FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude, `${label4}.terrainMinimum`), terrainMaximum = finite9(d2.terrainMaximum.value, terrainMinimum, FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude, `${label4}.terrainMaximum`), terrainRelief = finite9(d2.terrainRelief.value, 0, FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude, `${label4}.terrainRelief`), sampleCount = uint4(d2.sampleCount.value, FUNCTIONAL_BUILDING_SITE_LIMITS.maximumSamples, `${label4}.sampleCount`);
-  if (Math.abs(terrainMaximum - terrainMinimum - terrainRelief) > EPS3) fail6(`${label4}.terrainRelief is inconsistent with its extrema`);
+  const d2 = record3(
+    value,
+    /* @__PURE__ */ new Set(["terrainMinimum", "terrainMaximum", "terrainRelief", "sampleCount"]),
+    /* @__PURE__ */ new Set(),
+    label4
+  );
+  const terrainMinimum = finite9(
+    d2.terrainMinimum.value,
+    -FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude,
+    FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude,
+    `${label4}.terrainMinimum`
+  ), terrainMaximum = finite9(
+    d2.terrainMaximum.value,
+    terrainMinimum,
+    FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude,
+    `${label4}.terrainMaximum`
+  ), terrainRelief = finite9(
+    d2.terrainRelief.value,
+    0,
+    FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude,
+    `${label4}.terrainRelief`
+  ), sampleCount = uint4(d2.sampleCount.value, FUNCTIONAL_BUILDING_SITE_LIMITS.maximumSamples, `${label4}.sampleCount`);
+  if (Math.abs(terrainMaximum - terrainMinimum - terrainRelief) > EPS3)
+    fail6(`${label4}.terrainRelief is inconsistent with its extrema`);
   return Object.freeze({ terrainMinimum, terrainMaximum, terrainRelief, sampleCount });
 }
 function support(value, label4) {
-  const d2 = record3(value, /* @__PURE__ */ new Set(["terrainMinimum", "terrainMaximum", "terrainVariation", "worldGradeY", "fillDepth", "cutDepth", "sampleCount"]), /* @__PURE__ */ new Set(), label4);
+  const d2 = record3(
+    value,
+    /* @__PURE__ */ new Set([
+      "terrainMinimum",
+      "terrainMaximum",
+      "terrainVariation",
+      "worldGradeY",
+      "fillDepth",
+      "cutDepth",
+      "sampleCount"
+    ]),
+    /* @__PURE__ */ new Set(),
+    label4
+  );
   const terrainMinimum = finite9(d2.terrainMinimum.value, -1e9, 1e9, `${label4}.terrainMinimum`), terrainMaximum = finite9(d2.terrainMaximum.value, terrainMinimum, 1e9, `${label4}.terrainMaximum`), terrainVariation = finite9(d2.terrainVariation.value, 0, 1e9, `${label4}.terrainVariation`), worldGradeY = finite9(d2.worldGradeY.value, -1e9, 1e9, `${label4}.worldGradeY`), fillDepth = finite9(d2.fillDepth.value, 0, 1e9, `${label4}.fillDepth`), cutDepth = finite9(d2.cutDepth.value, 0, 1e9, `${label4}.cutDepth`), sampleCount = uint4(d2.sampleCount.value, FUNCTIONAL_BUILDING_SITE_LIMITS.maximumSamples, `${label4}.sampleCount`);
-  if (Math.abs(terrainMaximum - terrainMinimum - terrainVariation) > EPS3 || Math.abs(Math.max(0, worldGradeY - terrainMinimum) - fillDepth) > EPS3 || Math.abs(Math.max(0, terrainMaximum - worldGradeY) - cutDepth) > EPS3) fail6(`${label4} metrics are internally inconsistent`);
-  return Object.freeze({ terrainMinimum, terrainMaximum, terrainVariation, worldGradeY, fillDepth, cutDepth, sampleCount });
+  if (Math.abs(terrainMaximum - terrainMinimum - terrainVariation) > EPS3 || Math.abs(Math.max(0, worldGradeY - terrainMinimum) - fillDepth) > EPS3 || Math.abs(Math.max(0, terrainMaximum - worldGradeY) - cutDepth) > EPS3)
+    fail6(`${label4} metrics are internally inconsistent`);
+  return Object.freeze({
+    terrainMinimum,
+    terrainMaximum,
+    terrainVariation,
+    worldGradeY,
+    fillDepth,
+    cutDepth,
+    sampleCount
+  });
 }
 function parseFunctionalBuildingSiteArtifact(value) {
-  const d2 = record3(value, /* @__PURE__ */ new Set(["schema", "artifactId", "placementId", "bindings", "placement", "policy", "footprint", "foundation", "routeContact"]), /* @__PURE__ */ new Set(["entranceSupport"]), "functional building site artifact");
-  if (d2.schema.value !== FUNCTIONAL_BUILDING_SITE_ARTIFACT_SCHEMA) fail6("functional building site artifact.schema is unsupported");
-  const bindingsRaw = record3(d2.bindings.value, /* @__PURE__ */ new Set(["contractHash", "semanticFingerprint", "worldMapHash"]), /* @__PURE__ */ new Set(), "functional building site artifact.bindings"), bindings = Object.freeze({ contractHash: hash5(bindingsRaw.contractHash.value, "bindings.contractHash"), semanticFingerprint: hash5(bindingsRaw.semanticFingerprint.value, "bindings.semanticFingerprint"), worldMapHash: hash5(bindingsRaw.worldMapHash.value, "bindings.worldMapHash") });
-  const placementRaw = record3(d2.placement.value, /* @__PURE__ */ new Set(["position", "yaw"]), /* @__PURE__ */ new Set(), "functional building site artifact.placement"), placement = Object.freeze({ position: vector(placementRaw.position.value, 3, "placement.position"), yaw: finite9(placementRaw.yaw.value, -Math.PI, Math.PI, "placement.yaw") });
-  const policyRaw = record3(d2.policy.value, /* @__PURE__ */ new Set(["maximumSampleSpacing", "maximumTerrainGrade", "maximumRouteElevationDelta"]), /* @__PURE__ */ new Set(), "functional building site artifact.policy"), policy = Object.freeze({ maximumSampleSpacing: finite9(policyRaw.maximumSampleSpacing.value, Number.MIN_VALUE, 1, "policy.maximumSampleSpacing"), maximumTerrainGrade: finite9(policyRaw.maximumTerrainGrade.value, 0, FUNCTIONAL_BUILDING_SITE_LIMITS.maximumTerrainGrade, "policy.maximumTerrainGrade"), maximumRouteElevationDelta: finite9(policyRaw.maximumRouteElevationDelta.value, 0, FUNCTIONAL_BUILDING_SITE_LIMITS.maximumRouteElevationTolerance, "policy.maximumRouteElevationDelta") });
-  const footprintRaw = record3(d2.footprint.value, /* @__PURE__ */ new Set(["center", "halfExtents", "metrics", "maximumObservedGrade"]), /* @__PURE__ */ new Set(), "functional building site artifact.footprint"), footprint = Object.freeze({ center: vector(footprintRaw.center.value, 2, "footprint.center"), halfExtents: vector(footprintRaw.halfExtents.value, 2, "footprint.halfExtents"), metrics: metrics(footprintRaw.metrics.value, "footprint.metrics"), maximumObservedGrade: finite9(footprintRaw.maximumObservedGrade.value, 0, FUNCTIONAL_BUILDING_SITE_LIMITS.maximumTerrainGrade, "footprint.maximumObservedGrade") });
-  if (footprint.halfExtents.some((axis) => axis <= 0) || footprint.maximumObservedGrade > policy.maximumTerrainGrade + EPS3) fail6("functional building site artifact footprint exceeds its grade policy");
-  const foundationRaw = record3(d2.foundation.value, /* @__PURE__ */ new Set(["rootWorldY", "finishedFloorWorldY", "bearingPlaneWorldY", "maximumFillDepth", "maximumCutDepth"]), /* @__PURE__ */ new Set(), "functional building site artifact.foundation"), foundation = Object.freeze({ rootWorldY: finite9(foundationRaw.rootWorldY.value, -1e9, 1e9, "foundation.rootWorldY"), finishedFloorWorldY: finite9(foundationRaw.finishedFloorWorldY.value, -1e9, 1e9, "foundation.finishedFloorWorldY"), bearingPlaneWorldY: finite9(foundationRaw.bearingPlaneWorldY.value, -1e9, 1e9, "foundation.bearingPlaneWorldY"), maximumFillDepth: finite9(foundationRaw.maximumFillDepth.value, 0, 1e9, "foundation.maximumFillDepth"), maximumCutDepth: finite9(foundationRaw.maximumCutDepth.value, 0, 1e9, "foundation.maximumCutDepth") });
-  if (Math.abs(foundation.bearingPlaneWorldY - footprint.metrics.terrainMaximum) > EPS3 || Math.abs(foundation.maximumFillDepth - footprint.metrics.terrainRelief) > EPS3 || foundation.maximumCutDepth > EPS3) fail6("functional building site artifact foundation does not bear on the sampled terrain envelope");
-  const routeRaw = record3(d2.routeContact.value, /* @__PURE__ */ new Set(["position", "terrainY", "worldGradeY", "elevationDelta"]), /* @__PURE__ */ new Set(), "functional building site artifact.routeContact"), routeContact = Object.freeze({ position: vector(routeRaw.position.value, 3, "routeContact.position"), terrainY: finite9(routeRaw.terrainY.value, -1e9, 1e9, "routeContact.terrainY"), worldGradeY: finite9(routeRaw.worldGradeY.value, -1e9, 1e9, "routeContact.worldGradeY"), elevationDelta: finite9(routeRaw.elevationDelta.value, 0, 1e9, "routeContact.elevationDelta") });
-  if (Math.abs(Math.abs(routeContact.worldGradeY - routeContact.terrainY) - routeContact.elevationDelta) > EPS3 || routeContact.elevationDelta > policy.maximumRouteElevationDelta + EPS3 || Math.abs(routeContact.position[1] - routeContact.worldGradeY) > EPS3) fail6("functional building site artifact route contact violates its elevation policy");
+  const d2 = record3(
+    value,
+    /* @__PURE__ */ new Set([
+      "schema",
+      "artifactId",
+      "placementId",
+      "bindings",
+      "placement",
+      "policy",
+      "footprint",
+      "foundation",
+      "routeContact"
+    ]),
+    /* @__PURE__ */ new Set(["entranceSupport"]),
+    "functional building site artifact"
+  );
+  if (d2.schema.value !== FUNCTIONAL_BUILDING_SITE_ARTIFACT_SCHEMA)
+    fail6("functional building site artifact.schema is unsupported");
+  const bindingsRaw = record3(
+    d2.bindings.value,
+    /* @__PURE__ */ new Set(["contractHash", "semanticFingerprint", "worldMapHash"]),
+    /* @__PURE__ */ new Set(),
+    "functional building site artifact.bindings"
+  ), bindings = Object.freeze({
+    contractHash: hash5(bindingsRaw.contractHash.value, "bindings.contractHash"),
+    semanticFingerprint: hash5(bindingsRaw.semanticFingerprint.value, "bindings.semanticFingerprint"),
+    worldMapHash: hash5(bindingsRaw.worldMapHash.value, "bindings.worldMapHash")
+  });
+  const placementRaw = record3(
+    d2.placement.value,
+    /* @__PURE__ */ new Set(["position", "yaw"]),
+    /* @__PURE__ */ new Set(),
+    "functional building site artifact.placement"
+  ), placement = Object.freeze({
+    position: vector(placementRaw.position.value, 3, "placement.position"),
+    yaw: finite9(placementRaw.yaw.value, -Math.PI, Math.PI, "placement.yaw")
+  });
+  const policyRaw = record3(
+    d2.policy.value,
+    /* @__PURE__ */ new Set(["maximumSampleSpacing", "maximumTerrainGrade", "maximumRouteElevationDelta"]),
+    /* @__PURE__ */ new Set(),
+    "functional building site artifact.policy"
+  ), policy = Object.freeze({
+    maximumSampleSpacing: finite9(
+      policyRaw.maximumSampleSpacing.value,
+      Number.MIN_VALUE,
+      1,
+      "policy.maximumSampleSpacing"
+    ),
+    maximumTerrainGrade: finite9(
+      policyRaw.maximumTerrainGrade.value,
+      0,
+      FUNCTIONAL_BUILDING_SITE_LIMITS.maximumTerrainGrade,
+      "policy.maximumTerrainGrade"
+    ),
+    maximumRouteElevationDelta: finite9(
+      policyRaw.maximumRouteElevationDelta.value,
+      0,
+      FUNCTIONAL_BUILDING_SITE_LIMITS.maximumRouteElevationTolerance,
+      "policy.maximumRouteElevationDelta"
+    )
+  });
+  const footprintRaw = record3(
+    d2.footprint.value,
+    /* @__PURE__ */ new Set(["center", "halfExtents", "metrics", "maximumObservedGrade"]),
+    /* @__PURE__ */ new Set(),
+    "functional building site artifact.footprint"
+  ), footprint = Object.freeze({
+    center: vector(footprintRaw.center.value, 2, "footprint.center"),
+    halfExtents: vector(footprintRaw.halfExtents.value, 2, "footprint.halfExtents"),
+    metrics: metrics(footprintRaw.metrics.value, "footprint.metrics"),
+    maximumObservedGrade: finite9(
+      footprintRaw.maximumObservedGrade.value,
+      0,
+      FUNCTIONAL_BUILDING_SITE_LIMITS.maximumTerrainGrade,
+      "footprint.maximumObservedGrade"
+    )
+  });
+  if (footprint.halfExtents.some((axis) => axis <= 0) || footprint.maximumObservedGrade > policy.maximumTerrainGrade + EPS3)
+    fail6("functional building site artifact footprint exceeds its grade policy");
+  const foundationRaw = record3(
+    d2.foundation.value,
+    /* @__PURE__ */ new Set(["rootWorldY", "finishedFloorWorldY", "bearingPlaneWorldY", "maximumFillDepth", "maximumCutDepth"]),
+    /* @__PURE__ */ new Set(),
+    "functional building site artifact.foundation"
+  ), foundation = Object.freeze({
+    rootWorldY: finite9(foundationRaw.rootWorldY.value, -1e9, 1e9, "foundation.rootWorldY"),
+    finishedFloorWorldY: finite9(foundationRaw.finishedFloorWorldY.value, -1e9, 1e9, "foundation.finishedFloorWorldY"),
+    bearingPlaneWorldY: finite9(foundationRaw.bearingPlaneWorldY.value, -1e9, 1e9, "foundation.bearingPlaneWorldY"),
+    maximumFillDepth: finite9(foundationRaw.maximumFillDepth.value, 0, 1e9, "foundation.maximumFillDepth"),
+    maximumCutDepth: finite9(foundationRaw.maximumCutDepth.value, 0, 1e9, "foundation.maximumCutDepth")
+  });
+  if (Math.abs(foundation.bearingPlaneWorldY - footprint.metrics.terrainMaximum) > EPS3 || Math.abs(foundation.maximumFillDepth - footprint.metrics.terrainRelief) > EPS3 || foundation.maximumCutDepth > EPS3)
+    fail6("functional building site artifact foundation does not bear on the sampled terrain envelope");
+  const routeRaw = record3(
+    d2.routeContact.value,
+    /* @__PURE__ */ new Set(["position", "terrainY", "worldGradeY", "elevationDelta"]),
+    /* @__PURE__ */ new Set(),
+    "functional building site artifact.routeContact"
+  ), routeContact = Object.freeze({
+    position: vector(routeRaw.position.value, 3, "routeContact.position"),
+    terrainY: finite9(routeRaw.terrainY.value, -1e9, 1e9, "routeContact.terrainY"),
+    worldGradeY: finite9(routeRaw.worldGradeY.value, -1e9, 1e9, "routeContact.worldGradeY"),
+    elevationDelta: finite9(routeRaw.elevationDelta.value, 0, 1e9, "routeContact.elevationDelta")
+  });
+  if (Math.abs(Math.abs(routeContact.worldGradeY - routeContact.terrainY) - routeContact.elevationDelta) > EPS3 || routeContact.elevationDelta > policy.maximumRouteElevationDelta + EPS3 || Math.abs(routeContact.position[1] - routeContact.worldGradeY) > EPS3)
+    fail6("functional building site artifact route contact violates its elevation policy");
   const entranceSupport = d2.entranceSupport === void 0 ? void 0 : support(d2.entranceSupport.value, "functional building site artifact.entranceSupport");
-  if (entranceSupport === void 0 || Math.abs(entranceSupport.worldGradeY - routeContact.worldGradeY) > EPS3) fail6("functional building site artifact requires one entrance support sharing the route grade");
-  return Object.freeze({ schema: FUNCTIONAL_BUILDING_SITE_ARTIFACT_SCHEMA, artifactId: id2(d2.artifactId.value, "artifactId"), placementId: id2(d2.placementId.value, "placementId"), bindings, placement, policy, footprint, foundation, routeContact, entranceSupport });
+  if (entranceSupport === void 0 || Math.abs(entranceSupport.worldGradeY - routeContact.worldGradeY) > EPS3)
+    fail6("functional building site artifact requires one entrance support sharing the route grade");
+  return Object.freeze({
+    schema: FUNCTIONAL_BUILDING_SITE_ARTIFACT_SCHEMA,
+    artifactId: id2(d2.artifactId.value, "artifactId"),
+    placementId: id2(d2.placementId.value, "placementId"),
+    bindings,
+    placement,
+    policy,
+    footprint,
+    foundation,
+    routeContact,
+    entranceSupport
+  });
 }
 function worldFromLocal2(position, yaw, x3, z4) {
   const c2 = Math.cos(yaw), s2 = Math.sin(yaw);
@@ -135761,7 +137369,8 @@ function worldFromLocal2(position, yaw, x3, z4) {
 }
 function sampleFootprint(site, position, yaw, spacing, sampleHeight2) {
   const stepsX = Math.max(1, Math.ceil(site.footprintHalfExtents[0] * 2 / spacing)), stepsZ = Math.max(1, Math.ceil(site.footprintHalfExtents[1] * 2 / spacing));
-  if ((stepsX + 1) * (stepsZ + 1) > FUNCTIONAL_BUILDING_SITE_LIMITS.maximumSamples) fail6("site footprint sampling exceeds the bounded sample cap");
+  if ((stepsX + 1) * (stepsZ + 1) > FUNCTIONAL_BUILDING_SITE_LIMITS.maximumSamples)
+    fail6("site footprint sampling exceeds the bounded sample cap");
   const rows = [], dx = site.footprintHalfExtents[0] * 2 / stepsX, dz = site.footprintHalfExtents[1] * 2 / stepsZ;
   for (let iz = 0; iz <= stepsZ; iz++) {
     const row = [];
@@ -135773,10 +137382,11 @@ function sampleFootprint(site, position, yaw, spacing, sampleHeight2) {
     rows.push(row);
   }
   let maximumGrade = 0;
-  for (let iz = 0; iz <= stepsZ; iz++) for (let ix = 0; ix <= stepsX; ix++) {
-    const x0 = ix === stepsX ? ix - 1 : ix, x1 = ix === stepsX ? ix : ix + 1, z0 = iz === stepsZ ? iz - 1 : iz, z1 = iz === stepsZ ? iz : iz + 1, gradeX = (rows[iz][x1] - rows[iz][x0]) / ((x1 - x0) * dx), gradeZ = (rows[z1][ix] - rows[z0][ix]) / ((z1 - z0) * dz);
-    maximumGrade = Math.max(maximumGrade, Math.hypot(gradeX, gradeZ));
-  }
+  for (let iz = 0; iz <= stepsZ; iz++)
+    for (let ix = 0; ix <= stepsX; ix++) {
+      const x0 = ix === stepsX ? ix - 1 : ix, x1 = ix === stepsX ? ix : ix + 1, z0 = iz === stepsZ ? iz - 1 : iz, z1 = iz === stepsZ ? iz : iz + 1, gradeX = (rows[iz][x1] - rows[iz][x0]) / ((x1 - x0) * dx), gradeZ = (rows[z1][ix] - rows[z0][ix]) / ((z1 - z0) * dz);
+      maximumGrade = Math.max(maximumGrade, Math.hypot(gradeX, gradeZ));
+    }
   return maximumGrade;
 }
 function pointInSupport(site, localX, localZ) {
@@ -135788,61 +137398,112 @@ function resolveFunctionalBuildingSiteArtifact(input) {
   if (!site?.entranceSupport) fail6("site artifact requires an authored entrance support");
   const spacing = finite9(input.maximumSampleSpacing ?? 0.5, Number.MIN_VALUE, 1, "maximumSampleSpacing"), maximumTerrainGrade = finite9(input.maximumTerrainGrade ?? 0.75, 0, 4, "maximumTerrainGrade"), maximumRouteElevationDelta = finite9(input.maximumRouteElevationDelta ?? 0.1, 0, 0.5, "maximumRouteElevationDelta"), position = vector(input.position, 3, "position"), yaw = finite9(input.yaw, -Math.PI, Math.PI, "yaw"), route2 = vector(input.routeContact, 3, "routeContact");
   if (typeof input.sampleHeight !== "function") fail6("site artifact sampleHeight must be a function");
-  const resolved = resolveFunctionalBuildingSitePlacement({ contract: input.contract, position, yaw, sampleHeight: input.sampleHeight, maximumSampleSpacing: spacing });
+  const resolved = resolveFunctionalBuildingSitePlacement({
+    contract: input.contract,
+    position,
+    yaw,
+    sampleHeight: input.sampleHeight,
+    maximumSampleSpacing: spacing
+  });
   const maximumObservedGrade = sampleFootprint(site, position, yaw, spacing, input.sampleHeight);
-  if (maximumObservedGrade > maximumTerrainGrade + EPS3) fail6(`site footprint grade ${maximumObservedGrade.toFixed(3)} exceeds ${maximumTerrainGrade.toFixed(3)}`);
+  if (maximumObservedGrade > maximumTerrainGrade + EPS3)
+    fail6(`site footprint grade ${maximumObservedGrade.toFixed(3)} exceeds ${maximumTerrainGrade.toFixed(3)}`);
   const c2 = Math.cos(yaw), s2 = Math.sin(yaw), dx = route2[0] - position[0], dz = route2[2] - position[2], localX = dx * c2 - dz * s2, localZ = dx * s2 + dz * c2;
   if (!pointInSupport(site, localX, localZ)) fail6("route contact is outside the authored entrance support");
   const terrainY = input.sampleHeight(route2[0], route2[2]);
   if (terrainY === void 0 || !Number.isFinite(terrainY)) fail6("route contact leaves resident terrain");
   const worldGradeY = resolved.entranceSupport.worldGradeY, elevationDelta = Math.abs(worldGradeY - terrainY);
-  if (Math.abs(route2[1] - worldGradeY) > EPS3) fail6("route contact elevation does not equal the authored entrance grade");
-  if (elevationDelta > maximumRouteElevationDelta + EPS3) fail6(`route contact elevation delta ${elevationDelta.toFixed(3)} exceeds ${maximumRouteElevationDelta.toFixed(3)}`);
+  if (Math.abs(route2[1] - worldGradeY) > EPS3)
+    fail6("route contact elevation does not equal the authored entrance grade");
+  if (elevationDelta > maximumRouteElevationDelta + EPS3)
+    fail6(`route contact elevation delta ${elevationDelta.toFixed(3)} exceeds ${maximumRouteElevationDelta.toFixed(3)}`);
   const value = {
     schema: FUNCTIONAL_BUILDING_SITE_ARTIFACT_SCHEMA,
     artifactId: input.artifactId,
     placementId: input.placementId,
-    bindings: { contractHash: input.contractHash, semanticFingerprint: input.semanticFingerprint, worldMapHash: input.worldMapHash },
+    bindings: {
+      contractHash: input.contractHash,
+      semanticFingerprint: input.semanticFingerprint,
+      worldMapHash: input.worldMapHash
+    },
     placement: { position, yaw },
     policy: { maximumSampleSpacing: spacing, maximumTerrainGrade, maximumRouteElevationDelta },
-    footprint: { center: site.footprintCenter, halfExtents: site.footprintHalfExtents, metrics: { terrainMinimum: resolved.terrainMinimum, terrainMaximum: resolved.terrainMaximum, terrainRelief: resolved.terrainRelief, sampleCount: resolved.sampleCount }, maximumObservedGrade },
-    foundation: { rootWorldY: resolved.rootWorldY, finishedFloorWorldY: resolved.rootWorldY + site.finishedFloorY, bearingPlaneWorldY: resolved.rootWorldY + site.finishedFloorY - site.terrainClearance, maximumFillDepth: resolved.terrainRelief, maximumCutDepth: 0 },
+    footprint: {
+      center: site.footprintCenter,
+      halfExtents: site.footprintHalfExtents,
+      metrics: {
+        terrainMinimum: resolved.terrainMinimum,
+        terrainMaximum: resolved.terrainMaximum,
+        terrainRelief: resolved.terrainRelief,
+        sampleCount: resolved.sampleCount
+      },
+      maximumObservedGrade
+    },
+    foundation: {
+      rootWorldY: resolved.rootWorldY,
+      finishedFloorWorldY: resolved.rootWorldY + site.finishedFloorY,
+      bearingPlaneWorldY: resolved.rootWorldY + site.finishedFloorY - site.terrainClearance,
+      maximumFillDepth: resolved.terrainRelief,
+      maximumCutDepth: 0
+    },
     routeContact: { position: route2, terrainY, worldGradeY, elevationDelta },
     entranceSupport: resolved.entranceSupport
   };
   return parseFunctionalBuildingSiteArtifact(value);
 }
 function encodeFunctionalBuildingSiteArtifact(value) {
-  const parsed = parseFunctionalBuildingSiteArtifact(value), text2 = `${canonicalCompilerJson(parsed, { maxBytes: FUNCTIONAL_BUILDING_SITE_ARTIFACT_MAX_BYTES, maxDepth: 12, maxNodes: 256, maxProperties: 64, maxArrayLength: 3 })}
-`, bytes = encoder.encode(text2);
-  if (bytes.byteLength > FUNCTIONAL_BUILDING_SITE_ARTIFACT_MAX_BYTES) fail6("functional building site artifact exceeds its byte cap");
+  const parsed = parseFunctionalBuildingSiteArtifact(value), text4 = `${canonicalCompilerJson(parsed, { maxBytes: FUNCTIONAL_BUILDING_SITE_ARTIFACT_MAX_BYTES, maxDepth: 12, maxNodes: 256, maxProperties: 64, maxArrayLength: 3 })}
+`, bytes = encoder.encode(text4);
+  if (bytes.byteLength > FUNCTIONAL_BUILDING_SITE_ARTIFACT_MAX_BYTES)
+    fail6("functional building site artifact exceeds its byte cap");
   return bytes;
 }
 function decodeFunctionalBuildingSiteArtifact(bytesValue) {
-  if (!(bytesValue instanceof Uint8Array) || bytesValue.byteLength < 2 || bytesValue.byteLength > FUNCTIONAL_BUILDING_SITE_ARTIFACT_MAX_BYTES) fail6("functional building site artifact bytes are outside their bounded range");
-  const bytes = new Uint8Array(bytesValue), text2 = (() => {
+  if (!(bytesValue instanceof Uint8Array) || bytesValue.byteLength < 2 || bytesValue.byteLength > FUNCTIONAL_BUILDING_SITE_ARTIFACT_MAX_BYTES)
+    fail6("functional building site artifact bytes are outside their bounded range");
+  const bytes = new Uint8Array(bytesValue), text4 = (() => {
     try {
       return decoder.decode(bytes);
     } catch (error51) {
-      fail6(`functional building site artifact is not valid UTF-8: ${error51 instanceof Error ? error51.message : String(error51)}`);
+      fail6(
+        `functional building site artifact is not valid UTF-8: ${error51 instanceof Error ? error51.message : String(error51)}`
+      );
     }
   })();
-  if (!text2.endsWith("\n") || text2.slice(0, -1).includes("\n")) fail6("functional building site artifact must be one canonical JSON line");
+  if (!text4.endsWith("\n") || text4.slice(0, -1).includes("\n"))
+    fail6("functional building site artifact must be one canonical JSON line");
   let source;
   try {
-    source = JSON.parse(text2.slice(0, -1));
+    source = JSON.parse(text4.slice(0, -1));
   } catch (error51) {
-    fail6(`functional building site artifact JSON is invalid: ${error51 instanceof Error ? error51.message : String(error51)}`);
+    fail6(
+      `functional building site artifact JSON is invalid: ${error51 instanceof Error ? error51.message : String(error51)}`
+    );
   }
   const artifact = parseFunctionalBuildingSiteArtifact(source), canonical = encodeFunctionalBuildingSiteArtifact(artifact);
-  if (canonical.byteLength !== bytes.byteLength || !canonical.every((value, index) => value === bytes[index])) fail6("functional building site artifact bytes are not canonical");
-  return Object.freeze({ artifact, metadata: Object.freeze({ mediaType: FUNCTIONAL_BUILDING_SITE_ARTIFACT_MEDIA_TYPE, byteLength: bytes.byteLength, sha256: `sha256:${sha256(bytes)}` }) });
+  if (canonical.byteLength !== bytes.byteLength || !canonical.every((value, index) => value === bytes[index]))
+    fail6("functional building site artifact bytes are not canonical");
+  return Object.freeze({
+    artifact,
+    metadata: Object.freeze({
+      mediaType: FUNCTIONAL_BUILDING_SITE_ARTIFACT_MEDIA_TYPE,
+      byteLength: bytes.byteLength,
+      sha256: `sha256:${sha256(bytes)}`
+    })
+  });
 }
 function verifyFunctionalBuildingSiteArtifact(bytes, expectedRef, liveInput) {
-  const decoded = decodeFunctionalBuildingSiteArtifact(bytes), ref = record3(expectedRef, /* @__PURE__ */ new Set(["schema", "artifactId", "path", "sha256"]), /* @__PURE__ */ new Set(), "expected site artifact reference"), artifactId = id2(ref.artifactId.value, "expected site artifact reference.artifactId"), expectedHash = hash5(ref.sha256.value, "expected site artifact reference.sha256");
-  if (ref.schema.value !== FUNCTIONAL_SETTLEMENT_SITE_REF_SCHEMA) fail6("expected site artifact reference.schema is unsupported");
+  const decoded = decodeFunctionalBuildingSiteArtifact(bytes), ref = record3(
+    expectedRef,
+    /* @__PURE__ */ new Set(["schema", "artifactId", "path", "sha256"]),
+    /* @__PURE__ */ new Set(),
+    "expected site artifact reference"
+  ), artifactId = id2(ref.artifactId.value, "expected site artifact reference.artifactId"), expectedHash = hash5(ref.sha256.value, "expected site artifact reference.sha256");
+  if (ref.schema.value !== FUNCTIONAL_SETTLEMENT_SITE_REF_SCHEMA)
+    fail6("expected site artifact reference.schema is unsupported");
   path(ref.path.value, "expected site artifact reference.path");
-  if (decoded.artifact.artifactId !== artifactId || decoded.metadata.sha256 !== expectedHash) fail6("site artifact does not match its exact settlement reference");
+  if (decoded.artifact.artifactId !== artifactId || decoded.metadata.sha256 !== expectedHash)
+    fail6("site artifact does not match its exact settlement reference");
   const expected = {
     placementId: id2(liveInput.placementId, "live settlement placementId"),
     contractHash: hash5(liveInput.contractHash, "live settlement contractHash"),
@@ -135852,7 +137513,8 @@ function verifyFunctionalBuildingSiteArtifact(bytes, expectedRef, liveInput) {
     yaw: finite9(liveInput.yaw, -Math.PI, Math.PI, "live settlement yaw"),
     routeContact: vector(liveInput.routeContact, 3, "live settlement routeContact")
   };
-  if (decoded.artifact.placementId !== expected.placementId || decoded.artifact.bindings.contractHash !== expected.contractHash || decoded.artifact.bindings.semanticFingerprint !== expected.semanticFingerprint || decoded.artifact.bindings.worldMapHash !== expected.worldMapHash || canonicalCompilerJson(decoded.artifact.placement) !== canonicalCompilerJson({ position: expected.position, yaw: expected.yaw }) || canonicalCompilerJson(decoded.artifact.routeContact.position) !== canonicalCompilerJson(expected.routeContact)) fail6("site artifact bindings do not match the exact settlement placement");
+  if (decoded.artifact.placementId !== expected.placementId || decoded.artifact.bindings.contractHash !== expected.contractHash || decoded.artifact.bindings.semanticFingerprint !== expected.semanticFingerprint || decoded.artifact.bindings.worldMapHash !== expected.worldMapHash || canonicalCompilerJson(decoded.artifact.placement) !== canonicalCompilerJson({ position: expected.position, yaw: expected.yaw }) || canonicalCompilerJson(decoded.artifact.routeContact.position) !== canonicalCompilerJson(expected.routeContact))
+    fail6("site artifact bindings do not match the exact settlement placement");
   const reproduced = resolveFunctionalBuildingSiteArtifact({
     ...liveInput,
     artifactId,
@@ -135868,7 +137530,8 @@ function verifyFunctionalBuildingSiteArtifact(bytes, expectedRef, liveInput) {
     maximumRouteElevationDelta: decoded.artifact.policy.maximumRouteElevationDelta
   });
   const reproducedBytes = encodeFunctionalBuildingSiteArtifact(reproduced);
-  if (reproducedBytes.byteLength !== bytes.byteLength || !reproducedBytes.every((value, index) => value === bytes[index])) fail6("site artifact does not reproduce from current terrain and contract authority");
+  if (reproducedBytes.byteLength !== bytes.byteLength || !reproducedBytes.every((value, index) => value === bytes[index]))
+    fail6("site artifact does not reproduce from current terrain and contract authority");
   return decoded;
 }
 
@@ -136215,11 +137878,11 @@ function resolveFunctionalSettlementAtlas(planValue, catalogValue, worldMapValue
 // src/skills/functional-settlement.ts
 var FunctionalSettlementPlacementManager = class {
   settlements = /* @__PURE__ */ new Map();
-  has(settlementId) {
-    return this.settlements.has(settlementId);
+  has(settlementId2) {
+    return this.settlements.has(settlementId2);
   }
-  get(settlementId) {
-    return this.settlements.get(settlementId);
+  get(settlementId2) {
+    return this.settlements.get(settlementId2);
   }
   size() {
     return this.settlements.size;
@@ -136232,10 +137895,24 @@ var FunctionalSettlementPlacementManager = class {
     if (!this.settlements.has(handle.settlementId)) throw new Error(`functional settlement: unknown settlement '${handle.settlementId}'`);
     this.settlements.set(handle.settlementId, handle);
   }
-  unregister(settlementId) {
-    const handle = this.settlements.get(settlementId);
-    this.settlements.delete(settlementId);
+  unregister(settlementId2) {
+    const handle = this.settlements.get(settlementId2);
+    this.settlements.delete(settlementId2);
     return handle;
+  }
+  captureSnapshot() {
+    const settlements = [...this.settlements.values()].sort((a2, b3) => a2.settlementId < b3.settlementId ? -1 : a2.settlementId > b3.settlementId ? 1 : 0).map((handle) => frozenHandle({
+      ...handle,
+      buildings: [...handle.buildings].sort((a2, b3) => a2.placementId < b3.placementId ? -1 : a2.placementId > b3.placementId ? 1 : 0)
+    }));
+    return Object.freeze({ settlements: Object.freeze(settlements) });
+  }
+  restoreSnapshot(input) {
+    const snapshot = parseFunctionalSettlementPlacementManagerSnapshot(input);
+    const restored = /* @__PURE__ */ new Map();
+    for (const handle of snapshot.settlements) restored.set(handle.settlementId, handle);
+    this.settlements.clear();
+    for (const [settlementId2, handle] of restored) this.settlements.set(settlementId2, handle);
   }
 };
 var safeId = external_exports.string().min(1).max(160).regex(/^[a-z0-9][a-z0-9._/-]{0,159}$/).refine((value) => !value.split("/").some((part) => part === "" || part === "." || part === ".."), "unsafe identifier");
@@ -136265,6 +137942,33 @@ var buildingHandleSchema = external_exports.object({
   routeContact: external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()])
 });
 var placeOutput = external_exports.object({ settlementId: external_exports.string(), planId: external_exports.string(), worldMapHash: external_exports.string(), buildings: external_exports.array(buildingHandleSchema) });
+var functionalSettlementPlacementManagerSnapshotSchema = external_exports.object({
+  settlements: external_exports.array(external_exports.object({
+    settlementId: safeId,
+    planId: safeId,
+    worldMapHash: external_exports.string().regex(/^sha256:[0-9a-f]{64}$/),
+    buildings: external_exports.array(buildingHandleSchema).min(1).max(256)
+  })).max(256)
+});
+function parseFunctionalSettlementPlacementManagerSnapshot(input) {
+  const parsed = functionalSettlementPlacementManagerSnapshotSchema.parse(input);
+  let previousSettlementId;
+  const settlements = parsed.settlements.map((handle) => {
+    if (previousSettlementId !== void 0 && previousSettlementId >= handle.settlementId)
+      throw new TypeError("functional settlement snapshot settlements must be strictly sorted and unique");
+    previousSettlementId = handle.settlementId;
+    let previousPlacementId;
+    for (const building of handle.buildings) {
+      if (previousPlacementId !== void 0 && previousPlacementId >= building.placementId)
+        throw new TypeError(`functional settlement snapshot buildings for '${handle.settlementId}' must be strictly sorted and unique`);
+      previousPlacementId = building.placementId;
+      if (building.residencyUnitId.length < 1 || building.root.length < 1 || building.assetHash.length < 1 || !building.position.every(Number.isFinite) || !Number.isFinite(building.yaw) || !building.routeContact.every(Number.isFinite))
+        throw new TypeError(`functional settlement snapshot building '${building.placementId}' is malformed`);
+    }
+    return frozenHandle(handle);
+  });
+  return Object.freeze({ settlements: Object.freeze(settlements) });
+}
 function nestedBase(ctx) {
   return {
     agentId: ctx.agentId,
@@ -136273,7 +137977,8 @@ function nestedBase(ctx) {
     permissions: ctx.permissions,
     tick: ctx.tick,
     world: ctx.world,
-    chainId: ctx.chainId
+    chainId: ctx.chainId,
+    chainToken: ctx.chainToken
   };
 }
 function nestedResult(response, operation) {
@@ -136307,10 +138012,10 @@ function registerFunctionalSettlementSkills(registry2, assets, options = {}) {
       const catalogById = new Map(catalog.entries.map((entry) => [entry.entryId, entry]));
       const selectedIds = input.placementIds === void 0 ? void 0 : new Set(input.placementIds);
       if (selectedIds !== void 0) {
-        if (selectedIds.size !== input.placementIds.length || input.placementIds.some((id4, index) => index > 0 && input.placementIds[index - 1] >= id4))
+        if (selectedIds.size !== input.placementIds.length || input.placementIds.some((id7, index) => index > 0 && input.placementIds[index - 1] >= id7))
           throw new Error("functional settlement: placementIds must be strictly sorted and unique");
         const known = new Set(atlas.plan.placements.map((placement) => placement.placementId));
-        for (const id4 of selectedIds) if (!known.has(id4)) throw new Error(`functional settlement: unknown selected placement '${id4}'`);
+        for (const id7 of selectedIds) if (!known.has(id7)) throw new Error(`functional settlement: unknown selected placement '${id7}'`);
       }
       const preparedAll = atlas.placements.map((resolved) => {
         const placement = atlas.plan.placements.find((candidate) => candidate.placementId === resolved.placementId);
@@ -136341,7 +138046,7 @@ function registerFunctionalSettlementSkills(registry2, assets, options = {}) {
           const item = prepared2[index];
           await options.beforeBuildingPlacement?.(item.placement.placementId, index);
           const position = [item.placement.position[0], item.site.foundation.rootWorldY, item.placement.position[2]];
-          const result = nestedResult(await registry2.invoke("building.placeFunctional", {
+          const result2 = nestedResult(await registry2.invoke("building.placeFunctional", {
             assetId: item.asset.assetId,
             hash: item.asset.hash,
             position,
@@ -136350,12 +138055,12 @@ function registerFunctionalSettlementSkills(registry2, assets, options = {}) {
           placed.push({
             placementId: item.placement.placementId,
             residencyUnitId: item.placement.residency.unitId,
-            root: result.root,
-            doors: result.doors,
-            parts: result.parts,
+            root: result2.root,
+            doors: result2.doors,
+            parts: result2.parts,
             catalogEntryId: item.entry.entryId,
             assetId: item.asset.assetId,
-            assetHash: result.hash,
+            assetHash: result2.hash,
             position,
             yaw: item.placement.yaw,
             atlasAnchorId: item.resolved.anchor.id,
@@ -136403,8 +138108,8 @@ function registerFunctionalSettlementSkills(registry2, assets, options = {}) {
       for (let index = 0; index < destructionOrder.length; index++) {
         const building = destructionOrder[index];
         await options.beforeBuildingDestroy?.(building.placementId, index);
-        const result = nestedResult(await registry2.invoke("building.destroyFunctional", { root: building.root }, nestedBase(ctx)), `destroy '${building.placementId}'`);
-        entitiesRemoved += result.removed;
+        const result2 = nestedResult(await registry2.invoke("building.destroyFunctional", { root: building.root }, nestedBase(ctx)), `destroy '${building.placementId}'`);
+        entitiesRemoved += result2.removed;
         remaining = remaining.filter((candidate) => candidate.root !== building.root);
         if (remaining.length === 0) manager.unregister(input.settlementId);
         else manager.replace(frozenHandle({ ...handle, buildings: remaining }));
@@ -136416,6 +138121,273 @@ function registerFunctionalSettlementSkills(registry2, assets, options = {}) {
   registry2.register(place);
   registry2.register(destroy);
   return manager;
+}
+
+// src/assets/staged-building-pipeline.mjs
+var BUILDING_STAGE_ARTIFACT_SCHEMA = "limina.building-stage-artifact/v1";
+var BUILDING_HITL_DECISION_SCHEMA = "limina.building-hitl-decision/v1";
+var BUILDING_HITL_DECISION_SCHEMA_V2 = "limina.building-hitl-decision/v2";
+var BUILDING_STAGE_KINDS = Object.freeze([
+  "brief",
+  "shell",
+  "material-palette",
+  "interior-plan",
+  "furniture-pack",
+  "prop-pack",
+  "fire-runtime",
+  "composition",
+  "production-package",
+  "presentation-review"
+]);
+var BUILDING_REVIEW_GATES = Object.freeze([
+  "B0-brief",
+  "A1-shell",
+  "M1-materials",
+  "I1-layout",
+  "F1-asset",
+  "V1-vfx",
+  "C1-composition",
+  "R1-release"
+]);
+var BUILDING_STAGE_FACETS = Object.freeze({
+  brief: ["requirements", "visual-cues", "performance-budget"],
+  shell: ["exterior-envelope", "interior-envelope", "support-sockets", "portal-articulation", "hearth-flue-sockets", "collision-traversal", "surface-mapping", "material-role-slots", "runtime-geometry", "lod-contract"],
+  "material-palette": ["role-contract", "source-lock", "surface-parameters", "runtime-textures", "encoding-budget"],
+  "interior-plan": ["activity-zones", "placements", "circulation", "sightlines", "support-bindings", "vfx-intent"],
+  "furniture-pack": ["placement-contract", "interaction-sockets", "joinery-contract", "collision", "material-role-slots", "runtime-geometry", "lod-contract"],
+  "prop-pack": ["placement-contract", "support-socket", "interaction-sockets", "material-role-slots", "runtime-geometry", "lod-contract"],
+  "fire-runtime": ["socket-requirements", "state-machine", "authoritative-parameters", "runtime-visuals", "light-exposure", "performance-lifecycle"],
+  composition: ["instance-set", "resolved-transforms", "interaction-bindings", "runtime-bindings", "material-bindings", "runtime-closure", "lod-closure"],
+  "production-package": ["asset-closure", "semantic-closure", "texture-closure", "lod-closure", "runtime-closure"],
+  "presentation-review": ["scene-authority", "environment", "cameras", "post", "evidence-contract"]
+});
+var INTERIOR_PLACEMENT_FACETS = new Set(["dining-table", "dining-chair", "hearth-settle", "storage-shelf"].map((role2) => `placements/proxy/${role2}`));
+var facetAllowed = (kind, scope) => BUILDING_STAGE_FACETS[kind].includes(scope) || kind === "interior-plan" && INTERIOR_PLACEMENT_FACETS.has(scope);
+var HASH4 = /^sha256:[0-9a-f]{64}$/;
+var ID4 = /^[a-z0-9][a-z0-9._/-]{0,159}$/;
+var STAGES = new Set(BUILDING_STAGE_KINDS);
+var GATES = new Set(BUILDING_REVIEW_GATES);
+var ARTIFACT_STATES = /* @__PURE__ */ new Set(["draft", "candidate", "approved", "rejected"]);
+var DECISIONS = /* @__PURE__ */ new Set(["approve", "revise", "reject"]);
+function object3(value, label4) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label4} must be an object`);
+  return value;
+}
+function text2(value, label4) {
+  if (typeof value !== "string" || value.trim() === "") throw new Error(`${label4} is required`);
+  return value;
+}
+function id4(value, label4) {
+  text2(value, label4);
+  if (!ID4.test(value)) throw new Error(`${label4} must be a stable lowercase id`);
+  return value;
+}
+function hash7(value, label4) {
+  if (!HASH4.test(value)) throw new Error(`${label4} must be lowercase sha256`);
+  return value;
+}
+function exactKeys2(value, required2, optional2, label4) {
+  const allowed = /* @__PURE__ */ new Set([...required2, ...optional2]);
+  for (const key of required2) if (!(key in value)) throw new Error(`${label4}.${key} is required`);
+  for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`${label4}.${key} is unsupported`);
+}
+function unique(values, label4) {
+  if (new Set(values).size !== values.length) throw new Error(`${label4} must be unique`);
+}
+function validateBuildingStageArtifact(value) {
+  const artifact = object3(value, "building stage artifact");
+  exactKeys2(
+    artifact,
+    ["schema", "artifactId", "kind", "revision", "status", "contractHash", "contentHash", "facets", "inputs", "evidence"],
+    ["supersedes", "metadata"],
+    "building stage artifact"
+  );
+  if (artifact.schema !== BUILDING_STAGE_ARTIFACT_SCHEMA) throw new Error("unsupported building stage artifact schema");
+  id4(artifact.artifactId, "artifactId");
+  if (!STAGES.has(artifact.kind)) throw new Error("building stage artifact kind is unsupported");
+  if (!Number.isSafeInteger(artifact.revision) || artifact.revision < 1) throw new Error("building stage artifact revision must be positive");
+  if (!ARTIFACT_STATES.has(artifact.status)) throw new Error("building stage artifact status is unsupported");
+  hash7(artifact.contractHash, "contractHash");
+  hash7(artifact.contentHash, "contentHash");
+  if (!Array.isArray(artifact.facets) || artifact.facets.length === 0) throw new Error("building stage artifact facets must be a non-empty array");
+  const facetScopes = [], allowedFacets = new Set(BUILDING_STAGE_FACETS[artifact.kind]);
+  for (const [index, raw3] of artifact.facets.entries()) {
+    const facet = object3(raw3, `facets[${index}]`);
+    exactKeys2(facet, ["scope", "hash"], [], `facets[${index}]`);
+    text2(facet.scope, `facets[${index}].scope`);
+    hash7(facet.hash, `facets[${index}].hash`);
+    if (!facetAllowed(artifact.kind, facet.scope)) throw new Error(`facet '${facet.scope}' is not declared for ${artifact.kind}`);
+    facetScopes.push(facet.scope);
+  }
+  unique(facetScopes, "building stage artifact facet scopes");
+  if (artifact.supersedes !== void 0) id4(artifact.supersedes, "supersedes");
+  if (!Array.isArray(artifact.inputs)) throw new Error("building stage artifact inputs must be an array");
+  const inputKeys = [];
+  for (const [index, raw3] of artifact.inputs.entries()) {
+    const input = object3(raw3, `inputs[${index}]`);
+    exactKeys2(input, ["artifactId", "kind", "facets"], [], `inputs[${index}]`);
+    id4(input.artifactId, `inputs[${index}].artifactId`);
+    if (!STAGES.has(input.kind)) throw new Error(`inputs[${index}].kind is unsupported`);
+    if (!Array.isArray(input.facets) || input.facets.length === 0) throw new Error(`inputs[${index}].facets must be non-empty`);
+    const dependencyScopes = [], dependencyAllowed = new Set(BUILDING_STAGE_FACETS[input.kind]);
+    for (const [facetIndex, rawFacet] of input.facets.entries()) {
+      const facet = object3(rawFacet, `inputs[${index}].facets[${facetIndex}]`);
+      exactKeys2(facet, ["scope", "hash"], [], `inputs[${index}].facets[${facetIndex}]`);
+      text2(facet.scope, `inputs[${index}].facets[${facetIndex}].scope`);
+      hash7(facet.hash, `inputs[${index}].facets[${facetIndex}].hash`);
+      if (!facetAllowed(input.kind, facet.scope)) throw new Error(`dependency facet '${facet.scope}' is not declared for ${input.kind}`);
+      dependencyScopes.push(facet.scope);
+    }
+    unique(dependencyScopes, `inputs[${index}] facet scopes`);
+    if (input.artifactId === artifact.artifactId) throw new Error("building stage artifact cannot depend on itself");
+    inputKeys.push(input.artifactId);
+  }
+  unique(inputKeys, "building stage artifact input ids");
+  if (!Array.isArray(artifact.evidence)) throw new Error("building stage artifact evidence must be an array");
+  const evidenceIds = [];
+  for (const [index, raw3] of artifact.evidence.entries()) {
+    const evidence = object3(raw3, `evidence[${index}]`);
+    exactKeys2(evidence, ["evidenceId", "kind", "contentHash"], ["width", "height", "timestamp"], `evidence[${index}]`);
+    id4(evidence.evidenceId, `evidence[${index}].evidenceId`);
+    text2(evidence.kind, `evidence[${index}].kind`);
+    hash7(evidence.contentHash, `evidence[${index}].contentHash`);
+    if (evidence.width === void 0 !== (evidence.height === void 0)) throw new Error("evidence dimensions must be paired");
+    for (const field of ["width", "height"]) if (evidence[field] !== void 0 && (!Number.isSafeInteger(evidence[field]) || evidence[field] < 1)) throw new Error(`evidence ${field} must be positive`);
+    if (evidence.timestamp !== void 0 && !Number.isFinite(Date.parse(evidence.timestamp))) throw new Error("evidence timestamp must be ISO-parseable");
+    evidenceIds.push(evidence.evidenceId);
+  }
+  unique(evidenceIds, "building stage artifact evidence ids");
+  if (artifact.metadata !== void 0) object3(artifact.metadata, "metadata");
+  return Object.freeze(artifact);
+}
+function validateBuildingHitlDecision(value) {
+  const record6 = object3(value, "building HITL decision");
+  const v22 = record6.schema === BUILDING_HITL_DECISION_SCHEMA_V2;
+  exactKeys2(
+    record6,
+    ["schema", "decisionId", "gate", "artifactId", "contractHash", "contentHash", "reviewer", "timestamp", "decision", v22 ? "evidenceBindings" : "evidenceHashes", "blockingFindings", "observations", "markedRegions"],
+    ["instruction", "returnToGate", "acceptedDeviations"],
+    "building HITL decision"
+  );
+  if (record6.schema !== BUILDING_HITL_DECISION_SCHEMA && !v22) throw new Error("unsupported building HITL decision schema");
+  id4(record6.decisionId, "decisionId");
+  id4(record6.artifactId, "artifactId");
+  if (!GATES.has(record6.gate)) throw new Error("building HITL gate is unsupported");
+  hash7(record6.contractHash, "contractHash");
+  hash7(record6.contentHash, "contentHash");
+  text2(record6.reviewer, "reviewer");
+  if (typeof record6.timestamp !== "string" || !Number.isFinite(Date.parse(record6.timestamp))) throw new Error("decision timestamp must be ISO-parseable");
+  if (!DECISIONS.has(record6.decision)) throw new Error("decision must be approve, revise, or reject");
+  if (v22) {
+    if (!Array.isArray(record6.evidenceBindings) || record6.evidenceBindings.length === 0) throw new Error("decision requires exact evidence bindings");
+    const evidenceIds = [];
+    for (const [index, raw3] of record6.evidenceBindings.entries()) {
+      const binding = object3(raw3, `evidenceBindings[${index}]`);
+      exactKeys2(binding, ["evidenceId", "contentHash"], [], `evidenceBindings[${index}]`);
+      id4(binding.evidenceId, `evidenceBindings[${index}].evidenceId`);
+      hash7(binding.contentHash, `evidenceBindings[${index}].contentHash`);
+      evidenceIds.push(binding.evidenceId);
+    }
+    unique(evidenceIds, "decision evidence binding ids");
+  } else {
+    if (!Array.isArray(record6.evidenceHashes) || record6.evidenceHashes.length === 0) throw new Error("decision requires exact evidence hashes");
+    record6.evidenceHashes.forEach((value2, index) => hash7(value2, `evidenceHashes[${index}]`));
+    unique(record6.evidenceHashes, "decision evidence hashes");
+  }
+  for (const field of ["blockingFindings", "observations", "markedRegions", "acceptedDeviations"]) {
+    if (record6[field] !== void 0 && !Array.isArray(record6[field])) throw new Error(`${field} must be an array`);
+  }
+  for (const [index, finding] of record6.blockingFindings.entries()) text2(finding, `blockingFindings[${index}]`);
+  for (const [index, observation] of record6.observations.entries()) text2(observation, `observations[${index}]`);
+  for (const [index, raw3] of record6.markedRegions.entries()) {
+    const region = object3(raw3, `markedRegions[${index}]`);
+    exactKeys2(region, [...v22 ? ["evidenceId"] : [], "evidenceHash", "x01", "y01", "width01", "height01", "note"], ["semanticId"], `markedRegions[${index}]`);
+    hash7(region.evidenceHash, `markedRegions[${index}].evidenceHash`);
+    if (v22) {
+      id4(region.evidenceId, `markedRegions[${index}].evidenceId`);
+      if (!record6.evidenceBindings.some((binding) => binding.evidenceId === region.evidenceId && binding.contentHash === region.evidenceHash)) throw new Error("marked region references unreviewed evidence");
+    } else if (!record6.evidenceHashes.includes(region.evidenceHash)) throw new Error("marked region references unreviewed evidence");
+    for (const field of ["x01", "y01", "width01", "height01"]) if (!Number.isFinite(region[field]) || region[field] < 0 || region[field] > 1) throw new Error(`marked region ${field} must be normalized`);
+    if (region.width01 <= 0 || region.height01 <= 0 || region.x01 + region.width01 > 1 || region.y01 + region.height01 > 1) throw new Error("marked region must fit inside evidence");
+    text2(region.note, `markedRegions[${index}].note`);
+    if (region.semanticId !== void 0) id4(region.semanticId, `markedRegions[${index}].semanticId`);
+  }
+  if (record6.decision === "approve") {
+    if (record6.blockingFindings.length !== 0) throw new Error("approval cannot carry blocking findings");
+    if (record6.instruction !== void 0 || record6.returnToGate !== void 0) throw new Error("approval cannot carry revision routing");
+  } else {
+    if (record6.blockingFindings.length === 0) throw new Error(`${record6.decision} requires blocking findings`);
+    if (record6.markedRegions.length === 0 && (typeof record6.instruction !== "string" || record6.instruction.trim() === "")) throw new Error(`${record6.decision} requires a marked region or instruction`);
+    if (record6.decision === "reject") {
+      if (!GATES.has(record6.returnToGate)) throw new Error("reject requires a valid upstream returnToGate");
+    } else if (record6.returnToGate !== void 0) throw new Error("revise remains at its current gate");
+  }
+  return Object.freeze(record6);
+}
+function buildingArtifactInvalidation(artifacts) {
+  if (!Array.isArray(artifacts)) throw new Error("building artifacts must be an array");
+  const valid = artifacts.map(validateBuildingStageArtifact), byId = /* @__PURE__ */ new Map();
+  for (const artifact of valid) {
+    if (byId.has(artifact.artifactId)) throw new Error(`duplicate building artifact ${artifact.artifactId}`);
+    byId.set(artifact.artifactId, artifact);
+  }
+  const visiting = /* @__PURE__ */ new Set(), visited = /* @__PURE__ */ new Set(), visit = (artifact) => {
+    if (visiting.has(artifact.artifactId)) throw new Error(`building artifact dependency cycle includes ${[...visiting, artifact.artifactId].sort().join(",")}`);
+    if (visited.has(artifact.artifactId)) return;
+    visiting.add(artifact.artifactId);
+    for (const input of artifact.inputs) {
+      const producer = byId.get(input.artifactId);
+      if (producer) visit(producer);
+    }
+    visiting.delete(artifact.artifactId);
+    visited.add(artifact.artifactId);
+  };
+  for (const artifact of [...valid].sort((a2, b3) => a2.artifactId.localeCompare(b3.artifactId))) visit(artifact);
+  const stale = /* @__PURE__ */ new Map();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const artifact of [...valid].sort((a2, b3) => a2.artifactId.localeCompare(b3.artifactId))) {
+      if (stale.has(artifact.artifactId)) continue;
+      for (const input of artifact.inputs) {
+        const current = byId.get(input.artifactId);
+        let reason = current === void 0 ? "missing-input" : stale.has(input.artifactId) ? "transitive-input" : current.kind !== input.kind ? "kind-mismatch" : void 0;
+        let scope;
+        if (reason === void 0) {
+          const actual = new Map(current.facets.map((facet) => [facet.scope, facet.hash]));
+          for (const facet of input.facets) {
+            if (actual.get(facet.scope) !== facet.hash) {
+              reason = "facet-hash-mismatch";
+              scope = facet.scope;
+              break;
+            }
+          }
+        }
+        if (reason !== void 0) {
+          stale.set(artifact.artifactId, Object.freeze({ artifactId: artifact.artifactId, inputArtifactId: input.artifactId, reason, ...scope === void 0 ? {} : { scope } }));
+          changed = true;
+          break;
+        }
+      }
+    }
+  }
+  return Object.freeze([...stale.values()].sort((a2, b3) => a2.artifactId.localeCompare(b3.artifactId)));
+}
+function assertBuildingArtifactReviewable(artifact, decision, artifacts) {
+  const validArtifact = validateBuildingStageArtifact(artifact), validDecision = validateBuildingHitlDecision(decision);
+  if (validArtifact.status !== "candidate") throw new Error("only a candidate building artifact is reviewable");
+  if (validDecision.artifactId !== validArtifact.artifactId || validDecision.contractHash !== validArtifact.contractHash || validDecision.contentHash !== validArtifact.contentHash) throw new Error("HITL decision does not bind the exact building artifact");
+  if (validDecision.schema === BUILDING_HITL_DECISION_SCHEMA_V2) {
+    const expected = validArtifact.evidence.map(({ evidenceId, contentHash: contentHash2 }) => `${evidenceId}\0${contentHash2}`).sort();
+    const actual = validDecision.evidenceBindings.map(({ evidenceId, contentHash: contentHash2 }) => `${evidenceId}\0${contentHash2}`).sort();
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error("HITL decision does not bind the complete evidence set");
+  } else {
+    const evidenceHashes = [...new Set(validArtifact.evidence.map((entry) => entry.contentHash))].sort();
+    if (JSON.stringify([...validDecision.evidenceHashes].sort()) !== JSON.stringify(evidenceHashes)) throw new Error("HITL decision does not bind the complete evidence set");
+  }
+  const invalidated = buildingArtifactInvalidation(artifacts);
+  if (invalidated.some((entry) => entry.artifactId === validArtifact.artifactId)) throw new Error("stale building artifact cannot enter HITL review");
+  return Object.freeze({ artifact: validArtifact, decision: validDecision });
 }
 
 // src/authoring/errors.ts
@@ -136460,46 +138432,46 @@ function canonicalStringify(value) {
       default:
         reject(path2, `unsupported value type ${typeof input}`);
     }
-    const object4 = input;
-    if (active.has(object4)) reject(path2, "cyclic references are not supported");
-    active.add(object4);
+    const object5 = input;
+    if (active.has(object5)) reject(path2, "cyclic references are not supported");
+    active.add(object5);
     try {
-      if (Array.isArray(object4)) {
-        const names2 = Object.getOwnPropertyNames(object4);
-        for (let index = 0; index < object4.length; index++) {
-          if (!Object.prototype.hasOwnProperty.call(object4, index)) {
+      if (Array.isArray(object5)) {
+        const names2 = Object.getOwnPropertyNames(object5);
+        for (let index = 0; index < object5.length; index++) {
+          if (!Object.prototype.hasOwnProperty.call(object5, index)) {
             reject(`${path2}[${index}]`, "sparse arrays are not supported");
           }
-          const descriptor = Object.getOwnPropertyDescriptor(object4, String(index));
+          const descriptor = Object.getOwnPropertyDescriptor(object5, String(index));
           if (descriptor === void 0 || descriptor.get !== void 0 || descriptor.set !== void 0) {
             reject(`${path2}[${index}]`, "array accessors are not supported");
           }
           if (!descriptor.enumerable) reject(`${path2}[${index}]`, "non-enumerable array entries are not supported");
         }
-        const expectedNames = /* @__PURE__ */ new Set(["length", ...Array.from({ length: object4.length }, (_3, index) => String(index))]);
-        if (names2.some((name) => !expectedNames.has(name)) || Object.getOwnPropertySymbols(object4).length > 0) {
+        const expectedNames = /* @__PURE__ */ new Set(["length", ...Array.from({ length: object5.length }, (_3, index) => String(index))]);
+        if (names2.some((name) => !expectedNames.has(name)) || Object.getOwnPropertySymbols(object5).length > 0) {
           reject(path2, "custom array properties are not supported");
         }
-        return `[${object4.map((entry, index) => visit(entry, `${path2}[${index}]`)).join(",")}]`;
+        return `[${object5.map((entry, index) => visit(entry, `${path2}[${index}]`)).join(",")}]`;
       }
-      const prototype = Object.getPrototypeOf(object4);
+      const prototype = Object.getPrototypeOf(object5);
       if (prototype !== Object.prototype && prototype !== null) {
         reject(path2, "only plain objects are supported");
       }
-      if (Object.getOwnPropertySymbols(object4).length > 0) reject(path2, "symbol keys are not supported");
-      const names = Object.getOwnPropertyNames(object4);
+      if (Object.getOwnPropertySymbols(object5).length > 0) reject(path2, "symbol keys are not supported");
+      const names = Object.getOwnPropertyNames(object5);
       for (const name of names) {
-        const descriptor = Object.getOwnPropertyDescriptor(object4, name);
+        const descriptor = Object.getOwnPropertyDescriptor(object5, name);
         if (descriptor === void 0 || descriptor.get !== void 0 || descriptor.set !== void 0) {
           reject(`${path2}.${name}`, "object accessors are not supported");
         }
         if (!descriptor.enumerable) reject(`${path2}.${name}`, "non-enumerable properties are not supported");
       }
       names.sort();
-      const record5 = object4;
-      return `{${names.map((name) => `${JSON.stringify(name)}:${visit(record5[name], `${path2}.${name}`)}`).join(",")}}`;
+      const record6 = object5;
+      return `{${names.map((name) => `${JSON.stringify(name)}:${visit(record6[name], `${path2}.${name}`)}`).join(",")}}`;
     } finally {
-      active.delete(object4);
+      active.delete(object5);
     }
   };
   return visit(value, "$");
@@ -136531,124 +138503,921 @@ function canonicalHash2(sha2562, value) {
   return normalizeSha256(sha2562(canonicalStringify(value)));
 }
 
+// src/render/fb4-capture-provenance.ts
+var HASH5 = /^sha256:[0-9a-f]{64}$/;
+var BOOT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+var exact = (value, label4) => {
+  if (!value?.path || value.path.startsWith("/") || value.path.includes("\\") || value.path.split("/").includes("..") || !HASH5.test(value.sha256) || !HASH5.test(value.contentHash))
+    throw new Error(`${label4} is not an exact workspace file`);
+};
+var closure = (value) => `sha256:${sha256(canonicalStringify(value))}`;
+function validateFb4CaptureProvenance(value) {
+  if (value?.schema !== "limina.fb4-capture-provenance/v1" || value.coverage !== "complete" || !HASH5.test(value.closureHash))
+    throw new Error("FB-4 capture provenance identity is invalid");
+  exact(value.captureEvidence, "captureEvidence");
+  exact(value.subject?.manifest, "subject.manifest");
+  exact(value.subject?.glb, "subject.glb");
+  exact(value.subject?.reviewAuthority, "subject.reviewAuthority");
+  exact(value.environment?.authority, "environment.authority");
+  exact(value.environment?.runtimeBundle, "environment.runtimeBundle");
+  exact(value.execution?.binary, "execution.binary");
+  if (!HASH5.test(value.trace?.sha256) || !Number.isSafeInteger(value.trace?.byteLength) || value.trace.byteLength < 1 || !HASH5.test(value.subject?.irHash) || !value.subject?.candidateId)
+    throw new Error("FB-4 capture provenance trace/subject is invalid");
+  if (!Array.isArray(value.execution?.entrySources) || value.execution.entrySources.length < 3 || !Array.isArray(value.execution?.sources) || value.execution.sources.length < 3 || new Set(value.execution.sources.map((entry) => entry.path)).size !== value.execution.sources.length)
+    throw new Error("FB-4 capture producer source closure is incomplete");
+  for (const source of value.execution.sources) {
+    exact(source, "execution.sources[]");
+    if (!Number.isSafeInteger(source.bytes) || source.bytes < 1)
+      throw new Error("capture producer source byte length is invalid");
+  }
+  if (value.execution.orchestrator?.kind !== "bun" || !value.execution.orchestrator.version || !HASH5.test(value.execution.orchestrator.sha256) || value.execution.platform?.arch !== "arm64" || !value.execution.platform.os || value.execution.timestampEnvironmentKeys?.length !== 0)
+    throw new Error("FB-4 capture execution environment is unsafe or incomplete");
+  if (!Array.isArray(value.execution.argv) || value.execution.argv.length < 2 || !BOOT.test(value.gpuSafety?.bootId) || value.gpuSafety.timestampQueriesEnabled !== false || value.gpuSafety.xidObserved !== false || value.gpuSafety.preflightSource !== "journalctl-kernel-current-boot" || value.gpuSafety.liveFollower !== "journalctl-kernel-follow-current-boot" || value.gpuSafety.redundantPollMs !== 250 || value.gpuSafety.postflightSource !== "journalctl-kernel-current-boot")
+    throw new Error("FB-4 capture GPU safety provenance is incomplete");
+  if (!Array.isArray(value.outputs) || value.outputs.length < 1 || new Set(value.outputs.map((entry) => entry.id)).size !== value.outputs.length || value.outputs.some(
+    (entry) => !entry.id || !entry.path || !Number.isSafeInteger(entry.width) || entry.width < 1 || !Number.isSafeInteger(entry.height) || entry.height < 1 || !HASH5.test(entry.pngSha256) || !HASH5.test(entry.rgbaContentHash) || !Number.isSafeInteger(entry.pngByteLength) || entry.pngByteLength < 1
+  ))
+    throw new Error("FB-4 capture output provenance is incomplete");
+  const { closureHash, ...body } = value;
+  if (closure(body) !== closureHash) throw new Error("FB-4 capture provenance closure hash drifted");
+  return Object.freeze(value);
+}
+
+// src/world/asset-content-hash.mjs
+var HEX2 = Object.freeze(Array.from({ length: 256 }, (_3, value) => value.toString(16).padStart(2, "0")));
+function portableAssetContentHash(bytes) {
+  if (!(bytes instanceof Uint8Array)) throw new TypeError("asset content hash requires Uint8Array bytes");
+  let encoded = "";
+  const chunks = [];
+  for (let offset = 0; offset < bytes.length; offset += 16384) {
+    const end = Math.min(bytes.length, offset + 16384);
+    encoded = "";
+    for (let index = offset; index < end; index++) encoded += HEX2[bytes[index]];
+    chunks.push(encoded);
+  }
+  return `sha256:${sha256(chunks.join(""))}`;
+}
+
+// src/assets/building-review-outcome.ts
+var HASH6 = /^sha256:[0-9a-f]{64}$/;
+var ID5 = /^[a-z0-9][a-z0-9._/-]{2,180}$/;
+var raw = (bytes) => `sha256:${sha256(bytes)}`;
+var decode3 = (bytes, label4) => {
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch (error51) {
+    throw new Error(`${label4} is not valid UTF-8 JSON`, { cause: error51 });
+  }
+};
+var exactKeys3 = (value, keys2, label4) => {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    throw new Error(`${label4} must be an object`);
+  const actual = Object.keys(value);
+  if (actual.some((key) => !keys2.includes(key)) || keys2.some((key) => !actual.includes(key)))
+    throw new Error(`${label4} keys drifted`);
+};
+var exactFile = (value, label4, extras = []) => {
+  exactKeys3(value, ["path", "sha256", "contentHash", ...extras], label4);
+  const file2 = value;
+  if (!file2.path || file2.path.startsWith("/") || file2.path.includes("\\") || file2.path.split("/").includes("..") || !HASH6.test(file2.sha256) || !HASH6.test(file2.contentHash))
+    throw new Error(`${label4} is not an exact workspace file`);
+};
+function validateBuildingReviewOutcome(input) {
+  exactKeys3(input, ["schema", "sequence", "entryId", "previous", "subject", "event"], "building review ledger entry");
+  const value = input;
+  if (value.schema !== "limina.building-review-ledger-entry/v1" || !Number.isSafeInteger(value.sequence) || value.sequence < 1 || !ID5.test(value.entryId))
+    throw new Error("building review ledger identity is invalid");
+  if (value.previous !== null) exactFile(value.previous, "previous");
+  exactKeys3(
+    value.subject,
+    ["candidateId", "candidateManifest", "reviewAuthority", "captureEvidence", "captureProvenance"],
+    "subject"
+  );
+  if (!ID5.test(value.subject.candidateId)) throw new Error("building review candidate id is invalid");
+  exactFile(value.subject.candidateManifest, "subject.candidateManifest");
+  exactFile(value.subject.reviewAuthority, "subject.reviewAuthority");
+  exactFile(value.subject.captureEvidence, "subject.captureEvidence");
+  if (value.subject.captureProvenance !== null) {
+    exactFile(value.subject.captureProvenance, "subject.captureProvenance", ["coverage"]);
+    if (value.subject.captureProvenance.coverage !== "complete")
+      throw new Error("capture provenance coverage must be complete");
+  }
+  if (value.event?.kind === "central-visual-review") {
+    exactKeys3(value.event, ["kind", "record"], "event");
+    exactFile(value.event.record, "event.record", ["schema"]);
+    if (value.event.record.schema !== "limina.fb4-central-visual-review/v1")
+      throw new Error("central review event schema is invalid");
+  } else if (value.event?.kind === "hitl-decision") {
+    exactKeys3(value.event, ["kind", "presentationArtifact", "record"], "event");
+    exactFile(value.event.presentationArtifact, "event.presentationArtifact");
+    exactFile(value.event.record, "event.record", ["schema"]);
+    if (value.event.record.schema !== "limina.building-hitl-decision/v2")
+      throw new Error("HITL event must reuse the exact v2 building decision schema");
+  } else throw new Error("building review event kind is unsupported");
+  return Object.freeze(value);
+}
+function exactBytes(file2, read, label4) {
+  const bytes = read(file2.path);
+  if (raw(bytes) !== file2.sha256 || portableAssetContentHash(bytes) !== file2.contentHash)
+    throw new Error(`${label4} exact bytes drifted`);
+  return bytes;
+}
+function verifyCentralReview(value, entry) {
+  exactKeys3(
+    value,
+    [
+      "schema",
+      "status",
+      "candidateId",
+      "captureEvidence",
+      "gpuSafety",
+      "reviewBridgeStaged",
+      "visualFloor",
+      "findings",
+      "retainedProof"
+    ],
+    "central visual review"
+  );
+  if (value.schema !== "limina.fb4-central-visual-review/v1" || value.candidateId !== entry.subject.candidateId || value.captureEvidence?.path !== entry.subject.captureEvidence.path || value.captureEvidence?.sha256 !== entry.subject.captureEvidence.sha256)
+    throw new Error("central review does not bind the ledger subject and capture");
+  if (value.gpuSafety?.timestampQueriesEnabled !== false || value.gpuSafety?.xidObserved !== false || value.reviewBridgeStaged !== false)
+    throw new Error("central review lost its private timestamp-disabled safety boundary");
+  if (value.visualFloor?.referenceSetId !== "project-gorgon/house/v1" || typeof value.visualFloor?.passed !== "boolean")
+    throw new Error("central review visual-floor authority is invalid");
+  if (!Array.isArray(value.findings) || !Array.isArray(value.retainedProof))
+    throw new Error("central review findings are incomplete");
+  if (value.status === "rejected-before-hitl" && value.visualFloor.passed === false && value.findings.length > 0)
+    return "rejected-before-hitl";
+  if (value.status === "passed-to-hitl" && value.visualFloor.passed === true && value.findings.every((finding) => finding?.severity !== "blocking"))
+    return "central-pass";
+  throw new Error("central review status is inconsistent with its visual-floor findings");
+}
+function verifyEntry(entry, read) {
+  const manifest = decode3(
+    exactBytes(entry.subject.candidateManifest, read, "candidate manifest"),
+    "candidate manifest"
+  );
+  const authority = decode3(exactBytes(entry.subject.reviewAuthority, read, "review authority"), "review authority");
+  const capture = decode3(exactBytes(entry.subject.captureEvidence, read, "capture evidence"), "capture evidence");
+  if (manifest.candidateId !== entry.subject.candidateId)
+    throw new Error("review ledger candidate id drifted from its manifest");
+  if (authority.candidate?.manifest?.path !== entry.subject.candidateManifest.path || authority.candidate?.manifest?.sha256 !== entry.subject.candidateManifest.sha256)
+    throw new Error("review authority does not bind the ledger candidate manifest");
+  if (capture.authority?.path !== entry.subject.reviewAuthority.path || capture.authority?.sha256 !== entry.subject.reviewAuthority.sha256 || capture.candidate?.manifest?.path !== entry.subject.candidateManifest.path || capture.candidate?.manifest?.sha256 !== entry.subject.candidateManifest.sha256)
+    throw new Error("capture evidence does not bind the ledger authority and candidate");
+  if (entry.subject.captureProvenance !== null) {
+    const provenance2 = validateFb4CaptureProvenance(
+      decode3(exactBytes(entry.subject.captureProvenance, read, "capture provenance"), "capture provenance")
+    );
+    const same = (a2, b3) => a2.path === b3.path && a2.sha256 === b3.sha256 && (b3.contentHash === void 0 || a2.contentHash === b3.contentHash);
+    const verifyProvenanceFile = (file2, label4) => {
+      const bytes = read(file2.path);
+      if (raw(bytes) !== file2.sha256 || portableAssetContentHash(bytes) !== file2.contentHash || file2.bytes !== void 0 && bytes.byteLength !== file2.bytes)
+        throw new Error(`capture provenance ${label4} exact bytes drifted`);
+    };
+    if (!same(provenance2.captureEvidence, entry.subject.captureEvidence) || provenance2.subject.candidateId !== entry.subject.candidateId || !same(provenance2.subject.manifest, entry.subject.candidateManifest) || !same(provenance2.subject.reviewAuthority, entry.subject.reviewAuthority) || provenance2.subject.irHash !== authority.candidate?.irHash || !same(provenance2.subject.glb, authority.candidate?.glb) || !same(provenance2.environment.authority, authority.environment?.authority) || !same(provenance2.environment.runtimeBundle, authority.environment?.runtimeBundle))
+      throw new Error("capture provenance does not completely bind the ledger subject, authority, and environment");
+    for (const [file2, label4] of [
+      [provenance2.subject.glb, "subject GLB"],
+      [provenance2.environment.authority, "environment authority"],
+      [provenance2.environment.runtimeBundle, "runtime bundle"]
+    ])
+      verifyProvenanceFile(file2, label4);
+    const capturedOutputs = new Map((capture.outputs ?? []).map((output3) => [output3.id, output3]));
+    if (capturedOutputs.size !== provenance2.outputs.length)
+      throw new Error("capture provenance output set drifted from capture evidence");
+    for (const output3 of provenance2.outputs) {
+      const captured = capturedOutputs.get(output3.id);
+      if (!captured || captured.path !== output3.path || captured.width !== output3.width || captured.height !== output3.height || captured.pngSha256 !== output3.pngSha256 || captured.pngByteLength !== output3.pngByteLength || captured.rgbaContentHash !== output3.rgbaContentHash)
+        throw new Error(`capture provenance output drifted: ${output3.id}`);
+      const bytes = read(output3.path);
+      if (bytes.byteLength !== output3.pngByteLength || raw(bytes) !== output3.pngSha256)
+        throw new Error(`capture provenance PNG bytes drifted: ${output3.id}`);
+    }
+  }
+  if (entry.event.kind === "central-visual-review")
+    return verifyCentralReview(decode3(exactBytes(entry.event.record, read, "central review"), "central review"), entry);
+  const artifact = validateBuildingStageArtifact(
+    decode3(exactBytes(entry.event.presentationArtifact, read, "presentation artifact"), "presentation artifact")
+  );
+  const decision = validateBuildingHitlDecision(
+    decode3(exactBytes(entry.event.record, read, "HITL decision"), "HITL decision")
+  );
+  assertBuildingArtifactReviewable(artifact, decision, [artifact]);
+  if (entry.subject.captureProvenance === null) throw new Error("legacy-unbound capture cannot enter HITL");
+  return decision.decision === "approve" ? "approved" : "rejected";
+}
+function verifyBuildingReviewLedger(records, read) {
+  const parsed = records.map((record6) => ({
+    record: record6,
+    entry: validateBuildingReviewOutcome(decode3(record6.bytes, `review ledger ${record6.path}`))
+  })), groups = /* @__PURE__ */ new Map();
+  for (const item of parsed) {
+    const group = groups.get(item.entry.subject.candidateId) ?? [];
+    group.push(item);
+    groups.set(item.entry.subject.candidateId, group);
+  }
+  const verified = [];
+  for (const candidateId of [...groups.keys()].sort()) {
+    const ordered2 = groups.get(candidateId).sort((a2, b3) => a2.entry.sequence - b3.entry.sequence || a2.record.path.localeCompare(b3.record.path));
+    let previous;
+    for (let index = 0; index < ordered2.length; index++) {
+      const { record: record6, entry } = ordered2[index];
+      if (entry.sequence !== index + 1)
+        throw new Error(`review ledger '${candidateId}' sequence must be contiguous and one-based`);
+      if (previous === void 0 ? entry.previous !== null : entry.previous?.path !== previous.path || entry.previous?.sha256 !== raw(previous.bytes) || entry.previous?.contentHash !== portableAssetContentHash(previous.bytes))
+        throw new Error(`review ledger '${candidateId}' previous-entry chain drifted`);
+      const decision = verifyEntry(entry, read);
+      if (decision === "central-pass" && entry.subject.captureProvenance === null)
+        throw new Error("central pass requires complete capture provenance");
+      if (entry.event.kind === "hitl-decision" && previous?.decision !== "central-pass")
+        throw new Error("HITL decision requires the immediately preceding central pass");
+      previous = Object.freeze({ path: record6.path, bytes: record6.bytes, entry, decision });
+      verified.push(previous);
+    }
+  }
+  return Object.freeze(verified);
+}
+function resolveBuildingReviewState(manifest, verified) {
+  if (!manifest.candidateId || !manifest.status)
+    throw new Error("candidate discovery requires an identified build manifest");
+  const matching = verified.filter((record6) => record6.entry.subject.candidateId === manifest.candidateId), latest = matching.at(-1);
+  return Object.freeze({
+    candidateId: manifest.candidateId,
+    buildStatus: manifest.status,
+    reviewStatus: latest?.decision ?? "legacy-untracked",
+    hitlEligible: latest?.decision === "central-pass" && latest.entry.subject.captureProvenance?.coverage === "complete",
+    ...latest ? { outcome: latest.entry } : {}
+  });
+}
+
+// src/assets/functional-building-publication.mjs
+var FUNCTIONAL_BUILDING_PUBLICATION_SCHEMA = "limina.functional-building-publication/v1";
+var HASH7 = /^sha256:[0-9a-f]{64}$/;
+var ID6 = /^[a-z0-9][a-z0-9._/-]{0,159}$/;
+var PATH4 = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[a-zA-Z0-9][a-zA-Z0-9._\/-]{0,511}$/;
+var VERIFIED = /* @__PURE__ */ new WeakSet();
+var FunctionalBuildingPublicationError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "FunctionalBuildingPublicationError";
+  }
+};
+var fail9 = (message) => {
+  throw new FunctionalBuildingPublicationError(message);
+};
+var rawHash = (bytes) => `sha256:${sha256(bytes)}`;
+function record5(value, required2, optional2, label4) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) fail9(`${label4} must be a plain object`);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) fail9(`${label4} must be a plain object`);
+  if (Object.getOwnPropertySymbols(value).length !== 0) fail9(`${label4} must not contain symbol fields`);
+  const descriptors = Object.getOwnPropertyDescriptors(value), allowed = /* @__PURE__ */ new Set([...required2, ...optional2]);
+  for (const [key, descriptor] of Object.entries(descriptors)) {
+    if (!allowed.has(key)) fail9(`${label4} has unknown field '${key}'`);
+    if (!("value" in descriptor) || descriptor.enumerable !== true) fail9(`${label4}.${key} must be an enumerable data field`);
+  }
+  for (const key of required2) if (!Object.hasOwn(value, key)) fail9(`${label4} is missing '${key}'`);
+  return descriptors;
+}
+function text3(value, pattern, maximum, label4) {
+  if (typeof value !== "string" || value.length < 1 || value.length > maximum || !pattern.test(value)) fail9(`${label4} is invalid`);
+  return value;
+}
+function id5(value, label4) {
+  const output3 = text3(value, ID6, 160, label4);
+  if (output3.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) fail9(`${label4} contains an unsafe path segment`);
+  return output3;
+}
+function exactFile2(value, label4) {
+  const d2 = record5(value, /* @__PURE__ */ new Set(["path", "sha256", "contentHash", "bytes"]), /* @__PURE__ */ new Set(), label4);
+  const bytes = d2.bytes.value;
+  if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > 2 ** 32 - 1) fail9(`${label4}.bytes is outside its bounded integer range`);
+  return Object.freeze({
+    path: text3(d2.path.value, PATH4, 512, `${label4}.path`),
+    sha256: text3(d2.sha256.value, HASH7, 71, `${label4}.sha256`),
+    contentHash: text3(d2.contentHash.value, HASH7, 71, `${label4}.contentHash`),
+    bytes
+  });
+}
+function denseArray4(value, minimum, maximum, label4) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length < minimum || value.length > maximum || Object.getOwnPropertySymbols(value).length !== 0 || Object.getOwnPropertyNames(value).length !== value.length + 1) {
+    fail9(`${label4} must be a dense, field-free array with ${minimum}..${maximum} entries`);
+  }
+  return value;
+}
+function readExact(file2, read, label4) {
+  let bytes;
+  try {
+    bytes = read(file2.path);
+  } catch (error51) {
+    fail9(`${label4} could not be read: ${error51 instanceof Error ? error51.message : String(error51)}`);
+  }
+  if (!(bytes instanceof Uint8Array)) fail9(`${label4} reader did not return Uint8Array`);
+  if (bytes.byteLength !== file2.bytes || rawHash(bytes) !== file2.sha256 || portableAssetContentHash(bytes) !== file2.contentHash) fail9(`${label4} exact bytes drifted`);
+  return bytes;
+}
+function decode4(bytes, label4) {
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch (error51) {
+    fail9(`${label4} is not valid UTF-8 JSON: ${error51 instanceof Error ? error51.message : String(error51)}`);
+  }
+}
+function sameExact(left, right) {
+  return left.path === right.path && left.sha256 === right.sha256 && left.contentHash === right.contentHash;
+}
+function deepFreeze(value) {
+  if (Array.isArray(value)) return Object.freeze(value.map(deepFreeze));
+  if (value !== null && typeof value === "object") {
+    const output3 = {};
+    for (const [key, entry] of Object.entries(value)) output3[key] = deepFreeze(entry);
+    return Object.freeze(output3);
+  }
+  return value;
+}
+function deriveApprovedFunctionalBuildingPublication(input, read) {
+  if (typeof read !== "function") fail9("functional building publication requires an exact file reader");
+  const d2 = record5(
+    input,
+    /* @__PURE__ */ new Set(["publicationId", "catalogId", "catalogRevision", "entryId", "familyId", "variantId", "candidateManifest", "approvedReviewOutcome", "reviewLedger"]),
+    /* @__PURE__ */ new Set(),
+    "functional building publication input"
+  );
+  const publicationId = id5(d2.publicationId.value, "functional building publication input.publicationId");
+  const catalogId = id5(d2.catalogId.value, "functional building publication input.catalogId");
+  const catalogRevision = d2.catalogRevision.value;
+  if (!Number.isSafeInteger(catalogRevision) || catalogRevision < 1 || catalogRevision > 2 ** 31 - 1) fail9("functional building publication input.catalogRevision is invalid");
+  const entryId = id5(d2.entryId.value, "functional building publication input.entryId");
+  const familyId = id5(d2.familyId.value, "functional building publication input.familyId");
+  const variantId = id5(d2.variantId.value, "functional building publication input.variantId");
+  const candidateManifest = exactFile2(d2.candidateManifest.value, "functional building publication input.candidateManifest");
+  const approvedReviewOutcome = exactFile2(d2.approvedReviewOutcome.value, "functional building publication input.approvedReviewOutcome");
+  const reviewLedger = denseArray4(d2.reviewLedger.value, 1, 64, "functional building publication input.reviewLedger").map((value, index) => exactFile2(value, `functional building publication input.reviewLedger[${index}]`));
+  for (let index = 1; index < reviewLedger.length; index++) if (reviewLedger[index - 1].path >= reviewLedger[index].path) fail9("functional building publication review ledger must be strictly path-sorted and unique");
+  const approvedIndex = reviewLedger.findIndex((entry2) => sameExact(entry2, approvedReviewOutcome));
+  if (approvedIndex < 0) fail9("approved review outcome is absent from the supplied exact ledger");
+  const manifest = decode4(readExact(candidateManifest, read, "candidate manifest"), "candidate manifest");
+  if (!manifest?.candidateId || manifest.status !== "cpu-verified-human-pending" || manifest.visualApprovalClaimed !== false || manifest.gpuCaptureAtBuild !== false || manifest.placementSkill !== "building.placeFunctional") {
+    fail9("candidate manifest is not an exact CPU-verified, engine-review-pending functional candidate");
+  }
+  const records = reviewLedger.map((entry2) => ({ path: entry2.path, bytes: readExact(entry2, read, `review ledger '${entry2.path}'`) }));
+  let verified;
+  try {
+    verified = verifyBuildingReviewLedger(records, read);
+  } catch (error51) {
+    fail9(`functional building review ledger rejected: ${error51 instanceof Error ? error51.message : String(error51)}`);
+  }
+  const state = resolveBuildingReviewState(manifest, verified);
+  if (state.reviewStatus !== "approved" || state.outcome?.event.kind !== "hitl-decision") {
+    fail9(`functional building publication requires explicit HITL approval; current review state is '${state.reviewStatus}'`);
+  }
+  const latest = verified.filter((entry2) => entry2.entry.subject.candidateId === manifest.candidateId).at(-1);
+  if (latest === void 0 || latest.decision !== "approved" || latest.path !== approvedReviewOutcome.path || rawHash(latest.bytes) !== approvedReviewOutcome.sha256 || portableAssetContentHash(latest.bytes) !== approvedReviewOutcome.contentHash) {
+    fail9("approved review outcome is not the latest exact approved ledger entry for this candidate");
+  }
+  if (!sameExact(state.outcome.subject.candidateManifest, candidateManifest)) fail9("approved review outcome does not bind the publication candidate manifest");
+  if (!Array.isArray(manifest.files)) fail9("candidate manifest has no exact file inventory");
+  const lodFiles = manifest.files.filter((entry2) => entry2?.role === "lodGlb");
+  if (lodFiles.length !== 1) fail9("candidate manifest must contain exactly one semantic LOD GLB");
+  const lodFile = exactFile2({
+    path: lodFiles[0].path,
+    sha256: lodFiles[0].sha256,
+    contentHash: lodFiles[0].contentHash,
+    bytes: lodFiles[0].bytes
+  }, "candidate manifest lodGlb");
+  const assetBytes = readExact(lodFile, read, "candidate semantic LOD GLB");
+  let contract, batch3;
+  try {
+    contract = parseFunctionalBuildingContract(assetBytes);
+    batch3 = parseFunctionalBuildingStaticBatch(assetBytes);
+  } catch (error51) {
+    fail9(`candidate semantic LOD GLB rejected: ${error51 instanceof Error ? error51.message : String(error51)}`);
+  }
+  if (contract.schema !== "limina.functional-building/v2" || batch3 === void 0) fail9("published settlement buildings require a v2 functional contract and static LOD package");
+  const semanticIdentity2 = deriveFunctionalBuildingSemanticIdentity(contract);
+  const assetId = lodFile.path.startsWith("assets/") ? lodFile.path.slice("assets/".length) : lodFile.path;
+  const entry = {
+    entryId,
+    placementClass: "functional-building",
+    asset: { assetId, hashKind: "raw-sha256", hash: lodFile.sha256, byteLength: lodFile.bytes },
+    variant: { familyId, variantId },
+    functionalContract: { schema: "limina.functional-building/v2", hash: deriveFunctionalBuildingContractHash(contract) },
+    semanticIdentity: semanticIdentity2,
+    lodSemanticIdentity: {
+      schema: FUNCTIONAL_BUILDING_LOD_PROOF_SCHEMA,
+      articulatedDoorPolicy: "shared-outside-static-lods",
+      articulatedDoorRootIndex: batch3.doorRoot,
+      levels: batch3.lodRoots.map((rootIndex, level) => ({ level, rootIndex, semanticFingerprint: semanticIdentity2.fingerprint }))
+    },
+    productionClosure: {
+      schema: "limina.exact-production-closure-pointer/v1",
+      artifactId: state.outcome.entryId,
+      path: approvedReviewOutcome.path,
+      sha256: approvedReviewOutcome.sha256
+    }
+  };
+  const catalog = parseFunctionalBuildingCatalog({ schema: FUNCTIONAL_BUILDING_CATALOG_SCHEMA, catalogId, revision: catalogRevision, entries: [entry] });
+  verifyFunctionalBuildingCatalogEntry(catalog.entries[0], { assetId, bytes: assetBytes });
+  const catalogHash = rawHash(new TextEncoder().encode(canonicalCompilerJson(catalog)));
+  const body = {
+    schema: FUNCTIONAL_BUILDING_PUBLICATION_SCHEMA,
+    publicationId,
+    candidateId: manifest.candidateId,
+    candidateManifest,
+    approval: {
+      status: "approved",
+      reviewOutcome: approvedReviewOutcome,
+      reviewLedger: Object.freeze(reviewLedger),
+      decision: deepFreeze(state.outcome.event.record)
+    },
+    asset: lodFile,
+    catalog,
+    catalogHash
+  };
+  const result2 = deepFreeze({ ...body, closureHash: rawHash(new TextEncoder().encode(canonicalCompilerJson(body))) });
+  VERIFIED.add(result2);
+  return result2;
+}
+function loadApprovedFunctionalBuildingPublication(bytes, read) {
+  if (!(bytes instanceof Uint8Array)) fail9("persisted functional building publication must be Uint8Array");
+  const value = decode4(bytes, "persisted functional building publication");
+  const d2 = record5(
+    value,
+    /* @__PURE__ */ new Set(["schema", "publicationId", "candidateId", "candidateManifest", "approval", "asset", "catalog", "catalogHash", "closureHash"]),
+    /* @__PURE__ */ new Set(),
+    "persisted functional building publication"
+  );
+  if (d2.schema.value !== FUNCTIONAL_BUILDING_PUBLICATION_SCHEMA) fail9("persisted functional building publication schema is unsupported");
+  const approval = record5(d2.approval.value, /* @__PURE__ */ new Set(["status", "reviewOutcome", "reviewLedger", "decision"]), /* @__PURE__ */ new Set(), "persisted functional building publication.approval");
+  if (approval.status.value !== "approved") fail9("persisted functional building publication is not approved");
+  const catalog = parseFunctionalBuildingCatalog(d2.catalog.value);
+  if (catalog.entries.length !== 1 || catalog.entries[0].placementClass !== "functional-building") fail9("persisted functional building publication must contain exactly one functional entry");
+  const entry = catalog.entries[0];
+  const derived = deriveApprovedFunctionalBuildingPublication({
+    publicationId: d2.publicationId.value,
+    catalogId: catalog.catalogId,
+    catalogRevision: catalog.revision,
+    entryId: entry.entryId,
+    familyId: entry.variant.familyId,
+    variantId: entry.variant.variantId,
+    candidateManifest: d2.candidateManifest.value,
+    approvedReviewOutcome: approval.reviewOutcome.value,
+    reviewLedger: approval.reviewLedger.value
+  }, read);
+  if (canonicalCompilerJson(value) !== canonicalCompilerJson(derived)) fail9("persisted functional building publication drifted from independently re-derived approval closure");
+  return derived;
+}
+function assertApprovedFunctionalBuildingPublication(value, catalogValue) {
+  if (value === null || typeof value !== "object" || !VERIFIED.has(value) || value.schema !== FUNCTIONAL_BUILDING_PUBLICATION_SCHEMA || value.approval?.status !== "approved") {
+    fail9("functional building publication is not a verified in-process approval result");
+  }
+  const catalog = parseFunctionalBuildingCatalog(catalogValue === void 0 ? value.catalog : catalogValue);
+  const actual = rawHash(new TextEncoder().encode(canonicalCompilerJson(catalog)));
+  if (actual !== value.catalogHash || canonicalCompilerJson(catalog) !== canonicalCompilerJson(value.catalog)) fail9("functional building publication catalog drifted from its approved closure");
+  return value;
+}
+
+// src/assets/functional-settlement-release.mjs
+var FUNCTIONAL_SETTLEMENT_RELEASE_SCHEMA = "limina.functional-settlement-release/v1";
+var HASH8 = /^sha256:[0-9a-f]{64}$/;
+var ID7 = /^[a-z0-9][a-z0-9._/-]{1,159}$/;
+var PATH5 = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[a-zA-Z0-9][a-zA-Z0-9._/-]{1,511}$/;
+var BRANDED = /* @__PURE__ */ new WeakSet();
+var fail10 = (message) => {
+  throw new Error(`functional settlement release: ${message}`);
+};
+var plain = (value, label4) => {
+  if (value === null || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertySymbols(value).length)
+    fail10(`${label4} must be a plain object`);
+  for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(value)))
+    if (!("value" in descriptor) || descriptor.enumerable !== true)
+      fail10(`${label4} must contain only enumerable data fields`);
+  return value;
+};
+var keys = (value, required2, label4) => {
+  plain(value, label4);
+  const actual = Object.keys(value).sort(), expected = [...required2].sort();
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) fail10(`${label4} keys drifted`);
+};
+var id6 = (value, label4) => {
+  if (typeof value !== "string" || !ID7.test(value) || value.split("/").some((part) => !part || part === "." || part === ".."))
+    fail10(`${label4} is invalid`);
+  return value;
+};
+var hash8 = (value, label4) => {
+  if (typeof value !== "string" || !HASH8.test(value)) fail10(`${label4} is invalid`);
+  return value;
+};
+var pathValue = (value, label4) => {
+  if (typeof value !== "string" || !PATH5.test(value)) fail10(`${label4} is invalid`);
+  return value;
+};
+var integer3 = (value, label4, min3 = 0, max3 = Number.MAX_SAFE_INTEGER) => {
+  if (!Number.isSafeInteger(value) || value < min3 || value > max3) fail10(`${label4} is invalid`);
+  return value;
+};
+var finite12 = (value, label4, min3 = -1e9, max3 = 1e9) => {
+  if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || value < min3 || value > max3)
+    fail10(`${label4} is invalid`);
+  return value;
+};
+var exact2 = (value, label4, extras = []) => {
+  keys(value, ["path", "sha256", "contentHash", "bytes", ...extras], label4);
+  return {
+    path: pathValue(value.path, `${label4}.path`),
+    sha256: hash8(value.sha256, `${label4}.sha256`),
+    contentHash: hash8(value.contentHash, `${label4}.contentHash`),
+    bytes: integer3(value.bytes, `${label4}.bytes`, 1),
+    ...Object.fromEntries(extras.map((key) => [key, value[key]]))
+  };
+};
+var shortExact = (value, label4, extras = []) => {
+  keys(value, ["path", "sha256", "contentHash", ...extras], label4);
+  return {
+    path: pathValue(value.path, `${label4}.path`),
+    sha256: hash8(value.sha256, `${label4}.sha256`),
+    contentHash: hash8(value.contentHash, `${label4}.contentHash`),
+    ...Object.fromEntries(extras.map((key) => [key, value[key]]))
+  };
+};
+var raw2 = (bytes) => `sha256:${sha256(bytes)}`;
+var readExact2 = (entry, read, label4) => {
+  const bytes = read(entry.path);
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength !== entry.bytes || raw2(bytes) !== entry.sha256 || portableAssetContentHash(bytes) !== entry.contentHash)
+    fail10(`${label4} exact bytes drifted`);
+  return bytes;
+};
+var deepFreeze2 = (value) => {
+  if (Array.isArray(value)) return Object.freeze(value.map(deepFreeze2));
+  if (value !== null && typeof value === "object") {
+    const output3 = {};
+    for (const [key, entry] of Object.entries(value)) output3[key] = deepFreeze2(entry);
+    return Object.freeze(output3);
+  }
+  return value;
+};
+var decode5 = (bytes, label4) => {
+  try {
+    return JSON.parse(new TextDecoder("utf8", { fatal: true }).decode(bytes));
+  } catch (error51) {
+    fail10(`${label4} is not valid UTF-8 JSON: ${error51 instanceof Error ? error51.message : String(error51)}`);
+  }
+};
+function loadApprovedFunctionalSettlementRelease(bytes, read) {
+  if (!(bytes instanceof Uint8Array) || typeof read !== "function")
+    fail10("loader requires release bytes and an exact reader");
+  const value = decode5(bytes, "release");
+  keys(
+    value,
+    [
+      "schema",
+      "releaseId",
+      "settlementId",
+      "approval",
+      "recipe",
+      "worldMap",
+      "plan",
+      "sites",
+      "runtime",
+      "terrain",
+      "inventory",
+      "engine",
+      "closureHash"
+    ],
+    "release"
+  );
+  if (value.schema !== FUNCTIONAL_SETTLEMENT_RELEASE_SCHEMA) fail10("schema is unsupported");
+  id6(value.releaseId, "releaseId");
+  id6(value.settlementId, "settlementId");
+  hash8(value.closureHash, "closureHash");
+  const { closureHash, ...body } = value;
+  if (raw2(new TextEncoder().encode(canonicalCompilerJson(body))) !== closureHash) fail10("closure hash drifted");
+  keys(value.approval, ["publication", "candidateId", "reviewOutcome"], "approval");
+  id6(value.approval.candidateId, "approval.candidateId");
+  const publicationRef = shortExact(value.approval.publication, "approval.publication", ["closureHash"]);
+  hash8(publicationRef.closureHash, "approval.publication.closureHash");
+  const publicationBytes = read(publicationRef.path);
+  if (!(publicationBytes instanceof Uint8Array) || raw2(publicationBytes) !== publicationRef.sha256 || portableAssetContentHash(publicationBytes) !== publicationRef.contentHash)
+    fail10("approved publication bytes drifted");
+  const publication = loadApprovedFunctionalBuildingPublication(publicationBytes, read);
+  if (publication.closureHash !== publicationRef.closureHash || publication.candidateId !== value.approval.candidateId)
+    fail10("approved publication identity drifted");
+  const reviewOutcome = value.approval.reviewOutcome;
+  if (reviewOutcome.path !== publication.approval.reviewOutcome.path || reviewOutcome.sha256 !== publication.approval.reviewOutcome.sha256 || reviewOutcome.contentHash !== publication.approval.reviewOutcome.contentHash || reviewOutcome.bytes !== publication.approval.reviewOutcome.bytes)
+    fail10("terminal review outcome drifted from the approved publication");
+  const recipeRef = shortExact(value.recipe, "recipe"), recipeBytes = read(recipeRef.path);
+  if (!(recipeBytes instanceof Uint8Array) || raw2(recipeBytes) !== recipeRef.sha256 || portableAssetContentHash(recipeBytes) !== recipeRef.contentHash)
+    fail10("recipe exact bytes drifted");
+  const recipe = decode5(recipeBytes, "recipe");
+  keys(
+    recipe,
+    ["schema", "releaseId", "settlementId", "mapId", "routeId", "publication", "terrain", "runtime", "placements"],
+    "recipe"
+  );
+  const recipeReleaseId = id6(recipe.releaseId, "recipe.releaseId"), recipeSettlementId = id6(recipe.settlementId, "recipe.settlementId");
+  id6(recipe.mapId, "recipe.mapId");
+  id6(recipe.routeId, "recipe.routeId");
+  if (recipe.schema !== "limina.functional-settlement-recipe/v1" || recipeReleaseId !== value.releaseId || recipeSettlementId !== value.settlementId)
+    fail10("recipe identity drifted");
+  keys(recipe.publication, ["path", "sha256", "closureHash"], "recipe.publication");
+  if (pathValue(recipe.publication.path, "recipe.publication.path") !== publicationRef.path || hash8(recipe.publication.sha256, "recipe.publication.sha256") !== publicationRef.sha256 || hash8(recipe.publication.closureHash, "recipe.publication.closureHash") !== publicationRef.closureHash)
+    fail10("recipe approval binding drifted");
+  if (canonicalCompilerJson(recipe.runtime) !== canonicalCompilerJson(value.runtime) || canonicalCompilerJson(recipe.terrain) !== canonicalCompilerJson(value.terrain))
+    fail10("recipe runtime/terrain authority drifted from release");
+  const worldMapRef = exact2(value.worldMap, "worldMap", ["mapId", "worldMapHash"]);
+  id6(worldMapRef.mapId, "worldMap.mapId");
+  hash8(worldMapRef.worldMapHash, "worldMap.worldMapHash");
+  const worldMap = WorldMapSchema.parse(decode5(readExact2(worldMapRef, read, "WorldMap"), "WorldMap")), mapVerification = verifyWorldMap(worldMap);
+  if (!mapVerification.ok || worldMap.id !== worldMapRef.mapId || `sha256:${mapVerification.actual}` !== worldMapRef.worldMapHash)
+    fail10("WorldMap logical identity drifted");
+  const planRef = exact2(value.plan, "plan", ["planId"]);
+  id6(planRef.planId, "plan.planId");
+  const plan = parseFunctionalSettlementPlan(decode5(readExact2(planRef, read, "plan"), "plan"), publication.catalog);
+  if (plan.planId !== value.settlementId || plan.planId !== planRef.planId || recipe.mapId !== worldMap.id || recipe.routeId !== plan.placements[0]?.atlasBinding.routeId)
+    fail10("plan/recipe identity drifted");
+  if (!Array.isArray(recipe.placements) || recipe.placements.length !== plan.placements.length)
+    fail10("recipe placement inventory drifted");
+  const recipePlacements = new Map(
+    recipe.placements.map((placement, index) => {
+      keys(placement, ["anchorId", "residencyUnitId", "position", "yaw"], `recipe.placements[${index}]`);
+      return [id6(placement.anchorId, `recipe.placements[${index}].anchorId`), placement];
+    })
+  );
+  if (recipePlacements.size !== recipe.placements.length) fail10("recipe placement identities are not unique");
+  for (const placement of plan.placements) {
+    const source = recipePlacements.get(placement.atlasBinding.anchorId);
+    if (source === void 0 || source.residencyUnitId !== placement.residency.unitId || canonicalCompilerJson(source.position) !== canonicalCompilerJson(placement.position) || source.yaw !== placement.yaw)
+      fail10(`recipe placement drifted: ${placement.placementId}`);
+  }
+  const atlas = resolveFunctionalSettlementAtlas(plan, publication.catalog, worldMap, { connectorToleranceM: 0 });
+  if (atlas.placements.some((placement) => placement.connectorDistanceM !== 0))
+    fail10("Atlas route contact is not exact");
+  keys(
+    value.terrain,
+    [
+      "schema",
+      "origin",
+      "yaw",
+      "baseHeight",
+      "localZSlope",
+      "maximumSampleSpacing",
+      "maximumTerrainGrade",
+      "maximumRouteElevationDelta"
+    ],
+    "terrain"
+  );
+  if (value.terrain.schema !== "limina.shared-local-z-grade/v1" || !Array.isArray(value.terrain.origin) || value.terrain.origin.length !== 2)
+    fail10("terrain authority is unsupported");
+  const origin = value.terrain.origin.map((entry, index) => finite12(entry, `terrain.origin[${index}]`)), yaw = finite12(value.terrain.yaw, "terrain.yaw", -Math.PI, Math.PI), base = finite12(value.terrain.baseHeight, "terrain.baseHeight"), slope = finite12(value.terrain.localZSlope, "terrain.localZSlope", -0.25, 0.25), spacing = finite12(value.terrain.maximumSampleSpacing, "terrain.maximumSampleSpacing", Number.MIN_VALUE, 1), maximumGrade = finite12(value.terrain.maximumTerrainGrade, "terrain.maximumTerrainGrade", 0, 4), routeDelta = finite12(value.terrain.maximumRouteElevationDelta, "terrain.maximumRouteElevationDelta", 0, 0.5);
+  if (Math.abs(slope) > maximumGrade) fail10("terrain slope exceeds declared maximum grade");
+  const c2 = Math.cos(yaw), s2 = Math.sin(yaw), sampleHeight2 = (x3, z4) => base + slope * ((x3 - origin[0]) * s2 + (z4 - origin[1]) * c2);
+  const assetBytes = read(publication.asset.path), contract = parseFunctionalBuildingContract(assetBytes), sites = value.sites;
+  if (!Array.isArray(sites) || sites.length !== plan.placements.length || new Set(sites.map((entry) => entry.path)).size !== sites.length)
+    fail10("site artifact inventory is incomplete");
+  const siteByPath = new Map(
+    sites.map((entry, index) => {
+      const parsed = exact2(entry, `sites[${index}]`);
+      return [parsed.path, parsed];
+    })
+  );
+  for (const placement of plan.placements) {
+    const ref = siteByPath.get(placement.siteFoundation.path);
+    if (ref === void 0 || ref.sha256 !== placement.siteFoundation.sha256)
+      fail10(`site reference drifted: ${placement.placementId}`);
+    verifyFunctionalBuildingSiteArtifact(
+      readExact2(ref, read, `site '${placement.placementId}'`),
+      placement.siteFoundation,
+      {
+        contract,
+        sampleHeight: sampleHeight2,
+        placementId: placement.placementId,
+        contractHash: placement.catalogContractHash,
+        semanticFingerprint: placement.semanticFingerprint,
+        worldMapHash: plan.atlas.worldMapHash,
+        position: placement.position,
+        yaw: placement.yaw,
+        routeContact: placement.entryConnector.routeContact
+      }
+    );
+  }
+  keys(value.runtime, ["loadDistance", "keepDistance", "maxActiveUnits", "maxResidentBytes"], "runtime");
+  const runtime = {
+    loadDistance: finite12(value.runtime.loadDistance, "runtime.loadDistance", 0, 1e6),
+    keepDistance: finite12(value.runtime.keepDistance, "runtime.keepDistance", 0, 1e6),
+    maxActiveUnits: integer3(value.runtime.maxActiveUnits, "runtime.maxActiveUnits", 1, plan.placements.length),
+    maxResidentBytes: integer3(value.runtime.maxResidentBytes, "runtime.maxResidentBytes", 1)
+  };
+  if (runtime.keepDistance < runtime.loadDistance || runtime.maxResidentBytes < publication.catalog.entries[0].asset.byteLength)
+    fail10("runtime bounds are inconsistent");
+  keys(value.inventory, ["buildings", "catalogEntries", "visibilityCellsPerBuilding", "lodLevels"], "inventory");
+  if (value.inventory.buildings !== plan.placements.length || value.inventory.catalogEntries !== publication.catalog.entries.length || value.inventory.visibilityCellsPerBuilding !== publication.catalog.entries[0].semanticIdentity.cells.length || value.inventory.lodLevels !== publication.catalog.entries[0].lodSemanticIdentity.levels.length)
+    fail10("release inventory drifted");
+  keys(
+    value.engine,
+    ["placementSkill", "settlementSkill", "residencyPolicy", "genericAssetPlacementProhibited"],
+    "engine"
+  );
+  if (value.engine.placementSkill !== "building.placeFunctional" || value.engine.settlementSkill !== "settlement.placeFunctional" || value.engine.residencyPolicy !== "whole-building-atomic" || value.engine.genericAssetPlacementProhibited !== true)
+    fail10("engine pipeline authority drifted");
+  const loaded = Object.freeze({
+    release: deepFreeze2(value),
+    publication,
+    plan,
+    worldMap: deepFreeze2(worldMap),
+    runtime: deepFreeze2(runtime)
+  });
+  BRANDED.add(loaded);
+  return loaded;
+}
+function assertApprovedFunctionalSettlementRelease(value) {
+  if (value === null || typeof value !== "object" || !BRANDED.has(value))
+    fail10("value is not a verified in-process settlement release");
+  return value;
+}
+
 // src/architecture/furniture-design-contract.ts
-var HASH4 = /^sha256:[0-9a-f]{64}$/;
-var ID4 = /^[a-z0-9][a-z0-9._/-]{0,159}$/;
-var finite12 = (v3, label4) => {
+var HASH9 = /^sha256:[0-9a-f]{64}$/;
+var ID8 = /^[a-z0-9][a-z0-9._/-]{0,159}$/;
+var finite13 = (v3, label4) => {
   if (typeof v3 !== "number" || !Number.isFinite(v3)) throw new Error(`${label4} must be finite`);
   return v3;
 };
 var vec = (v3, label4) => {
-  if (!Array.isArray(v3) || v3.length !== 3 || v3.some((n3) => typeof n3 !== "number" || !Number.isFinite(n3))) throw new Error(`${label4} must be a finite vec3`);
+  if (!Array.isArray(v3) || v3.length !== 3 || v3.some((n3) => typeof n3 !== "number" || !Number.isFinite(n3)))
+    throw new Error(`${label4} must be a finite vec3`);
 };
 var SEATING_ROLES = /* @__PURE__ */ new Set(["bench", "chair", "seat", "settle", "sofa", "stool"]);
 var NON_SEATING_ROLES = /* @__PURE__ */ new Set(["storage", "table"]);
 function furnitureRoleClass(role2) {
   const tokens = role2.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean), seating = tokens.some((token) => SEATING_ROLES.has(token)), nonSeating = tokens.some((token) => NON_SEATING_ROLES.has(token));
-  if (seating === nonSeating) throw new Error("furniture role must identify exactly one supported seating or table/storage class");
+  if (seating === nonSeating)
+    throw new Error("furniture role must identify exactly one supported seating or table/storage class");
   return seating ? "seating" : "non-seating";
 }
 var isChairRole = (role2) => role2.toLowerCase().split(/[^a-z0-9]+/).includes("chair");
 var isSettleRole = (role2) => role2.toLowerCase().split(/[^a-z0-9]+/).includes("settle");
 var isStorageRole = (role2) => role2.toLowerCase().split(/[^a-z0-9]+/).includes("storage");
-var LEGACY_SETTLE_IDS = /* @__PURE__ */ new Set(["furniture/hearth-settle/v1", "furniture/hearth-settle/v2", "furniture/hearth-settle/v2-r2"]);
+var LEGACY_SETTLE_IDS = /* @__PURE__ */ new Set([
+  "furniture/hearth-settle/v1",
+  "furniture/hearth-settle/v2",
+  "furniture/hearth-settle/v2-r2"
+]);
 function validateFurnitureDesignContract(value, visual) {
   const c2 = value;
-  if (!c2 || typeof c2 !== "object" || c2.schema !== "limina.furniture-design-contract/v1") throw new Error("unsupported furniture design contract");
-  if (!ID4.test(c2.id) || typeof c2.role !== "string" || !c2.role.trim() || !c2.visualDesign?.id || !HASH4.test(c2.visualDesign.hash)) throw new Error("furniture design identity is incomplete");
+  if (!c2 || typeof c2 !== "object" || c2.schema !== "limina.furniture-design-contract/v1")
+    throw new Error("unsupported furniture design contract");
+  if (!ID8.test(c2.id) || typeof c2.role !== "string" || !c2.role.trim() || !c2.visualDesign?.id || !HASH9.test(c2.visualDesign.hash))
+    throw new Error("furniture design identity is incomplete");
   if (visual && visual.id !== c2.visualDesign.id) throw new Error("furniture visual design id drifted");
-  for (const [key, v3] of Object.entries(c2.dimensions ?? {})) finite12(v3, `dimensions.${key}`);
-  if (c2.dimensions.widthM <= 0 || c2.dimensions.heightM <= 0 || c2.dimensions.depthM <= 0) throw new Error("furniture outer dimensions are invalid");
+  for (const [key, v3] of Object.entries(c2.dimensions ?? {})) finite13(v3, `dimensions.${key}`);
+  if (c2.dimensions.widthM <= 0 || c2.dimensions.heightM <= 0 || c2.dimensions.depthM <= 0)
+    throw new Error("furniture outer dimensions are invalid");
   if (!Array.isArray(c2.parts) || c2.parts.length < 4) throw new Error("furniture requires semantic construction parts");
   const parts = /* @__PURE__ */ new Set(), roles = new Set(c2.materialRoles);
   for (const part of c2.parts) {
-    if (!ID4.test(part.id) || parts.has(part.id)) throw new Error("furniture part ids must be unique stable ids");
+    if (!ID8.test(part.id) || parts.has(part.id)) throw new Error("furniture part ids must be unique stable ids");
     parts.add(part.id);
-    if (!["shaped-board", "tapered-member", "profile-extrusion", "panel", "peg"].includes(part.kind) || part.geometry?.kind !== part.kind || !roles.has(part.materialRole)) throw new Error("furniture part has an unsupported kind, geometry, or material role");
+    if (!["shaped-board", "tapered-member", "profile-extrusion", "panel", "peg"].includes(part.kind) || part.geometry?.kind !== part.kind || !roles.has(part.materialRole))
+      throw new Error("furniture part has an unsupported kind, geometry, or material role");
     vec(part.center, "part center");
     vec(part.rotationDeg, "part rotation");
     const g4 = part.geometry;
     if (g4.kind === "shaped-board") {
       vec(g4.size, "shaped-board size");
-      if (g4.size.some((v3) => v3 <= 0) || finite12(g4.edgeRadiusM, "edge radius") <= 0) throw new Error("shaped board geometry is invalid");
+      if (g4.size.some((v3) => v3 <= 0) || finite13(g4.edgeRadiusM, "edge radius") <= 0)
+        throw new Error("shaped board geometry is invalid");
     } else if (g4.kind === "tapered-member") {
-      if (finite12(g4.lengthM, "member length") <= 0 || g4.bottomSection.some((v3) => finite12(v3, "bottom section") <= 0) || g4.topSection.some((v3) => finite12(v3, "top section") <= 0) || finite12(g4.chamferM, "member chamfer") <= 0) throw new Error("tapered member geometry is invalid");
+      if (finite13(g4.lengthM, "member length") <= 0 || g4.bottomSection.some((v3) => finite13(v3, "bottom section") <= 0) || g4.topSection.some((v3) => finite13(v3, "top section") <= 0) || finite13(g4.chamferM, "member chamfer") <= 0)
+        throw new Error("tapered member geometry is invalid");
     } else if (g4.kind === "profile-extrusion") {
-      if (g4.profile.length < 3 || g4.profile.some((point3) => point3.length !== 2 || point3.some((v3) => !Number.isFinite(v3))) || finite12(g4.depthM, "profile depth") <= 0 || finite12(g4.bevelM, "profile bevel") <= 0) throw new Error("profile extrusion geometry is invalid");
+      if (g4.profile.length < 3 || g4.profile.some(
+        (point3) => point3.length !== 2 || point3.some((v3) => !Number.isFinite(v3))
+      ) || finite13(g4.depthM, "profile depth") <= 0 || finite13(g4.bevelM, "profile bevel") <= 0)
+        throw new Error("profile extrusion geometry is invalid");
     } else if (g4.kind === "panel") {
       vec(g4.size, "panel size");
-      if (g4.size.some((v3) => v3 <= 0) || finite12(g4.fieldDepthM, "field depth") <= 0 || finite12(g4.fieldMarginM, "field margin") <= 0 || finite12(g4.edgeRadiusM, "panel edge radius") <= 0) throw new Error("panel geometry is invalid");
+      if (g4.size.some((v3) => v3 <= 0) || finite13(g4.fieldDepthM, "field depth") <= 0 || finite13(g4.fieldMarginM, "field margin") <= 0 || finite13(g4.edgeRadiusM, "panel edge radius") <= 0)
+        throw new Error("panel geometry is invalid");
     } else if (g4.kind === "peg") {
-      if (finite12(g4.diameterM, "peg diameter") <= 0 || finite12(g4.lengthM, "peg length") <= 0) throw new Error("peg geometry is invalid");
+      if (finite13(g4.diameterM, "peg diameter") <= 0 || finite13(g4.lengthM, "peg length") <= 0)
+        throw new Error("peg geometry is invalid");
     }
   }
   if (!Array.isArray(c2.joints) || c2.joints.length < 2) throw new Error("furniture requires an explicit join graph");
   for (const joint of c2.joints) {
-    if (!ID4.test(joint.id) || joint.members.length !== 2 || joint.members.some((member) => !parts.has(member)) || joint.members[0] === joint.members[1] || finite12(joint.toleranceM, "joint tolerance") <= 0 || joint.toleranceM > 0.01) throw new Error("furniture joint is invalid");
+    if (!ID8.test(joint.id) || joint.members.length !== 2 || joint.members.some((member) => !parts.has(member)) || joint.members[0] === joint.members[1] || finite13(joint.toleranceM, "joint tolerance") <= 0 || joint.toleranceM > 0.01)
+      throw new Error("furniture joint is invalid");
   }
   if (!Array.isArray(c2.sockets)) throw new Error("furniture sockets must be an array");
   const roleClass = furnitureRoleClass(c2.role), chairRole = isChairRole(c2.role), settleRole = isSettleRole(c2.role), legacySettle = settleRole && LEGACY_SETTLE_IDS.has(c2.id), storageRole = isStorageRole(c2.role), occupancySockets = c2.sockets.filter((socket) => socket.kind === "occupancy"), approachSockets = c2.sockets.filter((socket) => socket.kind === "approach");
-  if (!Number.isSafeInteger(c2.dimensions.occupancy) || c2.dimensions.occupancy < 0) throw new Error("furniture occupancy must be a non-negative safe integer");
+  if (!Number.isSafeInteger(c2.dimensions.occupancy) || c2.dimensions.occupancy < 0)
+    throw new Error("furniture occupancy must be a non-negative safe integer");
   if (roleClass === "seating") {
-    if (c2.dimensions.seatHeightM <= 0 || c2.dimensions.seatDepthM <= 0 || c2.dimensions.occupancy < 1) throw new Error("seating furniture requires positive seat dimensions and occupancy");
-    if (occupancySockets.length !== c2.dimensions.occupancy) throw new Error("seating furniture occupancy sockets must exactly match capacity");
+    if (c2.dimensions.seatHeightM <= 0 || c2.dimensions.seatDepthM <= 0 || c2.dimensions.occupancy < 1)
+      throw new Error("seating furniture requires positive seat dimensions and occupancy");
+    if (occupancySockets.length !== c2.dimensions.occupancy)
+      throw new Error("seating furniture occupancy sockets must exactly match capacity");
   } else {
-    if (c2.dimensions.seatHeightM !== 0 || c2.dimensions.seatDepthM !== 0 || c2.dimensions.occupancy !== 0 || occupancySockets.length !== 0) throw new Error("table/storage furniture forbids seat dimensions and fabricated occupancy");
+    if (c2.dimensions.seatHeightM !== 0 || c2.dimensions.seatDepthM !== 0 || c2.dimensions.occupancy !== 0 || occupancySockets.length !== 0)
+      throw new Error("table/storage furniture forbids seat dimensions and fabricated occupancy");
     if (approachSockets.length < 1) throw new Error("table/storage furniture requires an approach socket");
   }
   for (const socket of c2.sockets) {
-    if (!ID4.test(socket.id) || !parts.has(socket.supportedBy) || finite12(socket.clearanceRadiusM, "socket clearance") <= 0) throw new Error("furniture socket is invalid");
+    if (!ID8.test(socket.id) || !parts.has(socket.supportedBy) || finite13(socket.clearanceRadiusM, "socket clearance") <= 0)
+      throw new Error("furniture socket is invalid");
     vec(socket.position, "socket position");
     vec(socket.facing, "socket facing");
   }
   if (chairRole) {
     const chair = c2.chair;
-    if (!chair || c2.dimensions.occupancy !== 1 || occupancySockets.length !== 1) throw new Error("chair furniture requires exactly one occupancy and explicit chair semantics");
-    if (!ID4.test(chair.seatPartId) || !parts.has(chair.seatPartId) || !Array.isArray(chair.backPartIds) || chair.backPartIds.length < 1 || chair.backPartIds.some((id4) => !ID4.test(id4) || !parts.has(id4)) || !Array.isArray(chair.legPartIds) || chair.legPartIds.length !== 4 || chair.legPartIds.some((id4) => !ID4.test(id4) || !parts.has(id4)) || (/* @__PURE__ */ new Set([chair.seatPartId, ...chair.backPartIds, ...chair.legPartIds])).size !== 1 + chair.backPartIds.length + 4) throw new Error("chair semantic seat/back/four-leg identities are invalid");
-    if (occupancySockets[0].supportedBy !== chair.seatPartId) throw new Error("chair occupancy must be supported by its semantic seat");
-    if (c2.dimensions.seatHeightM < 0.43 || c2.dimensions.seatHeightM > 0.48 || c2.dimensions.seatDepthM < 0.38 || c2.dimensions.seatDepthM > 0.45 || finite12(chair.usableSeatWidthM, "chair usable seat width") < 0.38 || chair.usableSeatWidthM > 0.46 || chair.usableSeatWidthM > c2.dimensions.widthM || finite12(chair.backSupportHeightM, "chair back support height") < 0.3 || chair.backSupportHeightM > 0.47 || c2.dimensions.seatHeightM + chair.backSupportHeightM > c2.dimensions.heightM + 2e-3 || finite12(chair.ratedLoadKg, "chair rated load") < 100 || chair.ratedLoadKg > 250) throw new Error("chair ergonomics or rated load are outside the bounded dining policy");
+    if (!chair || c2.dimensions.occupancy !== 1 || occupancySockets.length !== 1)
+      throw new Error("chair furniture requires exactly one occupancy and explicit chair semantics");
+    if (!ID8.test(chair.seatPartId) || !parts.has(chair.seatPartId) || !Array.isArray(chair.backPartIds) || chair.backPartIds.length < 1 || chair.backPartIds.some((id7) => !ID8.test(id7) || !parts.has(id7)) || !Array.isArray(chair.legPartIds) || chair.legPartIds.length !== 4 || chair.legPartIds.some((id7) => !ID8.test(id7) || !parts.has(id7)) || (/* @__PURE__ */ new Set([chair.seatPartId, ...chair.backPartIds, ...chair.legPartIds])).size !== 1 + chair.backPartIds.length + 4)
+      throw new Error("chair semantic seat/back/four-leg identities are invalid");
+    if (occupancySockets[0].supportedBy !== chair.seatPartId)
+      throw new Error("chair occupancy must be supported by its semantic seat");
+    if (c2.dimensions.seatHeightM < 0.43 || c2.dimensions.seatHeightM > 0.48 || c2.dimensions.seatDepthM < 0.38 || c2.dimensions.seatDepthM > 0.45 || finite13(chair.usableSeatWidthM, "chair usable seat width") < 0.38 || chair.usableSeatWidthM > 0.46 || chair.usableSeatWidthM > c2.dimensions.widthM || finite13(chair.backSupportHeightM, "chair back support height") < 0.3 || chair.backSupportHeightM > 0.47 || c2.dimensions.seatHeightM + chair.backSupportHeightM > c2.dimensions.heightM + 2e-3 || finite13(chair.ratedLoadKg, "chair rated load") < 100 || chair.ratedLoadKg > 250)
+      throw new Error("chair ergonomics or rated load are outside the bounded dining policy");
     vec(chair.canonicalForward, "chair canonical forward");
-    if (Math.abs(chair.canonicalForward[0]) > 1e-8 || Math.abs(chair.canonicalForward[1]) > 1e-8 || Math.abs(chair.canonicalForward[2] + 1) > 1e-8 || occupancySockets[0].facing.some((value2, index) => Math.abs(value2 - chair.canonicalForward[index]) > 1e-8)) throw new Error("chair canonical and occupancy forward must be local -Z");
+    if (Math.abs(chair.canonicalForward[0]) > 1e-8 || Math.abs(chair.canonicalForward[1]) > 1e-8 || Math.abs(chair.canonicalForward[2] + 1) > 1e-8 || occupancySockets[0].facing.some(
+      (value2, index) => Math.abs(value2 - chair.canonicalForward[index]) > 1e-8
+    ))
+      throw new Error("chair canonical and occupancy forward must be local -Z");
   } else if (c2.chair !== void 0) throw new Error("non-chair furniture cannot claim chair semantics");
   if (settleRole && !legacySettle) {
     const settle = c2.settle;
-    if (!settle || c2.dimensions.occupancy !== 2 || occupancySockets.length !== 2 || approachSockets.length !== 1) throw new Error("settle furniture requires exactly two occupancies, one approach, and explicit settle semantics");
-    const exactGroups = [[settle?.legPartIds ?? [], 4], [settle?.armPartIds ?? [], 2], [settle?.armSupportPartIds ?? [], 2], [settle?.occupancySocketIds ?? [], 2]];
-    if (!settle || !ID4.test(settle.seatPartId) || !parts.has(settle.seatPartId) || !Array.isArray(settle.backPartIds) || settle.backPartIds.length < 2 || new Set(settle.backPartIds).size !== settle.backPartIds.length || exactGroups.some(([ids, count]) => !Array.isArray(ids) || ids.length !== count || new Set(ids).size !== count)) throw new Error("settle semantic seat/back/leg/arm/support/socket identities are invalid");
-    const semanticParts = [settle.seatPartId, ...settle.backPartIds, ...settle.legPartIds, ...settle.armPartIds, ...settle.armSupportPartIds];
-    if (semanticParts.some((id4) => !ID4.test(id4) || !parts.has(id4)) || new Set(semanticParts).size !== semanticParts.length) throw new Error("settle semantic construction parts must be unique real parts");
-    const semanticSockets = settle.occupancySocketIds.map((id4) => c2.sockets.find((socket) => socket.id === id4)), approach = c2.sockets.find((socket) => socket.id === settle.approachSocketId);
-    if (semanticSockets.some((socket) => !socket || socket.kind !== "occupancy" || socket.supportedBy !== settle.seatPartId) || !approach || approach.kind !== "approach") throw new Error("settle semantic sockets do not resolve the seat occupancies and front approach");
-    if (Math.abs(c2.dimensions.widthM - 1.6) > 1e-8 || Math.abs(c2.dimensions.heightM - 1.3) > 1e-8 || Math.abs(c2.dimensions.depthM - 0.7) > 1e-8 || Math.abs(c2.dimensions.seatHeightM - 0.46) > 1e-8 || Math.abs(c2.dimensions.seatDepthM - 0.5) > 1e-8 || finite12(settle.usableSeatWidthM, "settle usable seat width") < 1.28 || settle.usableSeatWidthM > 1.38 || finite12(settle.backSupportHeightM, "settle back support height") < 0.7 || settle.backSupportHeightM > 0.84 || c2.dimensions.seatHeightM + settle.backSupportHeightM > c2.dimensions.heightM + 2e-3 || finite12(settle.ratedLoadKg, "settle rated load") < 180 || settle.ratedLoadKg > 300) throw new Error("settle dimensions, ergonomics, or rated load are outside the exact I1 r3 policy");
+    if (!settle || c2.dimensions.occupancy !== 2 || occupancySockets.length !== 2 || approachSockets.length !== 1)
+      throw new Error("settle furniture requires exactly two occupancies, one approach, and explicit settle semantics");
+    const exactGroups = [
+      [settle?.legPartIds ?? [], 4],
+      [settle?.armPartIds ?? [], 2],
+      [settle?.armSupportPartIds ?? [], 2],
+      [settle?.occupancySocketIds ?? [], 2]
+    ];
+    if (!settle || !ID8.test(settle.seatPartId) || !parts.has(settle.seatPartId) || !Array.isArray(settle.backPartIds) || settle.backPartIds.length < 2 || new Set(settle.backPartIds).size !== settle.backPartIds.length || exactGroups.some(([ids, count]) => !Array.isArray(ids) || ids.length !== count || new Set(ids).size !== count))
+      throw new Error("settle semantic seat/back/leg/arm/support/socket identities are invalid");
+    const semanticParts = [
+      settle.seatPartId,
+      ...settle.backPartIds,
+      ...settle.legPartIds,
+      ...settle.armPartIds,
+      ...settle.armSupportPartIds
+    ];
+    if (semanticParts.some((id7) => !ID8.test(id7) || !parts.has(id7)) || new Set(semanticParts).size !== semanticParts.length)
+      throw new Error("settle semantic construction parts must be unique real parts");
+    const semanticSockets = settle.occupancySocketIds.map((id7) => c2.sockets.find((socket) => socket.id === id7)), approach = c2.sockets.find((socket) => socket.id === settle.approachSocketId);
+    if (semanticSockets.some(
+      (socket) => !socket || socket.kind !== "occupancy" || socket.supportedBy !== settle.seatPartId
+    ) || !approach || approach.kind !== "approach")
+      throw new Error("settle semantic sockets do not resolve the seat occupancies and front approach");
+    if (Math.abs(c2.dimensions.widthM - 1.6) > 1e-8 || Math.abs(c2.dimensions.heightM - 1.3) > 1e-8 || Math.abs(c2.dimensions.depthM - 0.7) > 1e-8 || Math.abs(c2.dimensions.seatHeightM - 0.46) > 1e-8 || Math.abs(c2.dimensions.seatDepthM - 0.5) > 1e-8 || finite13(settle.usableSeatWidthM, "settle usable seat width") < 1.28 || settle.usableSeatWidthM > 1.38 || finite13(settle.backSupportHeightM, "settle back support height") < 0.7 || settle.backSupportHeightM > 0.84 || c2.dimensions.seatHeightM + settle.backSupportHeightM > c2.dimensions.heightM + 2e-3 || finite13(settle.ratedLoadKg, "settle rated load") < 180 || settle.ratedLoadKg > 300)
+      throw new Error("settle dimensions, ergonomics, or rated load are outside the exact I1 r3 policy");
     vec(settle.canonicalForward, "settle canonical forward");
-    if (settle.canonicalForward.some((value2, index) => Math.abs(value2 - [0, 0, -1][index]) > 1e-8)) throw new Error("settle canonical forward must be local -Z");
-    const expectedOccupancies = [[-0.32, 0.46, -0.05], [0.32, 0.46, -0.05]];
+    if (settle.canonicalForward.some((value2, index) => Math.abs(value2 - [0, 0, -1][index]) > 1e-8))
+      throw new Error("settle canonical forward must be local -Z");
+    const expectedOccupancies = [
+      [-0.32, 0.46, -0.05],
+      [0.32, 0.46, -0.05]
+    ];
     for (const expected of expectedOccupancies) {
-      const socket = semanticSockets.find((candidate) => candidate?.position.every((value2, index) => Math.abs(value2 - expected[index]) <= 1e-8));
-      if (!socket || socket.facing.some((value2, index) => Math.abs(value2 - settle.canonicalForward[index]) > 1e-8) || Math.abs(socket.clearanceRadiusM - 0.3) > 1e-8) throw new Error("settle occupancies must exactly bind the approved local I1 r3 sockets");
+      const socket = semanticSockets.find(
+        (candidate) => candidate?.position.every((value2, index) => Math.abs(value2 - expected[index]) <= 1e-8)
+      );
+      if (!socket || socket.facing.some((value2, index) => Math.abs(value2 - settle.canonicalForward[index]) > 1e-8) || Math.abs(socket.clearanceRadiusM - 0.3) > 1e-8)
+        throw new Error("settle occupancies must exactly bind the approved local I1 r3 sockets");
     }
-    if (approach.position.some((value2, index) => Math.abs(value2 - [0, 0, -0.85][index]) > 1e-8) || approach.facing.some((value2, index) => Math.abs(value2 - [0, 0, 1][index]) > 1e-8) || Math.abs(approach.clearanceRadiusM - 0.35) > 1e-8) throw new Error("settle approach must exactly bind the approved local I1 r3 clearance");
+    if (approach.position.some((value2, index) => Math.abs(value2 - [0, 0, -0.85][index]) > 1e-8) || approach.facing.some((value2, index) => Math.abs(value2 - [0, 0, 1][index]) > 1e-8) || Math.abs(approach.clearanceRadiusM - 0.35) > 1e-8)
+      throw new Error("settle approach must exactly bind the approved local I1 r3 clearance");
   } else if (c2.settle !== void 0) throw new Error("non-settle furniture cannot claim settle semantics");
   if (storageRole) {
     const storage3 = c2.storage;
     if (!storage3) throw new Error("storage furniture requires explicit storage semantics");
     const tiers = storage3.tierPartIds, supports2 = storage3.verticalSupportPartIds;
-    if (!Array.isArray(tiers) || tiers.length !== 4 || new Set(tiers).size !== 4 || tiers.some((id4) => !ID4.test(id4) || !parts.has(id4))) throw new Error("storage furniture requires four unique semantic tier parts");
-    if (!Array.isArray(supports2) || supports2.length < 2 || new Set(supports2).size !== supports2.length || supports2.some((id4) => !ID4.test(id4) || !parts.has(id4)) || supports2.some((id4) => tiers.includes(id4))) throw new Error("storage vertical supports are invalid or overlap its tiers");
+    if (!Array.isArray(tiers) || tiers.length !== 4 || new Set(tiers).size !== 4 || tiers.some((id7) => !ID8.test(id7) || !parts.has(id7)))
+      throw new Error("storage furniture requires four unique semantic tier parts");
+    if (!Array.isArray(supports2) || supports2.length < 2 || new Set(supports2).size !== supports2.length || supports2.some((id7) => !ID8.test(id7) || !parts.has(id7)) || supports2.some((id7) => tiers.includes(id7)))
+      throw new Error("storage vertical supports are invalid or overlap its tiers");
     const approach = c2.sockets.find((socket) => socket.id === storage3.approachSocketId);
-    if (!approach || approach.kind !== "approach") throw new Error("storage approach semantic must resolve one approach socket");
+    if (!approach || approach.kind !== "approach")
+      throw new Error("storage approach semantic must resolve one approach socket");
     vec(storage3.canonicalFront, "storage canonical front");
-    if (storage3.canonicalFront.some((value2, index) => Math.abs(value2 - [-1, 0, 0][index]) > 1e-8)) throw new Error("storage canonical front must be local -X");
-    if (approach.position.some((value2, index) => Math.abs(value2 - [-0.65, 0, 0][index]) > 1e-8) || approach.facing.some((value2, index) => Math.abs(value2 - [1, 0, 0][index]) > 1e-8) || Math.abs(approach.clearanceRadiusM - 0.35) > 1e-8) throw new Error("storage approach must exactly bind the approved local I1 clearance");
-    const load2 = finite12(storage3.ratedLoadKgPerTier, "storage rated load per tier");
+    if (storage3.canonicalFront.some((value2, index) => Math.abs(value2 - [-1, 0, 0][index]) > 1e-8))
+      throw new Error("storage canonical front must be local -X");
+    if (approach.position.some((value2, index) => Math.abs(value2 - [-0.65, 0, 0][index]) > 1e-8) || approach.facing.some((value2, index) => Math.abs(value2 - [1, 0, 0][index]) > 1e-8) || Math.abs(approach.clearanceRadiusM - 0.35) > 1e-8)
+      throw new Error("storage approach must exactly bind the approved local I1 clearance");
+    const load2 = finite13(storage3.ratedLoadKgPerTier, "storage rated load per tier");
     if (load2 < 10 || load2 > 50) throw new Error("storage per-tier rated load is outside the bounded policy");
   } else if (c2.storage !== void 0) throw new Error("non-storage furniture cannot claim storage semantics");
-  if (!Array.isArray(c2.colliders) || c2.colliders.length < 2) throw new Error("furniture requires compound collision, not a whole AABB");
+  if (!Array.isArray(c2.colliders) || c2.colliders.length < 2)
+    throw new Error("furniture requires compound collision, not a whole AABB");
   for (const collider of c2.colliders) {
-    if (!ID4.test(collider.id) || !Array.isArray(collider.covers) || collider.covers.length === 0 || collider.covers.some((part) => !parts.has(part))) throw new Error("furniture collider lacks semantic coverage");
+    if (!ID8.test(collider.id) || !Array.isArray(collider.covers) || collider.covers.length === 0 || collider.covers.some((part) => !parts.has(part)))
+      throw new Error("furniture collider lacks semantic coverage");
     vec(collider.center, "collider center");
     vec(collider.halfExtents, "collider halfExtents");
-    if (collider.halfExtents.some((v3) => v3 <= 0)) throw new Error("furniture collider extents must be positive");
+    if (collider.halfExtents.some((v3) => v3 <= 0))
+      throw new Error("furniture collider extents must be positive");
   }
   if (!["draft", "candidate", "approved"].includes(c2.status)) throw new Error("unsupported furniture design status");
   return Object.freeze(c2);
@@ -136661,7 +139430,7 @@ function furnitureDesignContractHash(value) {
 var FURNITURE_FUNCTIONAL_CONTRACT = "limina.furniture-design-contract/v1";
 var GLB_MAGIC3 = 1179937895;
 var CHUNK_JSON3 = 1313821514;
-var object3 = (value, label4) => {
+var object4 = (value, label4) => {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error(`functional furniture: ${label4} must be an object`);
   return value;
 };
@@ -136669,15 +139438,15 @@ var string6 = (value, label4) => {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`functional furniture: ${label4} must be a non-empty string`);
   return value;
 };
-var finite13 = (value, label4) => {
+var finite14 = (value, label4) => {
   if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`functional furniture: ${label4} must be finite`);
   return value;
 };
 var vec35 = (value, label4, positive4 = false) => {
   if (!Array.isArray(value) || value.length !== 3) throw new Error(`functional furniture: ${label4} must be a vec3`);
-  const result = [finite13(value[0], `${label4}[0]`), finite13(value[1], `${label4}[1]`), finite13(value[2], `${label4}[2]`)];
-  if (positive4 && result.some((axis) => axis <= 0)) throw new Error(`functional furniture: ${label4} axes must be positive`);
-  return result;
+  const result2 = [finite14(value[0], `${label4}[0]`), finite14(value[1], `${label4}[1]`), finite14(value[2], `${label4}[2]`)];
+  if (positive4 && result2.some((axis) => axis <= 0)) throw new Error(`functional furniture: ${label4} axes must be positive`);
+  return result2;
 };
 var sameVec3 = (a2, b3) => a2.length === 3 && b3.length === 3 && a2.every((value, index) => value === b3[index]);
 function gltfJson3(bytes) {
@@ -136694,30 +139463,30 @@ function gltfJson3(bytes) {
   }
   if (offset !== bytes.byteLength || jsonBytes === void 0) throw new Error("functional furniture: malformed GLB chunks");
   try {
-    return object3(JSON.parse(new TextDecoder().decode(jsonBytes).trim()), "glTF root");
+    return object4(JSON.parse(new TextDecoder().decode(jsonBytes).trim()), "glTF root");
   } catch (error51) {
     throw new Error(`functional furniture: invalid glTF JSON: ${error51 instanceof Error ? error51.message : String(error51)}`);
   }
 }
 function parseFunctionalFurnitureContract(bytes) {
-  const json2 = gltfJson3(bytes), asset = object3(json2.asset, "asset"), extras = object3(asset.extras, "asset.extras");
-  const raw = extras.liminaFurnitureContract;
-  if (raw === void 0) throw new Error("functional furniture: missing asset.extras.liminaFurnitureContract");
-  const design = validateFurnitureDesignContract(raw);
+  const json2 = gltfJson3(bytes), asset = object4(json2.asset, "asset"), extras = object4(asset.extras, "asset.extras");
+  const raw3 = extras.liminaFurnitureContract;
+  if (raw3 === void 0) throw new Error("functional furniture: missing asset.extras.liminaFurnitureContract");
+  const design = validateFurnitureDesignContract(raw3);
   const embeddedHash = string6(extras.liminaFurnitureContractHash, "asset.extras.liminaFurnitureContractHash");
   const computedHash = furnitureDesignContractHash(design);
   if (embeddedHash !== computedHash) throw new Error(`functional furniture: embedded contract hash mismatch (${embeddedHash} != ${computedHash})`);
   const nodes = Array.isArray(json2.nodes) ? json2.nodes : [];
   const semantic = /* @__PURE__ */ new Map();
   for (let index = 0; index < nodes.length; index++) {
-    const node = object3(nodes[index], `nodes[${index}]`);
+    const node = object4(nodes[index], `nodes[${index}]`);
     if (node.extras === void 0) continue;
-    const nodeExtras = object3(node.extras, `nodes[${index}].extras`);
+    const nodeExtras = object4(node.extras, `nodes[${index}].extras`);
     if (nodeExtras["limina.id"] === void 0 && nodeExtras["limina.role"] === void 0) continue;
-    const id4 = string6(nodeExtras["limina.id"], `nodes[${index}].extras.limina.id`);
-    const role2 = string6(nodeExtras["limina.role"], `${id4}.limina.role`);
-    if (semantic.has(id4)) throw new Error(`functional furniture: duplicate semantic node id ${id4}`);
-    semantic.set(id4, { role: role2, node, extras: nodeExtras });
+    const id7 = string6(nodeExtras["limina.id"], `nodes[${index}].extras.limina.id`);
+    const role2 = string6(nodeExtras["limina.role"], `${id7}.limina.role`);
+    if (semantic.has(id7)) throw new Error(`functional furniture: duplicate semantic node id ${id7}`);
+    semantic.set(id7, { role: role2, node, extras: nodeExtras });
   }
   if (semantic.get(design.id)?.role !== design.role) throw new Error("functional furniture: furniture root semantic node is unresolved");
   const partIds = design.parts.map((part) => part.id);
@@ -136735,7 +139504,7 @@ function parseFunctionalFurnitureContract(bytes) {
     const position = vec35(item.extras["limina.position"], `${socket.id}.position`), facing = vec35(item.extras["limina.facing"], `${socket.id}.facing`);
     const length3 = Math.hypot(...facing);
     if (length3 < 1e-6 || Math.abs(length3 - 1) > 1e-5) throw new Error(`functional furniture: socket ${socket.id} facing must be normalized`);
-    const clearanceRadiusM = finite13(item.extras["limina.clearanceRadiusM"], `${socket.id}.clearanceRadiusM`);
+    const clearanceRadiusM = finite14(item.extras["limina.clearanceRadiusM"], `${socket.id}.clearanceRadiusM`);
     if (clearanceRadiusM <= 0) throw new Error(`functional furniture: socket ${socket.id} clearance must be positive`);
     if (!sameVec3(position, socket.position) || !sameVec3(facing, socket.facing) || clearanceRadiusM !== socket.clearanceRadiusM) throw new Error(`functional furniture: socket ${socket.id} node metadata drifted from its pinned contract`);
     return { id: socket.id, kind: socket.kind, position, facing, supportedBy, clearanceRadiusM };
@@ -136747,17 +139516,692 @@ function parseFunctionalFurnitureContract(bytes) {
     const center = vec35(item.extras["limina.center"], `${collider.id}.center`), halfExtents = vec35(item.extras["limina.halfExtents"], `${collider.id}.halfExtents`, true);
     if (!Array.isArray(item.extras["limina.covers"])) throw new Error(`functional furniture: collider ${collider.id} lacks semantic coverage`);
     const covers = item.extras["limina.covers"].map((value, index) => string6(value, `${collider.id}.covers[${index}]`));
-    if (covers.length === 0 || covers.some((id4) => !partSet.has(id4)) || new Set(covers).size !== covers.length) throw new Error(`functional furniture: collider ${collider.id} has malformed coverage`);
+    if (covers.length === 0 || covers.some((id7) => !partSet.has(id7)) || new Set(covers).size !== covers.length) throw new Error(`functional furniture: collider ${collider.id} has malformed coverage`);
     if (covers.length === partIds.length) throw new Error("functional furniture: generic whole-object collider is forbidden");
-    if (!sameVec3(center, collider.center) || !sameVec3(halfExtents, collider.halfExtents) || covers.length !== collider.covers.length || covers.some((id4, index) => id4 !== collider.covers[index])) throw new Error(`functional furniture: collider ${collider.id} node metadata drifted from its pinned contract`);
+    if (!sameVec3(center, collider.center) || !sameVec3(halfExtents, collider.halfExtents) || covers.length !== collider.covers.length || covers.some((id7, index) => id7 !== collider.covers[index])) throw new Error(`functional furniture: collider ${collider.id} node metadata drifted from its pinned contract`);
     return { id: collider.id, center, halfExtents, covers };
   });
   const expected = /* @__PURE__ */ new Set([design.id, ...partIds, ...sockets.map((socket) => socket.id), ...colliders.map((collider) => collider.id)]);
-  for (const [id4, item] of semantic) {
-    if ([design.role, "furniture-part", "socket", "collider"].includes(item.role) && !expected.has(id4)) throw new Error(`functional furniture: undeclared semantic node ${id4}`);
+  for (const [id7, item] of semantic) {
+    if ([design.role, "furniture-part", "socket", "collider"].includes(item.role) && !expected.has(id7)) throw new Error(`functional furniture: undeclared semantic node ${id7}`);
   }
   return { schema: FURNITURE_FUNCTIONAL_CONTRACT, furnitureId: design.id, role: design.role, contractHash: computedHash, partIds, sockets, colliders, design };
 }
+
+// src/skills/functional-settlement-residency.ts
+var MAX_REGISTERED_UNITS = 256;
+var MAX_ACTIVE_UNITS = 256;
+var MAX_RESIDENT_BYTES = 2 ** 40;
+var MAX_DISTANCE = 1e9;
+function compareText2(a2, b3) {
+  return a2 < b3 ? -1 : a2 > b3 ? 1 : 0;
+}
+function finiteDistance(value, label4) {
+  if (!Number.isFinite(value) || value < 0 || value > MAX_DISTANCE) throw new RangeError(`${label4} must be a bounded non-negative finite number`);
+  return value;
+}
+function boundedPositiveInteger(value, maximum, label4) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > maximum) throw new RangeError(`${label4} is outside its bounded integer range`);
+  return value;
+}
+function frozenSortedIds(ids) {
+  return Object.freeze([...ids].sort(compareText2));
+}
+var FunctionalSettlementResidencyManager = class {
+  #planId;
+  #units;
+  #loadDistance;
+  #keepDistance;
+  #maxActiveUnits;
+  #maxResidentBytes;
+  #stageTransition;
+  #resident = /* @__PURE__ */ new Map();
+  #explicit = /* @__PURE__ */ new Set();
+  #revision = 0;
+  #closed = false;
+  #updating = false;
+  constructor(plan, options) {
+    if (plan.placements.length < 1 || plan.placements.length > MAX_REGISTERED_UNITS) throw new RangeError("settlement residency plan has an invalid unit count");
+    this.#loadDistance = finiteDistance(options.loadDistance, "loadDistance");
+    this.#keepDistance = finiteDistance(options.keepDistance, "keepDistance");
+    if (this.#keepDistance < this.#loadDistance) throw new RangeError("keepDistance must be at least loadDistance");
+    this.#maxActiveUnits = boundedPositiveInteger(options.maxActiveUnits, MAX_ACTIVE_UNITS, "maxActiveUnits");
+    this.#maxResidentBytes = boundedPositiveInteger(options.maxResidentBytes, MAX_RESIDENT_BYTES, "maxResidentBytes");
+    this.#stageTransition = options.stageTransition;
+    this.#planId = plan.planId;
+    const units = /* @__PURE__ */ new Map();
+    for (const placement of plan.placements) {
+      if (placement.residency.policy !== "whole-building-atomic") throw new TypeError(`placement '${placement.placementId}' is not whole-building atomic`);
+      const residentBytes = options.estimateResidentBytes(placement);
+      boundedPositiveInteger(residentBytes, MAX_RESIDENT_BYTES, `resident bytes for '${placement.residency.unitId}'`);
+      if (units.has(placement.residency.unitId)) throw new TypeError(`duplicate residency unit '${placement.residency.unitId}'`);
+      const cellIds = frozenSortedIds(placement.residency.cellIds);
+      if (cellIds.length !== placement.residency.cellIds.length || cellIds.some((id7, index) => id7 !== placement.residency.cellIds[index])) {
+        throw new TypeError(`residency cells for '${placement.residency.unitId}' are not the parsed exact sorted inventory`);
+      }
+      units.set(placement.residency.unitId, Object.freeze({
+        unitId: placement.residency.unitId,
+        placementId: placement.placementId,
+        position: Object.freeze([...placement.position]),
+        cellIds,
+        residentBytes
+      }));
+    }
+    this.#units = units;
+  }
+  get revision() {
+    return this.#revision;
+  }
+  get closed() {
+    return this.#closed;
+  }
+  setExplicitInterest(unitIds) {
+    this.#assertOpen();
+    const next = /* @__PURE__ */ new Set();
+    for (const unitId of unitIds) {
+      if (!this.#units.has(unitId)) throw new RangeError(`explicit interest references unknown unit '${unitId}'`);
+      next.add(unitId);
+      if (next.size > MAX_REGISTERED_UNITS) throw new RangeError("explicit interest is unbounded");
+    }
+    this.#explicit = next;
+  }
+  /** Reconcile distance and explicit interest. Equal priority/distance is resolved by unit id. */
+  async update(position) {
+    this.#assertOpen();
+    if (this.#updating) throw new Error("settlement residency update is already in progress");
+    if (position.length !== 3 || !position.every(Number.isFinite)) throw new TypeError("residency position must contain three finite coordinates");
+    this.#updating = true;
+    try {
+      const candidates = [];
+      for (const unit of this.#units.values()) {
+        const dx = unit.position[0] - position[0];
+        const dy = unit.position[1] - position[1];
+        const dz = unit.position[2] - position[2];
+        const distance4 = Math.hypot(dx, dy, dz);
+        const explicit = this.#explicit.has(unit.unitId);
+        const resource = this.#resident.get(unit.unitId);
+        const threshold = resource === void 0 ? this.#loadDistance : this.#keepDistance;
+        if (explicit || distance4 <= threshold) candidates.push({ unit, resource, explicit, distance: distance4 });
+      }
+      candidates.sort((a2, b3) => Number(b3.explicit) - Number(a2.explicit) || a2.distance - b3.distance || compareText2(a2.unit.unitId, b3.unit.unitId));
+      const wanted = /* @__PURE__ */ new Set();
+      let bytes = 0;
+      for (const candidate of candidates) {
+        if (wanted.size >= this.#maxActiveUnits || bytes + candidate.unit.residentBytes > this.#maxResidentBytes) continue;
+        wanted.add(candidate.unit.unitId);
+        bytes += candidate.unit.residentBytes;
+      }
+      await this.#transition(wanted);
+      return this.snapshot();
+    } finally {
+      this.#updating = false;
+    }
+  }
+  snapshot() {
+    const residentUnitIds = frozenSortedIds(this.#resident.keys());
+    return Object.freeze({
+      planId: this.#planId,
+      residentUnitIds,
+      explicitInterestUnitIds: frozenSortedIds(this.#explicit),
+      residentBytes: this.#residentBytes(),
+      revision: this.#revision,
+      closed: this.#closed
+    });
+  }
+  /**
+   * Restore durable policy state after the runtime's concrete resources have been independently
+   * restored. The resolver is deliberately required for every resident unit: snapshot bytes may
+   * name ownership, but they cannot manufacture a live building/resource. Validation and resource
+   * resolution finish before manager state changes, so a stale or partial ownership table fails
+   * atomically.
+   */
+  restoreSnapshot(input, resolveResource) {
+    if (this.#updating) throw new Error("cannot restore settlement residency during an update");
+    const snapshot = this.#parseSnapshot(input);
+    const restored = /* @__PURE__ */ new Map();
+    for (const unitId of snapshot.residentUnitIds) {
+      const unit = this.#units.get(unitId);
+      restored.set(unitId, resolveResource(unit));
+    }
+    this.#resident = restored;
+    this.#explicit = new Set(snapshot.explicitInterestUnitIds);
+    this.#revision = snapshot.revision;
+    this.#closed = snapshot.closed;
+  }
+  /** Idempotent terminal teardown. A failed transaction leaves the manager open and unchanged. */
+  async close() {
+    if (this.#closed) return;
+    if (this.#updating) throw new Error("cannot close residency during an update");
+    this.#updating = true;
+    try {
+      await this.#transition(/* @__PURE__ */ new Set());
+      this.#explicit.clear();
+      this.#closed = true;
+    } finally {
+      this.#updating = false;
+    }
+  }
+  async #transition(wanted) {
+    if (wanted.size === this.#resident.size && [...wanted].every((id7) => this.#resident.has(id7))) return;
+    const load2 = [...wanted].filter((id7) => !this.#resident.has(id7)).map((id7) => this.#units.get(id7)).sort((a2, b3) => compareText2(a2.unitId, b3.unitId));
+    const unload = [...this.#resident.keys()].filter((id7) => !wanted.has(id7)).map((id7) => this.#units.get(id7)).sort((a2, b3) => compareText2(a2.unitId, b3.unitId));
+    const previous = new Map(this.#resident);
+    let transaction;
+    try {
+      transaction = await this.#stageTransition(Object.freeze({ load: Object.freeze(load2), unload: Object.freeze(unload), previous }));
+      const keys2 = frozenSortedIds(transaction.next.keys());
+      const expected = frozenSortedIds(wanted);
+      if (keys2.length !== expected.length || keys2.some((key, index) => key !== expected[index])) throw new Error("residency transaction returned a partial or unexpected whole-building set");
+      const validatedNext = new Map(transaction.next);
+      await transaction.commit();
+      this.#resident = validatedNext;
+      this.#revision++;
+    } catch (error51) {
+      if (transaction !== void 0) {
+        try {
+          await transaction.rollback();
+        } catch (rollbackError) {
+          throw new AggregateError([error51, rollbackError], "residency transition and rollback both failed");
+        }
+      }
+      throw error51;
+    }
+  }
+  #residentBytes() {
+    let total = 0;
+    for (const id7 of this.#resident.keys()) total += this.#units.get(id7).residentBytes;
+    return total;
+  }
+  #parseSnapshot(input) {
+    if (input === null || typeof input !== "object" || Array.isArray(input) || Object.getPrototypeOf(input) !== Object.prototype)
+      throw new TypeError("settlement residency snapshot must be a plain object");
+    const value = input;
+    const keys2 = Object.keys(value).sort();
+    const expected = ["closed", "explicitInterestUnitIds", "planId", "residentBytes", "residentUnitIds", "revision"];
+    if (keys2.length !== expected.length || keys2.some((key, index) => key !== expected[index]))
+      throw new TypeError("settlement residency snapshot keys drifted");
+    if (value.planId !== this.#planId) throw new TypeError("settlement residency snapshot plan authority drifted");
+    const ids = (candidate, label4) => {
+      if (!Array.isArray(candidate) || candidate.length > MAX_REGISTERED_UNITS)
+        throw new TypeError(`settlement residency snapshot ${label4} is not a bounded array`);
+      let previous;
+      for (const unitId of candidate) {
+        if (typeof unitId !== "string" || !this.#units.has(unitId) || previous !== void 0 && previous >= unitId)
+          throw new TypeError(`settlement residency snapshot ${label4} is not an exact sorted known-unit inventory`);
+        previous = unitId;
+      }
+      return Object.freeze([...candidate]);
+    };
+    const residentUnitIds = ids(value.residentUnitIds, "resident units");
+    const explicitInterestUnitIds = ids(value.explicitInterestUnitIds, "explicit interest");
+    if (!Number.isSafeInteger(value.revision) || value.revision < 0)
+      throw new TypeError("settlement residency snapshot revision is invalid");
+    if (typeof value.closed !== "boolean") throw new TypeError("settlement residency snapshot closed state is invalid");
+    let residentBytes = 0;
+    for (const unitId of residentUnitIds) residentBytes += this.#units.get(unitId).residentBytes;
+    if (value.residentBytes !== residentBytes) throw new TypeError("settlement residency snapshot resident-byte accounting drifted");
+    if (residentUnitIds.length > this.#maxActiveUnits || residentBytes > this.#maxResidentBytes)
+      throw new TypeError("settlement residency snapshot exceeds the configured release budget");
+    if (value.closed && (residentUnitIds.length !== 0 || explicitInterestUnitIds.length !== 0))
+      throw new TypeError("closed settlement residency snapshot retains live interest or ownership");
+    return Object.freeze({
+      planId: this.#planId,
+      residentUnitIds,
+      explicitInterestUnitIds,
+      residentBytes,
+      revision: value.revision,
+      closed: value.closed
+    });
+  }
+  #assertOpen() {
+    if (this.#closed) throw new Error("settlement residency manager is closed");
+  }
+};
+
+// src/skills/functional-settlement-runtime-residency.ts
+function settlementId(namespace, planId, unitId) {
+  if (!/^[a-z0-9][a-z0-9._/-]{0,79}$/.test(namespace) || namespace.split("/").some((part) => part === "" || part === "." || part === ".."))
+    throw new TypeError("functional settlement residency namespace is not a bounded safe id");
+  return `residency/${sha256(canonicalCompilerJson({ namespace, planId, unitId })).slice(0, 32)}`;
+}
+function result(response, operation) {
+  if (!response.success) throw new Error(`functional settlement residency: ${operation} failed: ${response.error?.code ?? "unknown"}: ${response.error?.message ?? "unknown failure"}`);
+  return response.result;
+}
+function createFunctionalSettlementRuntimeResidency(registry2, placementManager, input) {
+  const catalog = parseFunctionalBuildingCatalog(input.catalog);
+  const atlas = resolveFunctionalSettlementAtlas(input.plan, catalog, input.worldMap, { connectorToleranceM: input.connectorToleranceM ?? 0 });
+  const entryById = new Map(catalog.entries.map((entry) => [entry.entryId, entry]));
+  const placementById = new Map(atlas.plan.placements.map((placement) => [placement.placementId, placement]));
+  const idByUnit = new Map(atlas.plan.placements.map((placement) => [
+    placement.residency.unitId,
+    settlementId(input.namespace, atlas.plan.planId, placement.residency.unitId)
+  ]));
+  const invoke = (name, value) => registry2.invoke(name, value, input.invokeBase());
+  const loadOne = async (unitId, placementId) => {
+    const id7 = idByUnit.get(unitId);
+    result(await invoke("settlement.placeFunctional", {
+      settlementId: id7,
+      catalog,
+      plan: atlas.plan,
+      worldMap: input.worldMap,
+      connectorToleranceM: input.connectorToleranceM ?? 0,
+      placementIds: [placementId]
+    }), `load '${unitId}'`);
+    const handle = placementManager.get(id7);
+    if (handle === void 0 || handle.buildings.length !== 1 || handle.buildings[0].placementId !== placementId)
+      throw new Error(`functional settlement residency: placement manager returned partial ownership for '${unitId}'`);
+    if (input.furnishingLifecycle !== void 0) {
+      try {
+        await input.furnishingLifecycle.furnish(handle.buildings[0]);
+      } catch (error51) {
+        const failures = [error51];
+        try {
+          result(await invoke("settlement.destroyFunctional", { settlementId: id7 }), `cleanup unfurnished '${unitId}'`);
+        } catch (failure) {
+          failures.push(failure);
+        }
+        if (failures.length > 1) throw new AggregateError(failures, `functional settlement residency: furnishing and building cleanup failed for '${unitId}'`);
+        throw error51;
+      }
+    }
+    return { unitId, placementId, settlementId: id7, building: handle.buildings[0] };
+  };
+  const destroyOne = async (resource) => {
+    const output3 = result(await invoke("settlement.destroyFunctional", { settlementId: resource.settlementId }), `unload '${resource.unitId}'`);
+    if (output3.buildingsRemoved !== 1) throw new Error(`functional settlement residency: unload '${resource.unitId}' did not destroy exactly one whole building`);
+    input.furnishingLifecycle?.ownerDestroyed(resource.placementId);
+  };
+  const stageTransition = async (delta) => {
+    const staged = [];
+    try {
+      for (const unit of delta.load) staged.push(await loadOne(unit.unitId, unit.placementId));
+    } catch (error51) {
+      const failures = [error51];
+      for (const resource of [...staged].reverse()) try {
+        await destroyOne(resource);
+      } catch (failure) {
+        failures.push(failure);
+      }
+      if (failures.length > 1) throw new AggregateError(failures, "functional settlement residency: load staging and cleanup failed");
+      throw error51;
+    }
+    const next = new Map(delta.previous);
+    for (const unit of delta.unload) next.delete(unit.unitId);
+    for (const resource of staged) next.set(resource.unitId, resource);
+    const destroyed = [];
+    let rolledBack = false;
+    const transaction = {
+      next,
+      commit: async () => {
+        for (const unit of delta.unload) {
+          const resource = delta.previous.get(unit.unitId);
+          if (resource === void 0) throw new Error(`functional settlement residency: missing prior resource '${unit.unitId}'`);
+          await destroyOne(resource);
+          destroyed.push(resource);
+        }
+      },
+      rollback: async () => {
+        if (rolledBack) return;
+        rolledBack = true;
+        const failures = [];
+        for (const resource of [...staged].reverse()) {
+          if (!placementManager.has(resource.settlementId)) continue;
+          try {
+            await destroyOne(resource);
+          } catch (failure) {
+            failures.push(failure);
+          }
+        }
+        for (const resource of destroyed) {
+          try {
+            const restored = await loadOne(resource.unitId, resource.placementId);
+            resource.building = restored.building;
+          } catch (failure) {
+            failures.push(failure);
+          }
+        }
+        if (failures.length) throw new AggregateError(failures, "functional settlement residency: rollback could not restore whole-building ownership");
+      }
+    };
+    return transaction;
+  };
+  return new FunctionalSettlementResidencyManager(atlas.plan, {
+    loadDistance: input.loadDistance,
+    keepDistance: input.keepDistance,
+    maxActiveUnits: input.maxActiveUnits,
+    maxResidentBytes: input.maxResidentBytes,
+    estimateResidentBytes: (placement) => {
+      const planPlacement = placementById.get(placement.placementId), entry = entryById.get(planPlacement.catalogEntryId);
+      return entry.asset.byteLength;
+    },
+    stageTransition
+  });
+}
+function createApprovedFunctionalSettlementRuntimeResidency(registry2, placementManager, input) {
+  const publication = assertApprovedFunctionalBuildingPublication(input.publication);
+  return createFunctionalSettlementRuntimeResidency(registry2, placementManager, {
+    namespace: input.namespace,
+    catalog: publication.catalog,
+    plan: input.plan,
+    worldMap: input.worldMap,
+    connectorToleranceM: input.connectorToleranceM,
+    loadDistance: input.loadDistance,
+    keepDistance: input.keepDistance,
+    maxActiveUnits: input.maxActiveUnits,
+    maxResidentBytes: input.maxResidentBytes,
+    furnishingLifecycle: input.furnishingLifecycle,
+    invokeBase: input.invokeBase
+  });
+}
+function createReleasedFunctionalSettlementRuntimeResidency(registry2, placementManager, input) {
+  const loaded = assertApprovedFunctionalSettlementRelease(input.release);
+  return createApprovedFunctionalSettlementRuntimeResidency(registry2, placementManager, {
+    namespace: input.namespace,
+    publication: loaded.publication,
+    plan: loaded.plan,
+    worldMap: loaded.worldMap,
+    connectorToleranceM: 0,
+    loadDistance: loaded.runtime.loadDistance,
+    keepDistance: loaded.runtime.keepDistance,
+    maxActiveUnits: loaded.runtime.maxActiveUnits,
+    maxResidentBytes: loaded.runtime.maxResidentBytes,
+    invokeBase: input.invokeBase
+  });
+}
+
+// src/skills/functional-settlement-snapshot.ts
+var RELEASED_FUNCTIONAL_SETTLEMENT_SNAPSHOT_SCHEMA = "limina.released-functional-settlement-snapshot/v1";
+var hashSchema = external_exports.string().regex(/^sha256:[0-9a-f]{64}$/);
+var idSchema = external_exports.string().min(1).max(160).regex(/^[a-z0-9][a-z0-9._/-]{0,159}$/);
+var namespaceSchema = external_exports.string().min(1).max(80).regex(/^[a-z0-9][a-z0-9._/-]{0,79}$/);
+var residencySnapshotSchema = external_exports.object({
+  planId: idSchema,
+  residentUnitIds: external_exports.array(idSchema).max(256),
+  explicitInterestUnitIds: external_exports.array(idSchema).max(256),
+  residentBytes: external_exports.number().int().nonnegative(),
+  revision: external_exports.number().int().nonnegative(),
+  closed: external_exports.boolean()
+});
+var releasedSnapshotSchema = external_exports.object({
+  schema: external_exports.literal(RELEASED_FUNCTIONAL_SETTLEMENT_SNAPSHOT_SCHEMA),
+  release: external_exports.object({ releaseId: idSchema, settlementId: idSchema, closureHash: hashSchema, planId: idSchema }),
+  namespace: namespaceSchema,
+  runtime: external_exports.object({
+    loadDistance: external_exports.number().nonnegative(),
+    keepDistance: external_exports.number().nonnegative(),
+    maxActiveUnits: external_exports.number().int().positive(),
+    maxResidentBytes: external_exports.number().int().positive()
+  }),
+  residency: residencySnapshotSchema,
+  ownership: external_exports.array(external_exports.object({
+    unitId: idSchema,
+    placementId: idSchema,
+    settlementId: idSchema,
+    buildingHash: hashSchema
+  })).max(256)
+});
+function compareText3(a2, b3) {
+  return a2 < b3 ? -1 : a2 > b3 ? 1 : 0;
+}
+function buildingHash(building) {
+  return `sha256:${sha256(canonicalCompilerJson(building))}`;
+}
+function runtimeJson(runtime) {
+  return canonicalCompilerJson({
+    loadDistance: runtime.loadDistance,
+    keepDistance: runtime.keepDistance,
+    maxActiveUnits: runtime.maxActiveUnits,
+    maxResidentBytes: runtime.maxResidentBytes
+  });
+}
+function createReleasedFunctionalSettlementSnapshotParticipant(input) {
+  const loaded = assertApprovedFunctionalSettlementRelease(input.release);
+  if (!namespaceSchema.safeParse(input.namespace).success || input.namespace.split("/").some((part) => part === "" || part === "." || part === ".."))
+    throw new TypeError("released functional settlement snapshot namespace is not a bounded safe id");
+  const planId = loaded.plan.planId;
+  const releaseId = loaded.release.releaseId;
+  const releaseSettlementId = loaded.release.settlementId;
+  const closureHash = loaded.release.closureHash;
+  const placementByUnit = new Map(loaded.plan.placements.map((placement) => [placement.residency.unitId, placement]));
+  const settlementIdByUnit = new Map([...placementByUnit.keys()].map((unitId) => [
+    unitId,
+    `residency/${sha256(canonicalCompilerJson({ namespace: input.namespace, planId, unitId })).slice(0, 32)}`
+  ]));
+  const participantKey = `functionalSettlements.residency.${sha256(canonicalCompilerJson({ releaseId, closureHash, namespace: input.namespace })).slice(0, 24)}`;
+  const resolveOwnership = (unit, claim2) => {
+    const placement = placementByUnit.get(unit.unitId);
+    const settlementId2 = settlementIdByUnit.get(unit.unitId);
+    if (placement === void 0 || settlementId2 === void 0 || placement.placementId !== unit.placementId)
+      throw new Error(`released functional settlement snapshot unit '${unit.unitId}' drifted from release authority`);
+    if (claim2 !== void 0 && (claim2.unitId !== unit.unitId || claim2.placementId !== unit.placementId || claim2.settlementId !== settlementId2))
+      throw new Error(`released functional settlement snapshot ownership claim '${unit.unitId}' drifted`);
+    const handle = input.placementManager.get(settlementId2);
+    if (handle === void 0 || handle.planId !== planId || handle.worldMapHash !== loaded.plan.atlas.worldMapHash || handle.buildings.length !== 1)
+      throw new Error(`released functional settlement snapshot has no exact whole-building ownership for '${unit.unitId}'`);
+    const building = handle.buildings[0];
+    if (building.placementId !== unit.placementId || building.residencyUnitId !== unit.unitId || building.catalogEntryId !== placement.catalogEntryId || buildingHash(building) !== (claim2?.buildingHash ?? buildingHash(building)))
+      throw new Error(`released functional settlement snapshot building ownership '${unit.unitId}' drifted`);
+    return { unitId: unit.unitId, placementId: unit.placementId, settlementId: settlementId2, building };
+  };
+  const assertNoUnclaimedOwnership = (residentIds) => {
+    for (const [unitId, settlementId2] of settlementIdByUnit) {
+      if (input.placementManager.has(settlementId2) !== residentIds.has(unitId))
+        throw new Error(`released functional settlement snapshot has unpaired runtime ownership for '${unitId}'`);
+    }
+  };
+  const capture = () => {
+    const residency = input.residency.snapshot();
+    if (residency.planId !== planId) throw new Error("released functional settlement snapshot plan authority drifted");
+    const residentIds = new Set(residency.residentUnitIds);
+    assertNoUnclaimedOwnership(residentIds);
+    const ownership = residency.residentUnitIds.map((unitId) => {
+      const placement = placementByUnit.get(unitId);
+      const resource = resolveOwnership({
+        unitId,
+        placementId: placement.placementId,
+        position: placement.position,
+        cellIds: placement.residency.cellIds,
+        residentBytes: 1
+      });
+      return Object.freeze({
+        unitId,
+        placementId: placement.placementId,
+        settlementId: resource.settlementId,
+        buildingHash: buildingHash(resource.building)
+      });
+    });
+    return Object.freeze({
+      schema: RELEASED_FUNCTIONAL_SETTLEMENT_SNAPSHOT_SCHEMA,
+      release: Object.freeze({ releaseId, settlementId: releaseSettlementId, closureHash, planId }),
+      namespace: input.namespace,
+      runtime: Object.freeze({ ...loaded.runtime }),
+      residency,
+      ownership: Object.freeze(ownership)
+    });
+  };
+  const restore = (value) => {
+    const snapshot = releasedSnapshotSchema.parse(value);
+    if (snapshot.release.releaseId !== releaseId || snapshot.release.settlementId !== releaseSettlementId || snapshot.release.closureHash !== closureHash || snapshot.release.planId !== planId || snapshot.namespace !== input.namespace)
+      throw new Error("released functional settlement snapshot release authority drifted");
+    if (runtimeJson(snapshot.runtime) !== runtimeJson(loaded.runtime))
+      throw new Error("released functional settlement snapshot budget authority drifted");
+    if (snapshot.residency.planId !== planId || snapshot.ownership.length !== snapshot.residency.residentUnitIds.length)
+      throw new Error("released functional settlement snapshot residency/ownership inventory drifted");
+    const claims = new Map(snapshot.ownership.map((claim2) => [claim2.unitId, claim2]));
+    const claimIds = [...claims.keys()].sort(compareText3);
+    if (claims.size !== snapshot.ownership.length || claimIds.some((unitId, index) => unitId !== snapshot.residency.residentUnitIds[index]))
+      throw new Error("released functional settlement snapshot ownership is not the exact resident inventory");
+    const residentIds = new Set(snapshot.residency.residentUnitIds);
+    assertNoUnclaimedOwnership(residentIds);
+    input.residency.restoreSnapshot(snapshot.residency, (unit) => resolveOwnership(unit, claims.get(unit.unitId)));
+  };
+  return Object.freeze({ key: participantKey, schema: releasedSnapshotSchema, capture, restore });
+}
+
+// src/skills/functional-settlement-live-host.ts
+var SAFE_NAMESPACE = /^[a-z0-9][a-z0-9._/-]{0,79}$/;
+function safeNamespace(value) {
+  if (!SAFE_NAMESPACE.test(value) || value.split("/").some((part) => part === "" || part === "." || part === "..")) {
+    throw new TypeError("functional settlement live host namespace is not a bounded safe id");
+  }
+  return value;
+}
+function containsTile(tile, x3, z4) {
+  const halfX = tile.scale[0] / 2;
+  const halfZ = tile.scale[2] / 2;
+  return x3 >= tile.origin[0] - halfX && x3 <= tile.origin[0] + halfX && z4 >= tile.origin[2] - halfZ && z4 <= tile.origin[2] + halfZ;
+}
+function createResidentFunctionalSettlementTerrainSampler(terrain) {
+  return (x3, z4) => {
+    if (!Number.isFinite(x3) || !Number.isFinite(z4)) return void 0;
+    const layerSamples = [];
+    for (const layer of terrain.layers.values()) {
+      if (containsTile(layer.tile, x3, z4)) layerSamples.push(sampleTileSurfaceHeight(layer.tile, x3, z4));
+    }
+    if (layerSamples.length > 0) {
+      if (layerSamples.some((sample3) => !Number.isFinite(sample3))) return void 0;
+      return layerSamples.every((sample3) => Object.is(sample3, layerSamples[0])) ? layerSamples[0] : void 0;
+    }
+    const regionSamples = [];
+    const tx = Math.floor(x3 / TILE_SIZE);
+    const tz = Math.floor(z4 / TILE_SIZE);
+    for (const region of terrain.regions.values()) {
+      let resident = false;
+      for (const tile of region.tiles.values()) if (tile.tx === tx && tile.tz === tz) {
+        resident = true;
+        break;
+      }
+      if (!resident) continue;
+      regionSamples.push(terrain.source.sampleHeight(region.seed, x3, z4, region.lod, region.hints));
+    }
+    if (regionSamples.length === 0 || regionSamples.some((sample3) => !Number.isFinite(sample3))) return void 0;
+    return regionSamples.every((sample3) => Object.is(sample3, regionSamples[0])) ? regionSamples[0] : void 0;
+  };
+}
+function rawHash2(bytes) {
+  return `sha256:${sha256(bytes)}`;
+}
+var LiveSession = class {
+  releaseId;
+  settlementId;
+  namespace;
+  #residency;
+  #onClosed;
+  #closed = false;
+  constructor(release, namespace, residency, onClosed) {
+    this.releaseId = release.release.releaseId;
+    this.settlementId = release.release.settlementId;
+    this.namespace = namespace;
+    this.#residency = residency;
+    this.#onClosed = onClosed;
+  }
+  get closed() {
+    return this.#closed;
+  }
+  snapshot() {
+    return this.#residency.snapshot();
+  }
+  setExplicitInterest(unitIds) {
+    if (this.#closed) throw new Error("functional settlement live session is closed");
+    this.#residency.setExplicitInterest(unitIds);
+  }
+  update(position) {
+    if (this.#closed) return Promise.reject(new Error("functional settlement live session is closed"));
+    return this.#residency.update(position);
+  }
+  async close() {
+    if (this.#closed) return;
+    await this.#residency.close();
+    this.#onClosed();
+    this.#closed = true;
+  }
+};
+var FunctionalSettlementReleaseHost = class {
+  #registry;
+  #assets;
+  #placementManager;
+  #snapshotParticipants;
+  #sessions = /* @__PURE__ */ new Map();
+  constructor(registry2, assets, placementManager, snapshotParticipants) {
+    this.#registry = registry2;
+    this.#assets = assets;
+    this.#placementManager = placementManager;
+    this.#snapshotParticipants = snapshotParticipants;
+  }
+  get size() {
+    return this.#sessions.size;
+  }
+  get(namespace) {
+    return this.#sessions.get(namespace);
+  }
+  load(input) {
+    const namespace = safeNamespace(input.namespace);
+    if (this.#sessions.has(namespace)) throw new Error(`functional settlement live host already owns namespace '${namespace}'`);
+    if (typeof input.read !== "function" || typeof input.invokeBase !== "function") throw new TypeError("functional settlement live host requires exact reader and invocation authority");
+    const cache3 = /* @__PURE__ */ new Map();
+    const read = (path2) => {
+      const prior = cache3.get(path2);
+      if (prior !== void 0) return prior;
+      const bytes = input.read(path2);
+      if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) throw new Error(`functional settlement live host could not read exact bytes '${path2}'`);
+      cache3.set(path2, bytes);
+      return bytes;
+    };
+    const release = loadApprovedFunctionalSettlementRelease(read(input.releasePath), read);
+    const warm = (assetId, path2, expectedRawHash) => {
+      const exact3 = read(path2);
+      if (rawHash2(exact3) !== expectedRawHash) throw new Error(`functional settlement live host runtime asset '${assetId}' drifted after release verification`);
+      if (this.#assets.has(assetId)) {
+        const resident = this.#assets.resolve(assetId).bytes;
+        if (resident.byteLength !== exact3.byteLength || rawHash2(resident) !== expectedRawHash) {
+          throw new Error(`functional settlement live host AssetRegistry already contains conflicting bytes for '${assetId}'`);
+        }
+      } else {
+        this.#assets.seed(assetId, exact3);
+      }
+    };
+    for (const entry of release.publication.catalog.entries) {
+      const path2 = release.publication.asset.path;
+      if (path2 !== `assets/${entry.asset.assetId}`) throw new Error(`functional settlement live host publication path drifted for '${entry.asset.assetId}'`);
+      warm(entry.asset.assetId, path2, entry.asset.hash);
+    }
+    for (const site of release.release.sites) warm(site.path, site.path, site.sha256);
+    const residency = createReleasedFunctionalSettlementRuntimeResidency(this.#registry, this.#placementManager, {
+      namespace,
+      release,
+      invokeBase: input.invokeBase
+    });
+    const participant2 = createReleasedFunctionalSettlementSnapshotParticipant({
+      namespace,
+      release,
+      residency,
+      placementManager: this.#placementManager
+    });
+    this.#snapshotParticipants.register(participant2);
+    let session;
+    session = new LiveSession(release, namespace, residency, () => {
+      if (this.#sessions.get(namespace) !== session) throw new Error(`functional settlement live host lost ownership of namespace '${namespace}'`);
+      if (!this.#snapshotParticipants.unregister(participant2.key, participant2)) {
+        throw new Error(`functional settlement live host lost snapshot participant '${participant2.key}'`);
+      }
+      this.#sessions.delete(namespace);
+    });
+    this.#sessions.set(namespace, session);
+    return session;
+  }
+  async close() {
+    const failures = [];
+    for (const session of [...this.#sessions.values()].sort((a2, b3) => a2.namespace.localeCompare(b3.namespace))) {
+      try {
+        await session.close();
+      } catch (error51) {
+        failures.push(error51);
+      }
+    }
+    if (failures.length) throw new AggregateError(failures, "functional settlement live host teardown failed");
+  }
+};
 
 // src/skills/furniture.ts
 var Vec317 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
@@ -137131,7 +140575,7 @@ function registerDirectorSkills(registry2) {
 }
 
 // src/skills/ability.ts
-var castKey = (entity, id4) => `${entity}\0${id4}`;
+var castKey = (entity, id7) => `${entity}\0${id7}`;
 var AbilityManager = class {
   constructor(stats) {
     this.stats = stats;
@@ -137139,32 +140583,32 @@ var AbilityManager = class {
   stats;
   defs = /* @__PURE__ */ new Map();
   lastCast = /* @__PURE__ */ new Map();
-  define(id4, def) {
-    this.defs.set(id4, def);
+  define(id7, def) {
+    this.defs.set(id7, def);
   }
-  has(id4) {
-    return this.defs.has(id4);
+  has(id7) {
+    return this.defs.has(id7);
   }
   /** Ticks remaining before `entity` can cast `id` again at `tick` (0 = ready / never cast). */
-  cooldownRemaining(entity, id4, tick) {
-    const def = this.defs.get(id4);
+  cooldownRemaining(entity, id7, tick) {
+    const def = this.defs.get(id7);
     if (def === void 0) return 0;
-    const last = this.lastCast.get(castKey(entity, id4));
+    const last = this.lastCast.get(castKey(entity, id7));
     if (last === void 0) return 0;
     const rem = def.cooldownTicks - (tick - last);
     return rem > 0 ? rem : 0;
   }
   /** True iff the cooldown is elapsed (resource is NOT considered here — see cast). */
-  isReady(entity, id4, tick) {
-    return this.has(id4) && this.cooldownRemaining(entity, id4, tick) === 0;
+  isReady(entity, id7, tick) {
+    return this.has(id7) && this.cooldownRemaining(entity, id7, tick) === 0;
   }
   /** Attempt a cast. Checks cooldown FIRST, then the resource cost; on success stamps the cast
    *  tick and deducts the resource. Returns a structured reason on every failure mode. */
-  cast(entity, id4, tick) {
-    const def = this.defs.get(id4);
-    if (def === void 0) return { ok: false, reason: `unknown ability "${id4}" (define it first)` };
-    const rem = this.cooldownRemaining(entity, id4, tick);
-    if (rem > 0) return { ok: false, reason: `"${id4}" is on cooldown`, cooldownRemaining: rem };
+  cast(entity, id7, tick) {
+    const def = this.defs.get(id7);
+    if (def === void 0) return { ok: false, reason: `unknown ability "${id7}" (define it first)` };
+    const rem = this.cooldownRemaining(entity, id7, tick);
+    if (rem > 0) return { ok: false, reason: `"${id7}" is on cooldown`, cooldownRemaining: rem };
     let spent = 0;
     if (def.resourceStat !== void 0 && def.cost !== void 0 && def.cost > 0) {
       const stat = this.stats?.getStat(entity, def.resourceStat);
@@ -137173,14 +140617,14 @@ var AbilityManager = class {
       this.stats?.modifyStat(entity, def.resourceStat, -def.cost);
       spent = def.cost;
     }
-    this.lastCast.set(castKey(entity, id4), tick);
+    this.lastCast.set(castKey(entity, id7), tick);
     return { ok: true, spent };
   }
   /** Deterministic capture of defs + cooldown stamps, key-sorted (snapshot participant, H2). */
   captureSnapshot() {
     const byString = (a2, b3) => a2 < b3 ? -1 : a2 > b3 ? 1 : 0;
     return {
-      defs: [...this.defs.entries()].sort((a2, b3) => byString(a2[0], b3[0])).map(([id4, d2]) => ({ id: id4, ...d2 })),
+      defs: [...this.defs.entries()].sort((a2, b3) => byString(a2[0], b3[0])).map(([id7, d2]) => ({ id: id7, ...d2 })),
       lastCast: [...this.lastCast.entries()].sort((a2, b3) => byString(a2[0], b3[0])).map(([key, tick]) => ({ key, tick }))
     };
   }
@@ -137270,18 +140714,18 @@ var ClipAuthor = class {
   clips = /* @__PURE__ */ new Map();
   /** Register (or replace) a clip. Each track's keys are sorted ascending by time so sampling is
    *  order-independent for the author. */
-  define(id4, duration3, loop, tracks) {
-    let keys = 0;
+  define(id7, duration3, loop, tracks) {
+    let keys2 = 0;
     const norm = tracks.map((tr) => {
       const sorted = [...tr.keys].sort((a2, b3) => a2.t - b3.t);
-      keys += sorted.length;
+      keys2 += sorted.length;
       return { property: tr.property, interp: tr.interp, keys: sorted };
     });
-    this.clips.set(id4, { duration: duration3, loop, tracks: norm });
-    return { tracks: norm.length, keys };
+    this.clips.set(id7, { duration: duration3, loop, tracks: norm });
+    return { tracks: norm.length, keys: keys2 };
   }
-  has(id4) {
-    return this.clips.has(id4);
+  has(id7) {
+    return this.clips.has(id7);
   }
   /** Map a raw time onto the clip's playable range: wrap when looping, else clamp to [0,duration]. */
   effectiveTime(clip, t3) {
@@ -137289,21 +140733,21 @@ var ClipAuthor = class {
     return t3 < 0 ? 0 : t3 > clip.duration ? clip.duration : t3;
   }
   sampleTrack(tr, tt) {
-    const keys = tr.keys;
-    if (keys.length === 0) return 0;
-    if (tt <= keys[0].t) return keys[0].v;
-    if (tt >= keys[keys.length - 1].t) return keys[keys.length - 1].v;
+    const keys2 = tr.keys;
+    if (keys2.length === 0) return 0;
+    if (tt <= keys2[0].t) return keys2[0].v;
+    if (tt >= keys2[keys2.length - 1].t) return keys2[keys2.length - 1].v;
     let i2 = 0;
-    while (i2 < keys.length - 1 && keys[i2 + 1].t <= tt) i2++;
-    const k0 = keys[i2], k1 = keys[i2 + 1];
+    while (i2 < keys2.length - 1 && keys2[i2 + 1].t <= tt) i2++;
+    const k0 = keys2[i2], k1 = keys2[i2 + 1];
     if (tr.interp === "step") return k0.v;
     const span = k1.t - k0.t;
     const f2 = span > 0 ? (tt - k0.t) / span : 0;
     return lerp6(k0.v, k1.v, f2);
   }
   /** Sample every track at time `t`, returning property → value. null if the clip is unknown. */
-  sample(id4, t3) {
-    const clip = this.clips.get(id4);
+  sample(id7, t3) {
+    const clip = this.clips.get(id7);
     if (clip === void 0) return null;
     const tt = this.effectiveTime(clip, t3);
     const out = {};
@@ -137370,8 +140814,8 @@ var QuestManager = class {
   define(def) {
     this.definitions.set(def.id, def);
   }
-  getDefinition(id4) {
-    return this.definitions.get(id4);
+  getDefinition(id7) {
+    return this.definitions.get(id7);
   }
   getInstance(entity, questId) {
     return this.instances.get(entity)?.find((q3) => q3.questId === questId);
@@ -137779,8 +141223,8 @@ var StatsManager = class {
     const stat = es.stats.get(statName);
     if (stat === void 0) return void 0;
     const prev = stat.value;
-    const raw = prev + delta;
-    stat.value = clamp5 ? Math.max(stat.minValue, Math.min(stat.maxValue, raw)) : raw;
+    const raw3 = prev + delta;
+    stat.value = clamp5 ? Math.max(stat.minValue, Math.min(stat.maxValue, raw3)) : raw3;
     const fired = stat.value <= stat.minValue && prev > stat.minValue && stat.onZero !== void 0 ? stat.onZero : null;
     return { value: stat.value, fired };
   }
@@ -137795,9 +141239,9 @@ var StatsManager = class {
   applyStatusEffect(entity, effect) {
     const es = this.entityStats.get(entity);
     if (es === void 0) return "";
-    const id4 = `status_${this.seq++}`;
-    es.statusEffects.push({ ...effect, id: id4, elapsed: 0 });
-    return id4;
+    const id7 = `status_${this.seq++}`;
+    es.statusEffects.push({ ...effect, id: id7, elapsed: 0 });
+    return id7;
   }
   removeStatusEffect(entity, effectId) {
     const es = this.entityStats.get(entity);
@@ -138091,10 +141535,10 @@ function registerCombatSkills(registry2, opts) {
     input: applyDamageInput,
     output: external_exports.object({ damage: external_exports.number(), remaining: external_exports.number(), killed: external_exports.boolean() }),
     handler: (input, ctx) => {
-      const { fired, ...result } = combatMgr.applyDamage(input.targetEntity, input.amount, input.type, ctx.tick, input.attackerEntity);
-      ctx.emit("damage.applied", { target: input.targetEntity, amount: input.amount, type: input.type, attacker: input.attackerEntity, ...input.meta, ...result });
+      const { fired, ...result2 } = combatMgr.applyDamage(input.targetEntity, input.amount, input.type, ctx.tick, input.attackerEntity);
+      ctx.emit("damage.applied", { target: input.targetEntity, amount: input.amount, type: input.type, attacker: input.attackerEntity, ...input.meta, ...result2 });
       fireOnZero(ctx, input.targetEntity, "hp", fired);
-      return result;
+      return result2;
     }
   };
   const heal = {
@@ -138106,9 +141550,9 @@ function registerCombatSkills(registry2, opts) {
     input: healInput,
     output: external_exports.object({ healed: external_exports.number(), remaining: external_exports.number() }),
     handler: (input, ctx) => {
-      const result = combatMgr.heal(input.targetEntity, input.amount);
-      ctx.emit("damage.healed", { target: input.targetEntity, amount: input.amount, ...input.meta, ...result });
-      return result;
+      const result2 = combatMgr.heal(input.targetEntity, input.amount);
+      ctx.emit("damage.healed", { target: input.targetEntity, amount: input.amount, ...input.meta, ...result2 });
+      return result2;
     }
   };
   const applyStatus = {
@@ -138120,7 +141564,7 @@ function registerCombatSkills(registry2, opts) {
     input: applyStatusInput,
     output: external_exports.object({ effectId: external_exports.string() }),
     handler: (input, ctx) => {
-      const id4 = statsMgr.applyStatusEffect(input.targetEntity, {
+      const id7 = statsMgr.applyStatusEffect(input.targetEntity, {
         type: input.type,
         duration: input.duration,
         magnitude: input.magnitude,
@@ -138130,8 +141574,8 @@ function registerCombatSkills(registry2, opts) {
         onTick: input.onTick,
         config: input.config
       });
-      ctx.emit("status.applied", { target: input.targetEntity, type: input.type, duration: input.duration, effectId: id4, ...input.meta });
-      return { effectId: id4 };
+      ctx.emit("status.applied", { target: input.targetEntity, type: input.type, duration: input.duration, effectId: id7, ...input.meta });
+      return { effectId: id7 };
     }
   };
   const removeStatus = {
@@ -138178,10 +141622,10 @@ function registerCombatSkills(registry2, opts) {
       const critMult = num(input.config?.critMultiplier, 2);
       const crit = critChance > 0 && critRoll(ctx.tick, input.attackerEntity, input.targetEntity) < critChance;
       const dmg = crit ? input.damage * critMult : input.damage;
-      const { fired, ...result } = combatMgr.applyDamage(input.targetEntity, dmg, "physical", ctx.tick, input.attackerEntity);
-      ctx.emit("combat.melee", { attacker: input.attackerEntity, target: input.targetEntity, knockback: input.knockback, crit, ...input.meta, ...result });
+      const { fired, ...result2 } = combatMgr.applyDamage(input.targetEntity, dmg, "physical", ctx.tick, input.attackerEntity);
+      ctx.emit("combat.melee", { attacker: input.attackerEntity, target: input.targetEntity, knockback: input.knockback, crit, ...input.meta, ...result2 });
       fireOnZero(ctx, input.targetEntity, "hp", fired);
-      return { hit: true, damage: result.damage, killed: result.killed, crit };
+      return { hit: true, damage: result2.damage, killed: result2.killed, crit };
     }
   };
   const rangedCombat = {
@@ -138201,10 +141645,10 @@ function registerCombatSkills(registry2, opts) {
       const critMult = num(input.config?.critMultiplier, 2);
       const crit = critChance > 0 && critRoll(ctx.tick, input.attackerEntity, input.targetEntity) < critChance;
       const dmg = crit ? input.damage * critMult : input.damage;
-      const { fired, ...result } = combatMgr.applyDamage(input.targetEntity, dmg, "physical", ctx.tick, input.attackerEntity);
-      ctx.emit("combat.ranged", { attacker: input.attackerEntity, target: input.targetEntity, speed: input.speed, crit, ...input.meta, ...result });
+      const { fired, ...result2 } = combatMgr.applyDamage(input.targetEntity, dmg, "physical", ctx.tick, input.attackerEntity);
+      ctx.emit("combat.ranged", { attacker: input.attackerEntity, target: input.targetEntity, speed: input.speed, crit, ...input.meta, ...result2 });
       fireOnZero(ctx, input.targetEntity, "hp", fired);
-      return { fired: true, hit: true, damage: result.damage, killed: result.killed, crit };
+      return { fired: true, hit: true, damage: result2.damage, killed: result2.killed, crit };
     }
   };
   const defend = {
@@ -138250,11 +141694,19 @@ var BehaviorManager = class {
   // entity -> routine id
   reactions = /* @__PURE__ */ new Map();
   // entity -> attached reactions
+  /** Deterministic goal-id counter (with ctx.tick → `goal_<tick>_<seq>`): lives ON the
+   *  manager (not a registry closure) so the snapshot carries it — a restored world
+   *  allocates the identical next goal id a continuing live world would. */
+  goalSeq = 0;
+  /** Next deterministic goal id. `tick` is the recorded skill tick (ctx.tick). */
+  nextGoalId(tick) {
+    return `goal_${tick}_${this.goalSeq++}`;
+  }
   defineProfile(profile) {
     this.profiles.set(profile.id, profile);
   }
-  getProfile(id4) {
-    return this.profiles.get(id4);
+  getProfile(id7) {
+    return this.profiles.get(id7);
   }
   assignBehavior(entity, profileId) {
     if (!this.profiles.has(profileId)) return false;
@@ -138316,6 +141768,65 @@ var BehaviorManager = class {
   getAttitude(entity, towardEntity) {
     return this.npcMemories.get(entity)?.relationships.get(towardEntity) ?? "neutral";
   }
+  /** Deterministic, LOSSLESS capture of the whole manager (snapshot participant):
+   *  profiles by id, per-entity maps by entity, relationships by target entity —
+   *  fact/reaction LISTS keep insertion order (recall/getReactions return that order,
+   *  so it is observable state, and it is replay-deterministic). */
+  captureSnapshot() {
+    const byString = (a2, b3) => a2 < b3 ? -1 : a2 > b3 ? 1 : 0;
+    return {
+      goalSeq: this.goalSeq,
+      profiles: [...this.profiles.values()].sort((a2, b3) => byString(a2.id, b3.id)).map((p2) => ({
+        ...p2,
+        routines: p2.routines.map((r2) => ({ ...r2, schedule: r2.schedule.map((s2) => ({ ...s2 })) })),
+        reactions: p2.reactions.map((r2) => ({ ...r2, action: { ...r2.action } })),
+        goals: p2.goals.map((g4) => ({ ...g4 }))
+      })),
+      memories: [...this.npcMemories.values()].sort((a2, b3) => byString(a2.entity, b3.entity)).map((m2) => ({
+        entity: m2.entity,
+        facts: m2.facts.map((f2) => ({ ...f2 })),
+        relationships: [...m2.relationships.entries()].sort((a2, b3) => byString(a2[0], b3[0])).map(([toward, attitude]) => ({ toward, attitude }))
+      })),
+      assignedBehaviors: [...this.assignedBehaviors.entries()].sort((a2, b3) => byString(a2[0], b3[0])).map(([entity, profileId]) => ({ entity, profileId })),
+      activeGoals: [...this.activeGoals.entries()].sort((a2, b3) => byString(a2[0], b3[0])).map(([entity, goal]) => ({ entity, goal: { ...goal } })),
+      assignedRoutines: [...this.assignedRoutines.entries()].sort((a2, b3) => byString(a2[0], b3[0])).map(([entity, routineId]) => ({ entity, routineId })),
+      reactions: [...this.reactions.entries()].sort((a2, b3) => byString(a2[0], b3[0])).map(([entity, list]) => ({
+        entity,
+        reactions: list.map((r2) => ({ ...r2, action: { ...r2.action } }))
+      }))
+    };
+  }
+  /** Wholesale replace the manager's state + resume the goal-id counter
+   *  (participant restore). */
+  restoreSnapshot(state) {
+    this.profiles.clear();
+    this.npcMemories.clear();
+    this.assignedBehaviors.clear();
+    this.activeGoals.clear();
+    this.assignedRoutines.clear();
+    this.reactions.clear();
+    this.goalSeq = state.goalSeq;
+    for (const p2 of state.profiles) {
+      this.profiles.set(p2.id, {
+        ...p2,
+        routines: p2.routines.map((r2) => ({ ...r2, schedule: r2.schedule.map((s2) => ({ ...s2 })) })),
+        reactions: p2.reactions.map((r2) => ({ ...r2, action: { ...r2.action } })),
+        goals: p2.goals.map((g4) => ({ ...g4 }))
+      });
+    }
+    for (const m2 of state.memories) {
+      this.npcMemories.set(m2.entity, {
+        id: `mem_${m2.entity}`,
+        entity: m2.entity,
+        facts: m2.facts.map((f2) => ({ ...f2 })),
+        relationships: new Map(m2.relationships.map((r2) => [r2.toward, r2.attitude]))
+      });
+    }
+    for (const a2 of state.assignedBehaviors) this.assignedBehaviors.set(a2.entity, a2.profileId);
+    for (const g4 of state.activeGoals) this.activeGoals.set(g4.entity, { ...g4.goal });
+    for (const r2 of state.assignedRoutines) this.assignedRoutines.set(r2.entity, r2.routineId);
+    for (const r2 of state.reactions) this.reactions.set(r2.entity, r2.reactions.map((x3) => ({ ...x3, action: { ...x3.action } })));
+  }
 };
 var DialogueManager = class {
   trees = /* @__PURE__ */ new Map();
@@ -138323,8 +141834,8 @@ var DialogueManager = class {
   defineTree(tree) {
     this.trees.set(tree.id, tree);
   }
-  getTree(id4) {
-    return this.trees.get(id4);
+  getTree(id7) {
+    return this.trees.get(id7);
   }
   startSession(treeId, speaker, listener) {
     const tree = this.trees.get(treeId);
@@ -138351,6 +141862,43 @@ var DialogueManager = class {
   }
   endSession(speaker, listener) {
     return this.sessions.delete(`${speaker}:${listener}`);
+  }
+  /** Deterministic, LOSSLESS capture of the whole manager (snapshot participant):
+   *  trees by id, nodes by id, sessions by (speaker, listener). History keeps its
+   *  chronological order — it is the observable dialogue transcript. */
+  captureSnapshot() {
+    const byString = (a2, b3) => a2 < b3 ? -1 : a2 > b3 ? 1 : 0;
+    return {
+      trees: [...this.trees.values()].sort((a2, b3) => byString(a2.id, b3.id)).map((t3) => ({
+        id: t3.id,
+        name: t3.name,
+        startNode: t3.startNode,
+        nodes: [...t3.nodes.values()].sort((a2, b3) => byString(a2.id, b3.id)).map((n3) => ({
+          ...n3,
+          choices: n3.choices.map((c2) => ({ ...c2 }))
+        })),
+        config: t3.config
+      })),
+      sessions: [...this.sessions.values()].sort((a2, b3) => byString(`${a2.speaker}:${a2.listener}`, `${b3.speaker}:${b3.listener}`)).map((s2) => ({ ...s2, history: s2.history.map((h2) => ({ ...h2 })) }))
+    };
+  }
+  /** Wholesale replace the manager's state (participant restore). The session map
+   *  key is derived (`speaker:listener`), exactly as startSession builds it. */
+  restoreSnapshot(state) {
+    this.trees.clear();
+    this.sessions.clear();
+    for (const t3 of state.trees) {
+      this.trees.set(t3.id, {
+        id: t3.id,
+        name: t3.name,
+        startNode: t3.startNode,
+        nodes: new Map(t3.nodes.map((n3) => [n3.id, { ...n3, choices: n3.choices.map((c2) => ({ ...c2 })) }])),
+        config: t3.config
+      });
+    }
+    for (const s2 of state.sessions) {
+      this.sessions.set(`${s2.speaker}:${s2.listener}`, { ...s2, history: s2.history.map((h2) => ({ ...h2 })) });
+    }
   }
 };
 var defineBehaviorInput = external_exports.object({
@@ -138492,7 +142040,6 @@ function viewNode(node) {
 function registerBehaviorDialogueSkills(registry2, opts) {
   const behaviorMgr = opts?.behaviorManager ?? new BehaviorManager();
   const dialogueMgr = opts?.dialogueManager ?? new DialogueManager();
-  let goalSeq = 0;
   const defineBehavior = {
     name: "behavior.define",
     version: "1.0.0",
@@ -138537,7 +142084,7 @@ function registerBehaviorDialogueSkills(registry2, opts) {
     input: setGoalInput,
     output: external_exports.object({ ok: external_exports.boolean(), goalId: external_exports.string() }),
     handler: (input, ctx) => {
-      const goalId = `goal_${ctx.tick}_${goalSeq++}`;
+      const goalId = behaviorMgr.nextGoalId(ctx.tick);
       behaviorMgr.setGoal(input.entity, { id: goalId, type: input.type, target: input.target, position: input.position, priority: input.priority, config: input.config });
       ctx.emit("behavior.goalSet", { entity: input.entity, type: input.type, goalId, ...input.meta });
       return { ok: true, goalId };
@@ -138739,12 +142286,12 @@ var EventSpecRegistry = class {
   seq = 0;
   /** Register a (canonical) event spec, returning its stable id. */
   define(spec) {
-    const id4 = `evt_${this.seq++}`;
-    this.map.set(id4, spec);
-    return id4;
+    const id7 = `evt_${this.seq++}`;
+    this.map.set(id7, spec);
+    return id7;
   }
-  get(id4) {
-    return this.map.get(id4);
+  get(id7) {
+    return this.map.get(id7);
   }
   ids() {
     return [...this.map.keys()];
@@ -138754,7 +142301,7 @@ var EventSpecRegistry = class {
   }
   // ---- SnapshotableEventRegistry ----
   listEventSpecs() {
-    return [...this.map.entries()].map(([id4, spec]) => ({ id: id4, spec }));
+    return [...this.map.entries()].map(([id7, spec]) => ({ id: id7, spec }));
   }
   /** Replace all contents with the snapshot's baked definitions and resume the id counter past
    *  them, so a post-restore event.define allocates the SAME next id it would have live. Ids are
@@ -138816,9 +142363,9 @@ function registerBehaviorSpecSkills(registry2) {
     output: defineEventOutput,
     handler: (input, ctx) => {
       const spec = canonicalizeEventSpec(input.event);
-      const id4 = events.define(spec);
-      ctx.emit("event.defined", { id: id4, trigger: spec.trigger.type, action: spec.action.type });
-      return { id: id4 };
+      const id7 = events.define(spec);
+      ctx.emit("event.defined", { id: id7, trigger: spec.trigger.type, action: spec.action.type });
+      return { id: id7 };
     }
   };
   registry2.register(setBehavior);
@@ -138895,16 +142442,24 @@ var NavmeshManager = class {
   getRevision() {
     return this.navRevision;
   }
-  registerPortal(id4, bounds, open = true) {
-    if (id4.trim().length === 0 || this.portals.has(id4) || !this.validBounds(bounds)) return false;
-    const portal = { id: id4, bounds: { ...bounds }, open, cells: this.portalCells(bounds) };
-    this.portals.set(id4, portal);
+  /** Transaction-only seam used after a chain undo has restored portal contents.
+   *  SkillRegistry refuses allocator/manager rewind when head chains overlapped,
+   *  so this cannot erase a concurrent navigation mutation. */
+  restoreRevisionAfterRollback(revision) {
+    if (!Number.isSafeInteger(revision) || revision < 0 || revision > this.navRevision)
+      throw new Error(`navmesh: invalid rollback revision ${revision}`);
+    this.navRevision = revision;
+  }
+  registerPortal(id7, bounds, open = true) {
+    if (id7.trim().length === 0 || this.portals.has(id7) || !this.validBounds(bounds)) return false;
+    const portal = { id: id7, bounds: { ...bounds }, open, cells: this.portalCells(bounds) };
+    this.portals.set(id7, portal);
     if (!open) this.adjustClosedCounts(portal.cells, 1);
     this.navRevision++;
     return true;
   }
-  setPortalOpen(id4, open) {
-    const portal = this.portals.get(id4);
+  setPortalOpen(id7, open) {
+    const portal = this.portals.get(id7);
     if (portal === void 0) return false;
     if (portal.open !== open) {
       this.adjustClosedCounts(portal.cells, open ? -1 : 1);
@@ -138913,14 +142468,14 @@ var NavmeshManager = class {
     }
     return true;
   }
-  isPortalOpen(id4) {
-    return this.portals.get(id4)?.open;
+  isPortalOpen(id7) {
+    return this.portals.get(id7)?.open;
   }
-  unregisterPortal(id4) {
-    const portal = this.portals.get(id4);
+  unregisterPortal(id7) {
+    const portal = this.portals.get(id7);
     if (portal === void 0) return false;
     if (!portal.open) this.adjustClosedCounts(portal.cells, -1);
-    this.portals.delete(id4);
+    this.portals.delete(id7);
     this.navRevision++;
     return true;
   }
@@ -138937,7 +142492,7 @@ var NavmeshManager = class {
    *  unregistered, then each captured one re-registers with its open state — closed-cell
    *  refcounts and the nav revision advance exactly as live registration would. */
   restorePortalSnapshot(snap) {
-    for (const id4 of [...this.portals.keys()]) this.unregisterPortal(id4);
+    for (const id7 of [...this.portals.keys()]) this.unregisterPortal(id7);
     for (const p2 of snap.portals) this.registerPortal(p2.id, p2.bounds, p2.open);
   }
   validBounds(bounds) {
@@ -139507,10 +143062,10 @@ var goToPlaceInput = external_exports.object({
   from: Vec321.optional().describe("Seed position for the FIRST step (when the entity has no body and no tracked position)."),
   meta: MetaField12
 });
-function normalizeGazetteer(raw) {
-  if (!Array.isArray(raw)) return [];
+function normalizeGazetteer(raw3) {
+  if (!Array.isArray(raw3)) return [];
   const out = [];
-  for (const g4 of raw) {
+  for (const g4 of raw3) {
     if (g4 === null || typeof g4 !== "object") continue;
     const e2 = g4;
     if (typeof e2.placeId !== "string" || e2.placeId.length === 0) continue;
@@ -139538,16 +143093,16 @@ function registerNavigationSkills(registry2, opts) {
     input: gazetteerLoadInput,
     output: external_exports.object({ ok: external_exports.boolean(), count: external_exports.number().int() }),
     handler: (input, ctx) => {
-      let text2;
+      let text4;
       try {
-        text2 = new TextDecoder().decode(ctx.world.ops.op_read_asset(input.mapAssetId));
+        text4 = new TextDecoder().decode(ctx.world.ops.op_read_asset(input.mapAssetId));
       } catch (e2) {
         ctx.emit("gazetteer.loadFailed", { mapAssetId: input.mapAssetId, reason: String(e2), ...input.meta });
         return { ok: false, count: 0 };
       }
       let parsed;
       try {
-        parsed = JSON.parse(text2);
+        parsed = JSON.parse(text4);
       } catch (e2) {
         ctx.emit("gazetteer.loadFailed", { mapAssetId: input.mapAssetId, reason: "not JSON: " + String(e2), ...input.meta });
         return { ok: false, count: 0 };
@@ -139609,7 +143164,8 @@ function registerNavigationSkills(registry2, opts) {
           permissions: ctx.permissions,
           tick: ctx.tick,
           world: ctx.world,
-          chainId: ctx.chainId
+          chainId: ctx.chainId,
+          chainToken: ctx.chainToken
         }
       );
       if (res === void 0 || !res.success) {
@@ -139680,7 +143236,7 @@ var VFXManager = class {
   seq = 0;
   /** Build a system's THREE.Points + CPU buffers. Never draws dead particles
    *  (parked at DEAD_Y). Works headlessly — the Points object is a plain CPU object. */
-  build(id4, config2, scene, oneShot = false) {
+  build(id7, config2, scene, oneShot = false) {
     const count = config2.maxParticles;
     const positions = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
@@ -139705,7 +143261,7 @@ var VFXManager = class {
     points2.frustumCulled = false;
     if (scene !== void 0 && typeof scene.add === "function") scene.add(points2);
     const sys = {
-      id: id4,
+      id: id7,
       config: config2,
       playing: false,
       attached: false,
@@ -139729,7 +143285,7 @@ var VFXManager = class {
       colAttr,
       scene
     };
-    this.systems.set(id4, sys);
+    this.systems.set(id7, sys);
     return sys;
   }
   /** Find a free (dead) particle slot from a round-robin cursor, or -1 when full. */
@@ -139774,25 +143330,25 @@ var VFXManager = class {
   }
   // ---- Authoring surface -------------------------------------------------
   create(config2, scene) {
-    const id4 = `vfx_${this.seq++}`;
-    this.build(id4, config2, scene, false);
-    return id4;
+    const id7 = `vfx_${this.seq++}`;
+    this.build(id7, config2, scene, false);
+    return id7;
   }
-  play(id4) {
-    const sys = this.systems.get(id4);
+  play(id7) {
+    const sys = this.systems.get(id7);
     if (sys === void 0) return false;
     sys.playing = true;
     return true;
   }
   /** Stop EMISSION; existing particles keep aging out (a natural fade). */
-  stop(id4) {
-    const sys = this.systems.get(id4);
+  stop(id7) {
+    const sys = this.systems.get(id7);
     if (sys === void 0) return false;
     sys.playing = false;
     return true;
   }
-  attach(id4, entity, world, offset) {
-    const sys = this.systems.get(id4);
+  attach(id7, entity, world, offset) {
+    const sys = this.systems.get(id7);
     if (sys === void 0) return false;
     sys.entity = entity;
     sys.attached = true;
@@ -139804,8 +143360,8 @@ var VFXManager = class {
   /** One-shot burst at a world position: a self-cleaning system that spawns `count`
    *  real particles immediately and frees itself once they drain. */
   atPosition(opts, scene) {
-    const id4 = `vfx_${this.seq++}`;
-    const sys = this.build(id4, {
+    const id7 = `vfx_${this.seq++}`;
+    const sys = this.build(id7, {
       maxParticles: opts.count,
       lifetime: opts.lifetime,
       emissionRate: 0,
@@ -139825,16 +143381,16 @@ var VFXManager = class {
     for (let k3 = 0; k3 < opts.count; k3++) this.spawn(sys);
     sys.posAttr.needsUpdate = true;
     sys.colAttr.needsUpdate = true;
-    return id4;
+    return id7;
   }
-  destroy(id4) {
-    const sys = this.systems.get(id4);
+  destroy(id7) {
+    const sys = this.systems.get(id7);
     if (sys === void 0) return false;
     if (sys.scene !== void 0 && typeof sys.scene.remove === "function") sys.scene.remove(sys.points);
     sys.points.geometry.dispose();
     const mat = sys.points.material;
     mat.dispose();
-    return this.systems.delete(id4);
+    return this.systems.delete(id7);
   }
   /** Re-base an attached system's emitter on its followed entity's transform. */
   refreshEmitter(sys) {
@@ -139893,8 +143449,8 @@ var VFXManager = class {
     }
   }
   // ---- Read surface (hosts / tests) --------------------------------------
-  get(id4) {
-    const s2 = this.systems.get(id4);
+  get(id7) {
+    const s2 = this.systems.get(id7);
     if (s2 === void 0) return void 0;
     return {
       id: s2.id,
@@ -139908,12 +143464,12 @@ var VFXManager = class {
     };
   }
   /** Live particle count of a system (0 when unknown). */
-  particleCount(id4) {
-    return this.systems.get(id4)?.liveCount ?? 0;
+  particleCount(id7) {
+    return this.systems.get(id7)?.liveCount ?? 0;
   }
   /** A COPY of a system's position buffer (for determinism checks / host readback). */
-  positionsOf(id4) {
-    const s2 = this.systems.get(id4);
+  positionsOf(id7) {
+    const s2 = this.systems.get(id7);
     return s2 === void 0 ? void 0 : Float32Array.from(s2.positions);
   }
   list() {
@@ -139970,9 +143526,9 @@ function registerVFXSkills(registry2, opts) {
     input: createVFXInput,
     output: external_exports.object({ vfxId: external_exports.string() }),
     handler: (input, ctx) => {
-      const id4 = mgr.create(input.config, ctx.world.scene);
-      ctx.emit("vfx.created", { vfxId: id4, config: input.config, ...input.meta });
-      return { vfxId: id4 };
+      const id7 = mgr.create(input.config, ctx.world.scene);
+      ctx.emit("vfx.created", { vfxId: id7, config: input.config, ...input.meta });
+      return { vfxId: id7 };
     }
   };
   const playVFX = {
@@ -140012,7 +143568,7 @@ function registerVFXSkills(registry2, opts) {
     input: atPositionInput,
     output: external_exports.object({ ok: external_exports.boolean(), vfxId: external_exports.string() }),
     handler: (input, ctx) => {
-      const id4 = mgr.atPosition({
+      const id7 = mgr.atPosition({
         position: input.position,
         color: input.color,
         size: input.size,
@@ -140021,8 +143577,8 @@ function registerVFXSkills(registry2, opts) {
         speed: input.speed,
         config: input.config
       }, ctx.world.scene);
-      ctx.emit("vfx.atPosition", { position: input.position, color: input.color, count: input.count, vfxId: id4, ...input.meta });
-      return { ok: true, vfxId: id4 };
+      ctx.emit("vfx.atPosition", { position: input.position, color: input.color, count: input.count, vfxId: id7, ...input.meta });
+      return { ok: true, vfxId: id7 };
     }
   };
   const attachVFX = {
@@ -140061,6 +143617,10 @@ function registerVFXSkills(registry2, opts) {
   registry2.register(destroyVFX);
   return { vfxManager: mgr };
 }
+
+// src/worldlog/verify.ts
+var digestF32 = new Float32Array(1);
+var digestU32 = new Uint32Array(digestF32.buffer);
 
 // src/worldlog/replay.ts
 async function replayCommands(commands, deps) {
@@ -140196,21 +143756,21 @@ function parseAssets(jsonl, ops2) {
   for (let i2 = 0; i2 < lines.length; i2++) {
     const line = lines[i2];
     if (line.length === 0) continue;
-    let raw;
+    let raw3;
     try {
-      raw = JSON.parse(line);
+      raw3 = JSON.parse(line);
     } catch (err) {
       throw new Error(`assets: invalid JSON on line ${i2 + 1}: ${err instanceof Error ? err.message : String(err)}`);
     }
-    if (typeof raw.id !== "string" || typeof raw.hash !== "string" || typeof raw.b64 !== "string") {
+    if (typeof raw3.id !== "string" || typeof raw3.hash !== "string" || typeof raw3.b64 !== "string") {
       throw new Error(`assets: malformed asset on line ${i2 + 1}`);
     }
-    const bytes = base64ToBytes(raw.b64);
-    const hash7 = assetContentHash(bytes, ops2);
-    if (hash7 !== "sha256:" && hash7 !== raw.hash) {
-      throw new Error(`assets: content hash mismatch on line ${i2 + 1} (stored ${raw.hash}, computed ${hash7})`);
+    const bytes = base64ToBytes(raw3.b64);
+    const hash9 = assetContentHash(bytes, ops2);
+    if (hash9 !== "sha256:" && hash9 !== raw3.hash) {
+      throw new Error(`assets: content hash mismatch on line ${i2 + 1} (stored ${raw3.hash}, computed ${hash9})`);
     }
-    out.push({ id: raw.id, hash: raw.hash, bytes });
+    out.push({ id: raw3.id, hash: raw3.hash, bytes });
   }
   return out;
 }
@@ -140632,20 +144192,20 @@ var ProgressionManager = class {
   getLevel(entity) {
     return this.read(entity).level;
   }
-  unlock(entity, id4) {
+  unlock(entity, id7) {
     const data = this.getOrCreate(entity);
-    if (data.unlocked.has(id4)) return false;
-    data.unlocked.add(id4);
+    if (data.unlocked.has(id7)) return false;
+    data.unlocked.add(id7);
     return true;
   }
-  isUnlocked(entity, id4) {
-    return this.read(entity).unlocked.has(id4);
+  isUnlocked(entity, id7) {
+    return this.read(entity).unlocked.has(id7);
   }
   defineSkillTree(tree) {
     this.skillTrees.set(tree.id, tree);
   }
-  getSkillTree(id4) {
-    return this.skillTrees.get(id4);
+  getSkillTree(id7) {
+    return this.skillTrees.get(id7);
   }
   allocatePoint(entity, treeId, nodeId) {
     const tree = this.skillTrees.get(treeId);
@@ -140783,12 +144343,12 @@ function registerProgressionSkills(registry2, opts) {
     input: addXPInput,
     output: addXPOutput,
     handler: (input, ctx) => {
-      const result = mgr.addXP(input.entity, input.amount);
-      ctx.emit("progression.xp", { entity: input.entity, amount: input.amount, ...input.meta, leveledUp: result.leveledUp, newLevel: result.newLevel, xp: result.xp, xpToNext: result.xpToNext });
-      for (const ev of result.levelUps) {
+      const result2 = mgr.addXP(input.entity, input.amount);
+      ctx.emit("progression.xp", { entity: input.entity, amount: input.amount, ...input.meta, leveledUp: result2.leveledUp, newLevel: result2.newLevel, xp: result2.xp, xpToNext: result2.xpToNext });
+      for (const ev of result2.levelUps) {
         ctx.emit("progression.levelUp", { entity: input.entity, level: ev.level, actions: ev.actions });
       }
-      return result;
+      return result2;
     }
   };
   const getLevel = {
@@ -140928,8 +144488,8 @@ var BGMManager = class {
   register(track) {
     this.tracks.set(track.id, { id: track.id, name: track.name, volume: 0.5 });
   }
-  play(id4, volume) {
-    const track = this.tracks.get(id4);
+  play(id7, volume) {
+    const track = this.tracks.get(id7);
     if (track === void 0) return { ok: false };
     track.volume = volume ?? track.volume;
     this.current = track;
@@ -140953,9 +144513,9 @@ var ReverbManager = class {
   zones = /* @__PURE__ */ new Map();
   seq = 0;
   addZone(center, radius, opts) {
-    const id4 = `reverb_${this.seq++}`;
-    this.zones.set(id4, { center, radius, size: opts.size ?? 1, decay: opts.decay ?? 1, damping: opts.damping ?? 0.5 });
-    return id4;
+    const id7 = `reverb_${this.seq++}`;
+    this.zones.set(id7, { center, radius, size: opts.size ?? 1, decay: opts.decay ?? 1, damping: opts.damping ?? 0.5 });
+    return id7;
   }
   getZoneAt(position) {
     for (const zone of this.zones.values()) {
@@ -141159,9 +144719,9 @@ function registerWorldAudioExtensionSkills(registry2, opts) {
     input: setReverbInput,
     output: external_exports.object({ zoneId: external_exports.string() }),
     handler: (input, ctx) => {
-      const id4 = reverbMgr.addZone(input.position, input.radius, { size: input.size, decay: input.decay, damping: input.damping });
-      ctx.emit("audio.reverbZone", { zoneId: id4, position: input.position, radius: input.radius, ...input.meta });
-      return { zoneId: id4 };
+      const id7 = reverbMgr.addZone(input.position, input.radius, { size: input.size, decay: input.decay, damping: input.damping });
+      ctx.emit("audio.reverbZone", { zoneId: id7, position: input.position, radius: input.radius, ...input.meta });
+      return { zoneId: id7 };
     }
   };
   registry2.register(setTime);
@@ -141801,7 +145361,7 @@ function canonicalizeStoryboard(s2) {
       title: b3.title,
       description: b3.description,
       ...b3.locationId !== void 0 ? { locationId: b3.locationId } : {},
-      ...b3.castIds !== void 0 ? { castIds: b3.castIds.map((id4) => id4) } : {}
+      ...b3.castIds !== void 0 ? { castIds: b3.castIds.map((id7) => id7) } : {}
     })),
     quests: s2.quests.map((q3) => ({
       id: q3.id,
@@ -142079,6 +145639,160 @@ function registerDesignSkills(registry2) {
   registry2.register(getSkill);
 }
 
+// src/game/intake.ts
+function extractJsonBlock(markdown) {
+  const m2 = /```(?:json|gds)\s*\n([\s\S]*?)```/.exec(markdown);
+  return m2 ? m2[1] : void 0;
+}
+function uniq(xs) {
+  return [...new Set(xs)];
+}
+function parseGdd(markdown) {
+  const block = extractJsonBlock(markdown);
+  if (block === void 0) {
+    return { ok: false, issues: [{ path: "", message: "no fenced ```json GDS block found in the GDD" }], gaps: ["(entire spec)"] };
+  }
+  let obj;
+  try {
+    obj = JSON.parse(block);
+  } catch (e2) {
+    return { ok: false, issues: [{ path: "", message: "GDS json block is invalid JSON: " + (e2 instanceof Error ? e2.message : String(e2)) }], gaps: ["(json)"] };
+  }
+  const v3 = validateGDS(obj);
+  const gaps = v3.ok ? [] : uniq(v3.issues.map((i2) => i2.path.split(".")[0] || "(root)"));
+  return { ok: v3.ok, data: v3.data, issues: v3.issues, gaps };
+}
+
+// src/game/plan.ts
+var SystemMappingSchema = external_exports.object({
+  mechanicId: external_exports.string().min(1),
+  mechanicName: external_exports.string().min(1),
+  /** The skill that implements it (e.g. "player.move"), or "NEW:<desc>". */
+  skill: external_exports.string().min(1),
+  /** existing → a registered engine skill covers it; new → explicitly NEW:…; unknown → names a
+   *  skill that does not exist (a planning gap the coordinator must resolve). */
+  status: external_exports.enum(["existing", "new", "unknown"])
+});
+var SliceSchema = external_exports.object({
+  id: external_exports.string().min(1),
+  name: external_exports.string().min(1),
+  goal: external_exports.string().min(1),
+  /** The GDS DoD ids this slice is gated by (empty → not auto-gated, e.g. a content slice). */
+  dodIds: external_exports.array(external_exports.string().min(1)).default([])
+});
+var ArchitecturePlanSchema = external_exports.object({
+  gdsId: external_exports.string().min(1),
+  optIn: external_exports.enum(["direct-path", "record+export", "multiplayer"]),
+  systems: external_exports.array(SystemMappingSchema).default([]),
+  contentManifest: external_exports.array(ContentItemSchema).default([]),
+  slices: external_exports.array(SliceSchema).min(1),
+  /** The genuinely-new work: mechanics whose skill is NEW or unknown. */
+  newWork: external_exports.array(external_exports.string().min(1)).default([])
+});
+function planFromGDS(gds, knownSkill, trace) {
+  const systems = gds.mechanics.map((m2) => {
+    let status;
+    if (m2.skill.startsWith("NEW:")) status = "new";
+    else status = knownSkill(m2.skill) ? "existing" : "unknown";
+    return { mechanicId: m2.id, mechanicName: m2.name, skill: m2.skill, status };
+  });
+  const newWork = systems.filter((s2) => s2.status !== "existing").map((s2) => `${s2.mechanicName} \u2192 ${s2.skill} (${s2.status})`);
+  const automatedDodIds = gds.dod.filter((d2) => d2.kind === "state-transition").map((d2) => d2.id);
+  const slices = [
+    { id: "slice-0", name: "Playable loop", goal: gds.loopSentence, dodIds: automatedDodIds }
+  ];
+  if (gds.content.length > 0) {
+    slices.push({ id: "slice-content", name: "Content", goal: "Source + place the content manifest", dodIds: [] });
+  }
+  const plan = ArchitecturePlanSchema.parse({
+    gdsId: gds.id,
+    optIn: gds.optIn,
+    systems,
+    contentManifest: gds.content,
+    slices,
+    newWork
+  });
+  trace?.emit("director.pipeline.plan.created", {
+    gdsId: plan.gdsId,
+    optIn: plan.optIn,
+    systems: plan.systems,
+    unknown: plan.systems.filter((s2) => s2.status === "unknown").map((s2) => s2.skill),
+    newWork: plan.newWork,
+    slices: plan.slices.map((s2) => ({ id: s2.id, name: s2.name, dodIds: s2.dodIds }))
+  }, trace.causedBy);
+  return plan;
+}
+
+// src/skills/gds.ts
+var planInput = external_exports.object({
+  /** The Game Design Spec object (GameDesignSpecSchema shape). Exactly one of gds/gdd. */
+  gds: external_exports.record(external_exports.string(), external_exports.unknown()).optional(),
+  /** A GDD markdown document embedding the GDS as a fenced ```json block. */
+  gdd: external_exports.string().min(1).optional()
+}).strict();
+var issueOutput = external_exports.object({ path: external_exports.string(), message: external_exports.string() });
+var planOutput = external_exports.object({
+  /** True iff the spec validated and a plan was produced. */
+  ok: external_exports.boolean(),
+  /** The Architecture Plan (absent when the spec did not validate). */
+  plan: ArchitecturePlanSchema.optional(),
+  /** Structural + semantic validation issues (empty on ok). */
+  issues: external_exports.array(issueOutput),
+  /** Gap report: the top-level GDS fields the input is missing/invalid. */
+  gaps: external_exports.array(external_exports.string()),
+  /** Mechanics whose skill mapping is NEW or unknown — the genuinely-new work. */
+  newWork: external_exports.array(external_exports.string())
+});
+function gapsFromIssues(issues) {
+  return [...new Set(issues.map((i2) => i2.path.split(".")[0] || "(root)"))];
+}
+function registerGdsSkills(registry2) {
+  const planSkill = {
+    name: "gds.plan",
+    version: "1.0.0",
+    description: "Validate a Game Design Spec (object, or GDD markdown embedding one) and derive its Architecture Plan: mechanics mapped to registered engine skills (unknown/NEW flagged), milestone slices with Slice 0 = the playable loop, and a gap report when the spec is incomplete.",
+    category: "game",
+    permissions: ["game.plan"],
+    effect: "read",
+    // GDS planning is a specialized authoring stage, not a universal verb every
+    // builder needs in its initial reasoning window. It remains available through
+    // skills.search/browse and the full authorized catalog; keeping it standard
+    // preserves the hard <=15 bootstrap-surface contract as the catalog grows.
+    priority: "standard",
+    input: planInput,
+    output: planOutput,
+    handler: (input, ctx) => {
+      const provided = [input.gds, input.gdd].filter((v3) => v3 !== void 0).length;
+      if (provided !== 1) {
+        throw new SkillInvocationError("invalid_input", "gds.plan requires exactly one of { gds } (the spec object) or { gdd } (markdown embedding a ```json GDS block)");
+      }
+      let issues;
+      let gaps;
+      let data;
+      if (input.gdd !== void 0) {
+        const parsed = parseGdd(input.gdd);
+        issues = parsed.issues;
+        gaps = parsed.gaps;
+        data = parsed.ok ? parsed.data : void 0;
+      } else {
+        const v3 = validateGDS(input.gds);
+        issues = v3.issues;
+        gaps = v3.ok ? [] : gapsFromIssues(v3.issues);
+        data = v3.ok ? v3.data : void 0;
+      }
+      if (data === void 0) {
+        ctx.emit("director.pipeline.plan.rejected", { issues: issues.length, gaps });
+        return { ok: false, issues, gaps, newWork: [] };
+      }
+      const plan = planFromGDS(data, (name) => registry2.has(name), {
+        emit: (type, payload, causedBy) => ctx.emit(type, payload, causedBy)
+      });
+      return { ok: true, plan, issues: [], gaps: [], newWork: plan.newWork };
+    }
+  };
+  registry2.register(planSkill);
+}
+
 // src/skills/snapshot-participants.ts
 var meta3 = external_exports.record(external_exports.string(), external_exports.unknown());
 var inventorySlotSchema = external_exports.object({
@@ -142308,6 +146022,73 @@ var directorSchema = external_exports.object({
   tension: external_exports.number(),
   phaseTicksLeft: external_exports.number()
 });
+var vec3Schema4 = external_exports.tuple([external_exports.number(), external_exports.number(), external_exports.number()]);
+var behaviorActionSchema = external_exports.object({ type: external_exports.string(), data: meta3 });
+var behaviorReactionSchema = external_exports.object({
+  trigger: external_exports.string(),
+  action: behaviorActionSchema,
+  priority: external_exports.number(),
+  cooldown: external_exports.number().optional(),
+  config: meta3.optional()
+});
+var behaviorGoalSchema = external_exports.object({
+  id: external_exports.string(),
+  type: external_exports.enum(["patrol", "follow", "flee", "guard", "interact", "custom"]),
+  target: external_exports.string().optional(),
+  position: vec3Schema4.optional(),
+  priority: external_exports.number(),
+  config: meta3.optional()
+});
+var behaviorSchema = external_exports.object({
+  goalSeq: external_exports.number(),
+  profiles: external_exports.array(external_exports.object({
+    id: external_exports.string(),
+    name: external_exports.string(),
+    routines: external_exports.array(external_exports.object({
+      id: external_exports.string(),
+      name: external_exports.string(),
+      schedule: external_exports.array(external_exports.object({ hour: external_exports.number(), action: external_exports.string(), target: external_exports.string().optional(), position: vec3Schema4.optional() })),
+      config: meta3.optional()
+    })),
+    reactions: external_exports.array(behaviorReactionSchema),
+    goals: external_exports.array(behaviorGoalSchema),
+    config: meta3.optional()
+  })),
+  memories: external_exports.array(external_exports.object({
+    entity: external_exports.string(),
+    facts: external_exports.array(external_exports.object({ key: external_exports.string(), value: external_exports.unknown(), tick: external_exports.number(), source: external_exports.string().optional() })),
+    relationships: external_exports.array(external_exports.object({ toward: external_exports.string(), attitude: external_exports.enum(["friendly", "neutral", "hostile"]) }))
+  })),
+  assignedBehaviors: external_exports.array(external_exports.object({ entity: external_exports.string(), profileId: external_exports.string() })),
+  activeGoals: external_exports.array(external_exports.object({ entity: external_exports.string(), goal: behaviorGoalSchema })),
+  assignedRoutines: external_exports.array(external_exports.object({ entity: external_exports.string(), routineId: external_exports.string() })),
+  reactions: external_exports.array(external_exports.object({ entity: external_exports.string(), reactions: external_exports.array(behaviorReactionSchema) }))
+});
+var dialogueNodeSchema = external_exports.object({
+  id: external_exports.string(),
+  text: external_exports.string(),
+  speaker: external_exports.string(),
+  mood: external_exports.string().optional(),
+  choices: external_exports.array(external_exports.object({ text: external_exports.string(), nextNodeId: external_exports.string(), condition: external_exports.string().optional(), effects: meta3.optional() })),
+  effects: meta3.optional(),
+  config: meta3.optional()
+});
+var dialogueSchema = external_exports.object({
+  trees: external_exports.array(external_exports.object({
+    id: external_exports.string(),
+    name: external_exports.string(),
+    startNode: external_exports.string(),
+    nodes: external_exports.array(dialogueNodeSchema),
+    config: meta3.optional()
+  })),
+  sessions: external_exports.array(external_exports.object({
+    treeId: external_exports.string(),
+    speaker: external_exports.string(),
+    listener: external_exports.string(),
+    currentNodeId: external_exports.string(),
+    history: external_exports.array(external_exports.object({ nodeId: external_exports.string(), choiceIndex: external_exports.number().optional() }))
+  }))
+});
 function participant(key, schema, capture, restore) {
   return { key, schema, capture, restore: (state) => restore(state) };
 }
@@ -142328,6 +146109,14 @@ function buildCoreSnapshotParticipants(m2) {
   registry2.register(participant("gazetteer", gazetteerSchema, () => m2.gazetteerManager.captureSnapshot(), (s2) => m2.gazetteerManager.restoreSnapshot(s2)));
   registry2.register(participant("cutscenes", cutscenesSchema, () => m2.cutsceneManager.captureSnapshot(), (s2) => m2.cutsceneManager.restoreSnapshot(s2)));
   registry2.register(participant("director", directorSchema, () => m2.directorManager.captureSnapshot(), (s2) => m2.directorManager.restoreSnapshot(s2)));
+  registry2.register(participant("behavior", behaviorSchema, () => m2.behaviorManager.captureSnapshot(), (s2) => m2.behaviorManager.restoreSnapshot(s2)));
+  registry2.register(participant("dialogue", dialogueSchema, () => m2.dialogueManager.captureSnapshot(), (s2) => m2.dialogueManager.restoreSnapshot(s2)));
+  registry2.register(participant(
+    "functionalSettlements.placements",
+    functionalSettlementPlacementManagerSnapshotSchema,
+    () => m2.functionalSettlementPlacementManager.captureSnapshot(),
+    (s2) => m2.functionalSettlementPlacementManager.restoreSnapshot(s2)
+  ));
   registry2.register(eventsParticipant(m2.eventSpecs));
   return registry2;
 }
@@ -142356,6 +146145,7 @@ function registerCoreSkills(registry2, opts) {
   registerApprovalSkills(registry2);
   registerAuditSkills(registry2);
   registerDesignSkills(registry2);
+  registerGdsSkills(registry2);
   const ui = new UiManager();
   registerUiSkills(registry2, ui);
   registerAudioSkills(registry2, audio);
@@ -142398,7 +146188,8 @@ function registerCoreSkills(registry2, opts) {
   const behaviorSpec = registerBehaviorSpecSkills(registry2);
   const nav = registerNavmeshSkills(registry2, { navmeshManager });
   registerFunctionalBuildingSkills(registry2, assets, { interaction: interaction.interactionManager, inventory: inventory.inventoryManager, audio: opts?.functionalDoorAudio ?? audio, nav: nav.navmeshManager, topology: topologyManager });
-  const functionalSettlementPlacementManager = registerFunctionalSettlementSkills(registry2, assets, { sampleHeight: opts?.functionalSettlementSiteSampler });
+  const functionalSettlementSiteSampler = opts?.functionalSettlementSiteSampler ?? createResidentFunctionalSettlementTerrainSampler({ source: terrainSource, regions: terrainRegions, layers: terrainLayers });
+  const functionalSettlementPlacementManager = registerFunctionalSettlementSkills(registry2, assets, { sampleHeight: functionalSettlementSiteSampler });
   const navigation = registerNavigationSkills(registry2);
   const vfx = registerVFXSkills(registry2);
   const save = registerSaveSkills(registry2);
@@ -142420,8 +146211,17 @@ function registerCoreSkills(registry2, opts) {
     gazetteerManager: navigation.gazetteerManager,
     cutsceneManager: cutscene.cutsceneManager,
     directorManager: director.directorManager,
+    behaviorManager: behavior.behaviorManager,
+    dialogueManager: behavior.dialogueManager,
+    functionalSettlementPlacementManager,
     eventSpecs: behaviorSpec.events
   });
+  const functionalSettlementReleaseHost = new FunctionalSettlementReleaseHost(
+    registry2,
+    assets,
+    functionalSettlementPlacementManager,
+    snapshotParticipants
+  );
   return {
     packages,
     ui,
@@ -142449,7 +146249,10 @@ function registerCoreSkills(registry2, opts) {
     behaviorSpec,
     nav,
     functionalBuildings: { topologyManager },
-    functionalSettlements: { placementManager: functionalSettlementPlacementManager },
+    functionalSettlements: {
+      placementManager: functionalSettlementPlacementManager,
+      releaseHost: functionalSettlementReleaseHost
+    },
     navigation,
     vfx,
     save,
@@ -142529,7 +146332,9 @@ async function applyAuthorCommandsIsolated(registry2, world, cmds, opts) {
     }
     results.push(res);
     if (!res.success) {
-      failures.push({ index, command: describeAuthorCommand(cmd), message: res.error?.message ?? "unknown error" });
+      const data = res.error?.data;
+      const detail = data === void 0 ? "" : ` :: ${JSON.stringify(data).slice(0, 6144)}`;
+      failures.push({ index, command: describeAuthorCommand(cmd), message: (res.error?.message ?? "unknown error") + detail });
     }
   }
   return { results, failures };
@@ -142929,8 +146734,8 @@ var TagsInputSchema = external_exports.object({
   entity: EntityIdSchema,
   tags: external_exports.array(TagSchema).max(64)
 }).strict().superRefine((input, context3) => {
-  const unique = new Set(input.tags);
-  if (unique.size !== input.tags.length) {
+  const unique2 = new Set(input.tags);
+  if (unique2.size !== input.tags.length) {
     context3.addIssue({ code: "custom", path: ["tags"], message: "tags must not contain duplicates" });
   }
 });
@@ -142982,7 +146787,7 @@ function transformState(world, entity) {
 }
 function subtreeIds(world, root) {
   if (world.entities.resolve(root) === void 0) throw new Error(`scene entity '${root}' does not exist`);
-  const result = [];
+  const result2 = [];
   const active = /* @__PURE__ */ new Set();
   const visited = /* @__PURE__ */ new Set();
   const stack3 = [{ entity: root, depth: 0, exit: false }];
@@ -142997,19 +146802,19 @@ function subtreeIds(world, root) {
     }
     if (active.has(frame2.entity)) throw new Error(`scene hierarchy contains a cycle at '${frame2.entity}'`);
     if (visited.has(frame2.entity)) throw new Error(`scene hierarchy reaches '${frame2.entity}' more than once`);
-    if (result.length >= MAX_TRANSFORM_SCOPE_ENTITIES) {
+    if (result2.length >= MAX_TRANSFORM_SCOPE_ENTITIES) {
       throw new Error(`scene transform scope exceeds ${MAX_TRANSFORM_SCOPE_ENTITIES} entities`);
     }
     active.add(frame2.entity);
     visited.add(frame2.entity);
-    result.push(frame2.entity);
+    result2.push(frame2.entity);
     stack3.push({ ...frame2, exit: true });
     const children = world.entities.childrenOf(frame2.entity).slice().sort(codeUnitCompare);
     for (let index = children.length - 1; index >= 0; index--) {
       stack3.push({ entity: children[index], depth: frame2.depth + 1, exit: false });
     }
   }
-  return result;
+  return result2;
 }
 function assertTransformScopeSupported(world, entity) {
   if (world.transforms === void 0) throw new Error("scene authoring requires versioned transform storage");
@@ -143018,10 +146823,10 @@ function assertTransformScopeSupported(world, entity) {
       `scene transform '${entity}' is parented; exact local-offset and entity-table version restoration is unavailable`
     );
   }
-  for (const id4 of subtreeIds(world, entity)) {
-    if (world.entities.resolve(id4)?.bodyId !== void 0) {
+  for (const id7 of subtreeIds(world, entity)) {
+    if (world.entities.resolve(id7)?.bodyId !== void 0) {
       throw new Error(
-        `scene transform '${entity}' affects physics-bearing entity '${id4}'; exact scoped native-physics capture is unavailable`
+        `scene transform '${entity}' affects physics-bearing entity '${id7}'; exact scoped native-physics capture is unavailable`
       );
     }
   }
@@ -143061,9 +146866,9 @@ function materialObjects(root) {
   }
   return objects;
 }
-function readableMaterials(object4) {
-  const raw = object4.material;
-  const candidates = Array.isArray(raw) ? raw : raw === void 0 ? [] : [raw];
+function readableMaterials(object5) {
+  const raw3 = object5.material;
+  const candidates = Array.isArray(raw3) ? raw3 : raw3 === void 0 ? [] : [raw3];
   if (candidates.length > MAX_MATERIAL_SLOTS_PER_OBJECT) {
     throw new Error(`scene object exceeds ${MAX_MATERIAL_SLOTS_PER_OBJECT} material slots`);
   }
@@ -143083,15 +146888,15 @@ function captureMaterial(world, entity) {
   const entry = world.entities.resolve(entity);
   if (entry === void 0) throw new Error(`scene entity '${entity}' does not exist`);
   let materialSlots = 0;
-  const objects = materialObjects(entry.mesh).map((object4) => {
-    const materials = readableMaterials(object4);
+  const objects = materialObjects(entry.mesh).map((object5) => {
+    const materials = readableMaterials(object5);
     materialSlots += materials.length;
     if (materialSlots > MAX_MATERIAL_SLOTS_TOTAL) {
       throw new Error(`scene material scope exceeds ${MAX_MATERIAL_SLOTS_TOTAL} total material slots`);
     }
     return {
-      castShadow: object4.castShadow,
-      receiveShadow: object4.receiveShadow,
+      castShadow: object5.castShadow,
+      receiveShadow: object5.receiveShadow,
       materials: materials.map((material) => ({
         color: material.color.getHex(),
         roughness: material.roughness,
@@ -143112,10 +146917,10 @@ function materialHashState(capture) {
     entity: capture.entity,
     eid: capture.eid,
     entityMaterial: capture.entityMaterial === void 0 ? null : { ...capture.entityMaterial },
-    objects: capture.objects.map((object4) => ({
-      castShadow: object4.castShadow ?? null,
-      receiveShadow: object4.receiveShadow ?? null,
-      materials: object4.materials.map((material) => ({
+    objects: capture.objects.map((object5) => ({
+      castShadow: object5.castShadow ?? null,
+      receiveShadow: object5.receiveShadow ?? null,
+      materials: object5.materials.map((material) => ({
         color: material.color,
         roughness: material.roughness,
         metalness: material.metalness
@@ -143168,8 +146973,8 @@ function restoreMaterial(world, capture) {
   if (objects.length !== capture.objects.length) {
     throw new Error(`scene material structure changed: expected ${capture.objects.length} objects, found ${objects.length}`);
   }
-  const currentMaterials = objects.map((object4, index) => {
-    const materials = readableMaterials(object4);
+  const currentMaterials = objects.map((object5, index) => {
+    const materials = readableMaterials(object5);
     const expected = capture.objects[index].materials.length;
     if (materials.length !== expected) {
       throw new Error(`scene material structure changed at object ${index}: expected ${expected} slots, found ${materials.length}`);
@@ -143179,9 +146984,9 @@ function restoreMaterial(world, capture) {
   entry.material = cloneMaterialState(capture.entityMaterial);
   for (let objectIndex = 0; objectIndex < capture.objects.length; objectIndex++) {
     const capturedObject = capture.objects[objectIndex];
-    const object4 = objects[objectIndex];
-    object4.castShadow = capturedObject.castShadow;
-    object4.receiveShadow = capturedObject.receiveShadow;
+    const object5 = objects[objectIndex];
+    object5.castShadow = capturedObject.castShadow;
+    object5.receiveShadow = capturedObject.receiveShadow;
     for (let materialIndex = 0; materialIndex < capturedObject.materials.length; materialIndex++) {
       const capturedMaterial = capturedObject.materials[materialIndex];
       const material = currentMaterials[objectIndex][materialIndex];
@@ -143219,7 +147024,7 @@ var SceneAuthoringAdapter = class {
     const parsed = parseOperation(operation);
     let snapshot;
     if (parsed.action === "transform.set") {
-      snapshot = { kind: "transform", states: subtreeIds(this.#world, parsed.input.entity).map((id4) => transformState(this.#world, id4)) };
+      snapshot = { kind: "transform", states: subtreeIds(this.#world, parsed.input.entity).map((id7) => transformState(this.#world, id7)) };
     } else if (parsed.action === "tags.replace") {
       const entry = this.#world.entities.resolve(parsed.input.entity);
       if (entry === void 0) throw new Error(`scene entity '${parsed.input.entity}' does not exist`);
@@ -143262,9 +147067,9 @@ var SceneAuthoringAdapter = class {
       const objects = materialObjects(entry.mesh);
       const materialsByObject = changesSurface ? objects.map(readableMaterials) : [];
       for (let objectIndex = 0; objectIndex < objects.length; objectIndex++) {
-        const object4 = objects[objectIndex];
-        if (parsed.input.castShadow !== void 0) object4.castShadow = parsed.input.castShadow;
-        if (parsed.input.receiveShadow !== void 0) object4.receiveShadow = parsed.input.receiveShadow;
+        const object5 = objects[objectIndex];
+        if (parsed.input.castShadow !== void 0) object5.castShadow = parsed.input.castShadow;
+        if (parsed.input.receiveShadow !== void 0) object5.receiveShadow = parsed.input.receiveShadow;
         if (changesSurface) {
           for (const material of materialsByObject[objectIndex]) {
             if (parsed.input.color !== void 0) material.color.set(parsed.input.color);
@@ -143445,11 +147250,11 @@ function immutable2(value) {
   }
   return value;
 }
-function recordPayload(record5) {
+function recordPayload(record6) {
   return {
     schema: DURABLE_AUTHORING_RECORD_SCHEMA,
-    previousRecordHash: record5.previousRecordHash,
-    receipt: record5.receipt
+    previousRecordHash: record6.previousRecordHash,
+    receipt: record6.receipt
   };
 }
 function createDurableAuthoringRecord(sha2562, previousRecordHash, receipt) {
@@ -143501,20 +147306,20 @@ function parseDurableAuthoringRecord(input, sha2562, index) {
   return { record: immutable2(parsed.data), canonical, byteLength };
 }
 function validateDurableAuthoringRecord(recordInput, transactionInput, previousHeadInput, previousRecordHash, sha2562, index) {
-  const { record: record5 } = parseDurableAuthoringRecord(recordInput, sha2562, index);
+  const { record: record6 } = parseDurableAuthoringRecord(recordInput, sha2562, index);
   const previousHead = WorldProjectHeadSchema.parse(previousHeadInput);
   const prepared2 = parseAuthoringTransaction(transactionInput);
   const transaction = prepared2.transaction;
   const transactionHash = canonicalHash2(sha2562, transaction);
   const label4 = index === void 0 ? "durable authoring record" : `durable authoring record ${index}`;
-  if (record5.previousRecordHash !== previousRecordHash) {
+  if (record6.previousRecordHash !== previousRecordHash) {
     reject2(`${label4} is not contiguous with the preceding record`, {
       index,
       expectedPreviousRecordHash: previousRecordHash,
-      actualPreviousRecordHash: record5.previousRecordHash
+      actualPreviousRecordHash: record6.previousRecordHash
     });
   }
-  const { receipt } = record5;
+  const { receipt } = record6;
   if (transaction.projectId !== previousHead.projectId || receipt.projectId !== previousHead.projectId) {
     reject2(`${label4} targets a different WorldProject`, {
       index,
@@ -143576,7 +147381,7 @@ function validateDurableAuthoringRecord(recordInput, transactionInput, previousH
   if (receipt.headHash !== expectedHeadHash) {
     reject2(`${label4} receipt head hash is invalid`, { index, expectedHeadHash, actualHeadHash: receipt.headHash });
   }
-  return record5;
+  return record6;
 }
 function canonicalGenesis(head, sha2562) {
   const expectedHeadHash = canonicalHash2(sha2562, {
@@ -143721,11 +147526,11 @@ function immutable3(value) {
   }
   return value;
 }
-function validateStateHash(hash7, adapter) {
+function validateStateHash(hash9, adapter) {
   try {
-    return normalizeSha256(hash7);
+    return normalizeSha256(hash9);
   } catch (error51) {
-    throw new AuthoringError("invalid_hash", `adapter '${adapter}' returned an invalid state hash`, { adapter, hash: hash7 }, { cause: error51 });
+    throw new AuthoringError("invalid_hash", `adapter '${adapter}' returned an invalid state hash`, { adapter, hash: hash9 }, { cause: error51 });
   }
 }
 function createWorldProjectHead(projectId, sha2562) {
@@ -143896,13 +147701,13 @@ var AuthoringTransactionKernel = class _AuthoringTransactionKernel {
     const pending = this.#tail.then(async () => {
       const committed = !this.#ledger.has(transaction.transactionId);
       const receipt = await this.#commitExclusive(transaction, transactionHash);
-      const record5 = this.#ledger.get(transaction.transactionId)?.durableRecord;
-      if (record5 === void 0) {
+      const record6 = this.#ledger.get(transaction.transactionId)?.durableRecord;
+      if (record6 === void 0) {
         throw new AuthoringError("replay_diverged", "committed authoring transaction has no commit envelope", {
           transactionId: transaction.transactionId
         });
       }
-      return immutable3({ receipt, record: record5, committed });
+      return immutable3({ receipt, record: record6, committed });
     });
     this.#tail = pending.then(() => void 0, () => void 0);
     return pending;
@@ -144286,8 +148091,14 @@ var AuthoringTransactionKernel = class _AuthoringTransactionKernel {
       this.#durableTailHash,
       receipt
     );
-    if (expectedRecord !== void 0 && canonicalStringify(durableRecord) !== canonicalStringify(expectedRecord)) {
-      throw new AuthoringError("replay_diverged", "recorded authoring commit diverged from its embedded commitFields", {
+    const expectedCanonical = expectedRecord === void 0 ? void 0 : canonicalStringify(expectedRecord);
+    if (expectedCanonical !== void 0 && canonicalStringify(durableRecord) !== expectedCanonical) {
+      const actualCanonical = canonicalStringify(durableRecord);
+      let at2 = 0;
+      while (at2 < expectedCanonical.length && expectedCanonical[at2] === actualCanonical[at2]) at2++;
+      const from = Math.max(0, at2 - 60);
+      const excerpt = `first divergence @${at2}: recorded \u2026${expectedCanonical.slice(from, at2 + 700)}\u2026 vs replayed \u2026${actualCanonical.slice(from, at2 + 700)}\u2026`;
+      throw new AuthoringError("replay_diverged", `recorded authoring commit diverged from its embedded commitFields (${excerpt})`, {
         transactionId: transaction.transactionId,
         expectedRecordHash: expectedRecord.recordHash,
         actualRecordHash: durableRecord.recordHash
@@ -144451,7 +148262,7 @@ function registerAuthoringSkills(registry2, options) {
     input: commitInputSchema,
     output: commitOutputSchema,
     commitFields: ["commitRecord"],
-    shouldRecordResult: (result) => result.committed,
+    shouldRecordResult: (result2) => result2.committed,
     handler: async (input, context3) => {
       try {
         enforceRestrictedCommitProfile(input.transaction, context3.profile);
@@ -144462,8 +148273,8 @@ function registerAuthoringSkills(registry2, options) {
           if (commitRecord === void 0) throw new AuthoringError("replay_diverged", "replayed transaction has no commit record");
           return { receipt, commitRecord, committed: !existed };
         }
-        const result = await kernel.commitWithRecord(input.transaction);
-        return { receipt: result.receipt, commitRecord: result.record, committed: result.committed };
+        const result2 = await kernel.commitWithRecord(input.transaction);
+        return { receipt: result2.receipt, commitRecord: result2.record, committed: result2.committed };
       } catch (error51) {
         return mapAuthoringError(error51);
       }
@@ -144532,6 +148343,7 @@ function registerBrowserAuthoringRuntime(registry2, world, projectId) {
 
 // src/browser/wasm-rapier-physics.ts
 var DEG = Math.PI / 180;
+var MAX_COLLISION_EVENTS = 4096;
 async function initRapier(RAPIER) {
   const hasDocument = typeof document !== "undefined";
   if (hasDocument) {
@@ -144565,6 +148377,10 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
   idToHandle = /* @__PURE__ */ new Map();
   /** rapier RigidBodyHandle -> stable body id (reverse of idToHandle). */
   handleToId = /* @__PURE__ */ new Map();
+  /** Browser/native parity: collisions survive until polled, bounded exactly like
+   * the native host instead of Rapier auto-draining them before the next step. */
+  collisionEvents = [];
+  collisionOverflow = 0;
   constructor(RAPIER) {
     this.R = RAPIER;
   }
@@ -144597,10 +148413,12 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
     this.nextBodyId = 0;
     this.idToHandle.clear();
     this.handleToId.clear();
+    this.collisionEvents.length = 0;
+    this.collisionOverflow = 0;
   }
   /** Resolve a stable id to its live RigidBody, or null for unknown/removed ids. */
-  bodyFor(id4) {
-    const handle = this.idToHandle.get(id4);
+  bodyFor(id7) {
+    const handle = this.idToHandle.get(id7);
     if (handle === void 0 || this.world === null) return null;
     return this.world.getRigidBody(handle) ?? null;
   }
@@ -144612,16 +148430,52 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
     if (!parent) return void 0;
     return this.handleToId.get(parent.handle);
   }
+  collisionRecord(h12, h2, started) {
+    const w5 = this.world;
+    if (w5 === null) return null;
+    const idA = this.idForCollider(h12);
+    const idB = this.idForCollider(h2);
+    if (idA === void 0 || idB === void 0) return null;
+    const a2 = Math.min(idA, idB);
+    const b3 = Math.max(idA, idB);
+    if (!started) return { kind: 0, a: a2, b: b3, point: null, normal: null };
+    const swapped = idA > idB;
+    let point3 = null;
+    let normal2 = null;
+    const c1 = w5.getCollider(h12);
+    const c2 = w5.getCollider(h2);
+    if (c1 && c2) {
+      w5.contactPair(c1, c2, (manifold) => {
+        const n3 = manifold.normal();
+        normal2 = swapped ? [-n3.x, -n3.y, -n3.z] : [n3.x, n3.y, n3.z];
+        if (manifold.numSolverContacts() > 0) {
+          const p2 = manifold.solverContactPoint(0);
+          point3 = [p2.x, p2.y, p2.z];
+        }
+      });
+    }
+    return { kind: 1, a: a2, b: b3, point: point3, normal: normal2 };
+  }
+  retainStepCollisionEvents() {
+    const q3 = this.events;
+    if (q3 === null) return;
+    q3.drainCollisionEvents((h12, h2, started) => {
+      const record6 = this.collisionRecord(h12, h2, started);
+      if (record6 === null) return;
+      if (this.collisionEvents.length < MAX_COLLISION_EVENTS) this.collisionEvents.push(record6);
+      else this.collisionOverflow = Math.min(2147483647, this.collisionOverflow + 1);
+    });
+  }
   /** Insert a rigid body + its collider, allocate the next monotonic id, record
    *  the id<->handle mapping, and return the id. */
   insertBody(rbDesc, colliderDesc) {
     const w5 = this.requireWorld();
     const body = w5.createRigidBody(rbDesc);
     w5.createCollider(colliderDesc, body);
-    const id4 = this.nextBodyId++;
-    this.idToHandle.set(id4, body.handle);
-    this.handleToId.set(body.handle, id4);
-    return id4;
+    const id7 = this.nextBodyId++;
+    this.idToHandle.set(id7, body.handle);
+    this.handleToId.set(body.handle, id7);
+    return id7;
   }
   makeController() {
     const w5 = this.requireWorld();
@@ -144650,7 +148504,7 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
     this.gravityY = gravityY;
     this.world = new this.R.World({ x: 0, y: gravityY, z: 0 });
     this.configureWorld();
-    this.events = new this.R.EventQueue(true);
+    this.events = new this.R.EventQueue(false);
     this.controller = this.makeController();
     this.nextBodyId = 0;
     this.idToHandle.clear();
@@ -144719,8 +148573,8 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
       this.R.ColliderDesc.capsule(halfHeight, radius).setActiveEvents(this.R.ActiveEvents.COLLISION_EVENTS)
     );
   }
-  op_physics_move_character(id4, dx, dy, dz, out) {
-    const body = this.bodyFor(id4);
+  op_physics_move_character(id7, dx, dy, dz, out) {
+    const body = this.bodyFor(id7);
     if (body === null || this.controller === null) {
       if (out.length >= 4) {
         out[0] = 0;
@@ -144743,35 +148597,36 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
       out[3] = this.controller.computedGrounded() ? 1 : 0;
     }
   }
-  op_physics_remove_body(id4) {
-    const handle = this.idToHandle.get(id4);
+  op_physics_remove_body(id7) {
+    const handle = this.idToHandle.get(id7);
     if (handle === void 0) return;
     const body = this.world?.getRigidBody(handle);
     if (body) this.world?.removeRigidBody(body);
-    this.idToHandle.delete(id4);
+    this.idToHandle.delete(id7);
     this.handleToId.delete(handle);
   }
-  op_physics_apply_impulse(id4, ix, iy, iz) {
-    const body = this.bodyFor(id4);
+  op_physics_apply_impulse(id7, ix, iy, iz) {
+    const body = this.bodyFor(id7);
     if (body === null) return;
     body.applyImpulse({ x: ix, y: iy, z: iz }, true);
   }
-  setBodyTranslation(id4, x3, y4, z4) {
-    const body = this.bodyFor(id4);
+  setBodyTranslation(id7, x3, y4, z4) {
+    const body = this.bodyFor(id7);
     if (body === null) return;
     body.setTranslation({ x: x3, y: y4, z: z4 }, true);
   }
-  setBodyRotation(id4, x3, y4, z4, w5) {
-    const body = this.bodyFor(id4);
+  setBodyRotation(id7, x3, y4, z4, w5) {
+    const body = this.bodyFor(id7);
     if (body === null) return;
     body.setRotation({ x: x3, y: y4, z: z4, w: w5 }, true);
   }
   op_physics_step() {
     const w5 = this.requireWorld();
     w5.step(this.events ?? void 0);
+    this.retainStepCollisionEvents();
   }
-  op_physics_body_transform(id4, out) {
-    const body = this.bodyFor(id4);
+  op_physics_body_transform(id7, out) {
+    const body = this.bodyFor(id7);
     if (body === null) {
       out.fill(0);
       return;
@@ -144786,8 +148641,8 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
     out[5] = r2.z;
     out[6] = r2.w;
   }
-  op_physics_body_pos(id4, out) {
-    const body = this.bodyFor(id4);
+  op_physics_body_pos(id7, out) {
+    const body = this.bodyFor(id7);
     if (body === null) {
       out.fill(0);
       return;
@@ -144802,46 +148657,21 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
    *  (ecs.updateComponent / scene.moveEntity / a stamped createMesh's rotation) so the collider
    *  follows and the per-tick body→SoA sync does not snap the entity back. No-op on a non-finite
    *  input or an unknown/removed id; wakes the body so a re-posed fixed/static body takes effect. */
-  op_physics_set_body_transform(id4, x3, y4, z4, qx, qy, qz, qw) {
+  op_physics_set_body_transform(id7, x3, y4, z4, qx, qy, qz, qw) {
     if (!(Number.isFinite(x3) && Number.isFinite(y4) && Number.isFinite(z4) && Number.isFinite(qx) && Number.isFinite(qy) && Number.isFinite(qz) && Number.isFinite(qw))) return;
-    const body = this.bodyFor(id4);
+    const body = this.bodyFor(id7);
     if (body === null) return;
     body.setTranslation({ x: x3, y: y4, z: z4 }, true);
     body.setRotation({ x: qx, y: qy, z: qz, w: qw }, true);
   }
   op_physics_drain_collisions() {
-    const records = [];
-    const w5 = this.world;
-    const q3 = this.events;
-    if (w5 === null || q3 === null) return records;
-    q3.drainCollisionEvents((h12, h2, started) => {
-      const idA = this.idForCollider(h12);
-      const idB = this.idForCollider(h2);
-      if (idA === void 0 || idB === void 0) return;
-      const a2 = Math.min(idA, idB);
-      const b3 = Math.max(idA, idB);
-      const swapped = idA > idB;
-      if (!started) {
-        records.push({ kind: 0, a: a2, b: b3, point: null, normal: null });
-        return;
-      }
-      let point3 = null;
-      let normal2 = null;
-      const c1 = w5.getCollider(h12);
-      const c2 = w5.getCollider(h2);
-      if (c1 && c2) {
-        w5.contactPair(c1, c2, (manifold) => {
-          const n3 = manifold.normal();
-          normal2 = swapped ? [-n3.x, -n3.y, -n3.z] : [n3.x, n3.y, n3.z];
-          if (manifold.numSolverContacts() > 0) {
-            const p2 = manifold.solverContactPoint(0);
-            point3 = [p2.x, p2.y, p2.z];
-          }
-        });
-      }
-      records.push({ kind: 1, a: a2, b: b3, point: point3, normal: normal2 });
-    });
+    const records = this.collisionEvents.splice(0);
     return records;
+  }
+  op_physics_take_collision_overflow_count() {
+    const count = this.collisionOverflow;
+    this.collisionOverflow = 0;
+    return count;
   }
   op_physics_raycast(ox, oy, oz, dx, dy, dz, maxToi, out) {
     if (out.length < 6) return;
@@ -144863,8 +148693,8 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
     out[3] = oy + dy * toi;
     out[4] = oz + dz * toi;
     const parent = hit.collider.parent();
-    const id4 = parent ? this.handleToId.get(parent.handle) : void 0;
-    out[5] = id4 === void 0 ? -1 : id4;
+    const id7 = parent ? this.handleToId.get(parent.handle) : void 0;
+    out[5] = id7 === void 0 ? -1 : id7;
   }
   op_physics_overlap_box(x3, y4, z4, hx, hy, hz, qx, qy, qz, qw, ignoreBodyId, out) {
     if (![x3, y4, z4, qx, qy, qz, qw].every(Number.isFinite)) throw new Error("box overlap pose values must be finite");
@@ -144880,15 +148710,15 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
     const shape = new this.R.Cuboid(hx, hy, hz);
     w5.intersectionsWithShape({ x: x3, y: y4, z: z4 }, { x: qx, y: qy, z: qz, w: qw }, shape, (collider) => {
       const parent = collider.parent();
-      const id4 = parent ? this.handleToId.get(parent.handle) : void 0;
-      if (id4 === void 0 || id4 === ignoreBodyId || hits.has(id4)) return true;
-      if (hits.size < capacity) hits.add(id4);
+      const id7 = parent ? this.handleToId.get(parent.handle) : void 0;
+      if (id7 === void 0 || id7 === ignoreBodyId || hits.has(id7)) return true;
+      if (hits.size < capacity) hits.add(id7);
       else {
         let currentMax = -1;
         for (const hit of hits) currentMax = Math.max(currentMax, hit);
-        if (id4 < currentMax) {
+        if (id7 < currentMax) {
           hits.delete(currentMax);
-          hits.add(id4);
+          hits.add(id7);
         }
       }
       return true;
@@ -144924,11 +148754,11 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
     this.world = restoredWorld;
     this.gravityY = meta4.gravityY;
     this.configureWorld();
-    this.events = new this.R.EventQueue(true);
+    this.events = new this.R.EventQueue(false);
     this.controller = this.makeController();
     this.nextBodyId = meta4.nextBodyId;
     this.idToHandle = new Map(meta4.entries);
-    this.handleToId = new Map(meta4.entries.map(([id4, handle]) => [handle, id4]));
+    this.handleToId = new Map(meta4.entries.map(([id7, handle]) => [handle, id7]));
   }
   dispose() {
     if (this.disposed) return;
@@ -144937,21 +148767,194 @@ var WasmRapierPhysics = class _WasmRapierPhysics {
   }
 };
 
+// src/browser/engine-op-composition.ts
+function bindPhysicsEngineOps(provider) {
+  const bound = {
+    op_physics_create_world: provider.op_physics_create_world.bind(provider),
+    op_physics_add_ground: provider.op_physics_add_ground.bind(provider),
+    op_physics_add_box: provider.op_physics_add_box.bind(provider),
+    op_physics_add_box_material: provider.op_physics_add_box_material.bind(provider),
+    op_physics_add_sphere: provider.op_physics_add_sphere.bind(provider),
+    op_physics_add_capsule: provider.op_physics_add_capsule.bind(provider),
+    op_physics_add_static_box: provider.op_physics_add_static_box.bind(provider),
+    op_physics_add_static_sphere: provider.op_physics_add_static_sphere.bind(provider),
+    op_physics_add_static_capsule: provider.op_physics_add_static_capsule.bind(provider),
+    op_physics_add_heightfield: provider.op_physics_add_heightfield.bind(provider),
+    op_physics_add_character: provider.op_physics_add_character.bind(provider),
+    op_physics_move_character: provider.op_physics_move_character.bind(provider),
+    op_physics_remove_body: provider.op_physics_remove_body.bind(provider),
+    op_physics_apply_impulse: provider.op_physics_apply_impulse.bind(provider),
+    op_physics_step: provider.op_physics_step.bind(provider),
+    op_physics_snapshot: provider.op_physics_snapshot.bind(provider),
+    op_physics_restore: provider.op_physics_restore.bind(provider),
+    op_physics_body_pos: provider.op_physics_body_pos.bind(provider),
+    op_physics_body_transform: provider.op_physics_body_transform.bind(provider),
+    op_physics_set_body_transform: provider.op_physics_set_body_transform.bind(provider),
+    op_physics_drain_collisions: provider.op_physics_drain_collisions.bind(provider),
+    op_physics_raycast: provider.op_physics_raycast.bind(provider),
+    op_physics_overlap_box: provider.op_physics_overlap_box.bind(provider)
+  };
+  if (provider.op_physics_take_collision_overflow_count !== void 0) {
+    bound.op_physics_take_collision_overflow_count = provider.op_physics_take_collision_overflow_count.bind(provider);
+  }
+  return bound;
+}
+function inertNonPhysicsEngineOps(options = {}) {
+  const noop = () => {
+  };
+  return {
+    op_create_window_context: () => ({}),
+    op_surface_present: noop,
+    op_surface_resize: noop,
+    op_set_frame_callback: noop,
+    op_set_fixed_step_callback: noop,
+    op_set_resize_callback: noop,
+    op_input_axes: noop,
+    op_input_look: noop,
+    op_input_buttons: noop,
+    op_log: noop,
+    op_http_post: () => Promise.resolve(""),
+    op_http_post_headers: () => Promise.resolve(""),
+    op_sleep_ms: () => Promise.resolve(),
+    op_read_asset: options.readAsset ?? (() => new Uint8Array(0)),
+    op_sha256: () => "",
+    op_read_env: () => "",
+    op_write_trace: noop,
+    op_append_trace: noop,
+    op_read_trace: () => "",
+    op_sandbox_create: () => 0,
+    op_sandbox_eval: () => "",
+    op_sandbox_destroy: () => false,
+    op_sandbox_count: () => 0,
+    op_ecs_spatial_query_batch: noop,
+    op_audio_init: () => 0,
+    op_audio_play: () => 0,
+    op_audio_ambient: () => 0,
+    op_audio_stop: noop,
+    op_audio_stop_all: noop,
+    op_audio_set_bus_volume: noop,
+    op_audio_play_spatial: () => 0,
+    op_audio_set_emitter: noop,
+    op_audio_set_listener: noop,
+    op_audio_set_volume: noop,
+    op_audio_speak: () => 0,
+    op_audio_play_buffer: () => 0
+  };
+}
+function composePortableEngineOps(physics, options = {}, overrides = {}) {
+  return { ...inertNonPhysicsEngineOps(options), ...bindPhysicsEngineOps(physics), ...overrides };
+}
+
+// src/browser/snapshot-boot.ts
+function parseSnapshotBootPayload(payload) {
+  const snap = parseSnapshot(payload.snapshot);
+  if (snap.snapshotSeq !== payload.snapshotSeq) {
+    throw new Error(`snapshot boot: payload snapshotSeq ${payload.snapshotSeq} != snapshot's ${snap.snapshotSeq}`);
+  }
+  return snap;
+}
+function sameNumberArray(a2, b3) {
+  const av = a2 ?? [];
+  const bv = b3 ?? [];
+  if (av.length !== bv.length) return false;
+  for (let i2 = 0; i2 < av.length; i2++) if (av[i2] !== bv[i2]) return false;
+  return true;
+}
+function finalizeSnapshotBoot(world, snapshot, participants) {
+  const table = world.entities.snapshot();
+  if (table.entries.length !== snapshot.entities.length) {
+    throw new Error(`snapshot boot: replay produced ${table.entries.length} entities, snapshot carries ${snapshot.entities.length}`);
+  }
+  if (table.seq !== snapshot.entitySeq) {
+    throw new Error(`snapshot boot: entity seq ${table.seq} != snapshot entitySeq ${snapshot.entitySeq}`);
+  }
+  for (let i2 = 0; i2 < snapshot.entities.length; i2++) {
+    const want = snapshot.entities[i2];
+    const got = table.entries[i2];
+    if (got.id !== want.id || got.eid !== want.eid || got.bodyId !== want.bodyId) {
+      throw new Error(
+        `snapshot boot: allocation diverged at slot ${i2}: replay {id:'${got.id}', eid:${got.eid}, bodyId:${got.bodyId}} vs snapshot {id:'${want.id}', eid:${want.eid}, bodyId:${want.bodyId}}`
+      );
+    }
+    const live = world.entities.resolve(want.id);
+    if (live === void 0) throw new Error(`snapshot boot: entity '${want.id}' not live after replay`);
+    if (!sameNumberArray(live.runtimeBodyIds, want.runtimeBodyIds)) {
+      throw new Error(`snapshot boot: entity '${want.id}' runtime body ids diverged ([${live.runtimeBodyIds ?? []}] vs [${want.runtimeBodyIds ?? []}])`);
+    }
+  }
+  installRandomState(snapshot.rngState);
+  world.rng = installSkillRandomState(snapshot.skillRngState ?? snapshot.rngState);
+  world.tags.clear();
+  for (const e2 of snapshot.entities) {
+    Position.x[e2.eid] = e2.pos[0];
+    Position.y[e2.eid] = e2.pos[1];
+    Position.z[e2.eid] = e2.pos[2];
+    Rotation.x[e2.eid] = e2.rot[0];
+    Rotation.y[e2.eid] = e2.rot[1];
+    Rotation.z[e2.eid] = e2.rot[2];
+    Rotation.w[e2.eid] = e2.rot[3];
+    Scale.x[e2.eid] = e2.scale[0];
+    Scale.y[e2.eid] = e2.scale[1];
+    Scale.z[e2.eid] = e2.scale[2];
+    if (e2.tags.length > 0) world.tags.set(e2.eid, new Set(e2.tags));
+    if (e2.resource !== void 0) world.entities.bindResource(e2.id, e2.resource);
+    if (e2.origin !== void 0) world.entities.bindOrigin(e2.id, e2.origin);
+    if (e2.material !== void 0) world.entities.bindMaterial(e2.id, e2.material);
+    if (e2.behavior !== void 0) world.entities.bindBehavior(e2.id, e2.behavior);
+    if (e2.bodyId !== void 0) {
+      world.ops.op_physics_set_body_transform(
+        e2.bodyId,
+        e2.pos[0],
+        e2.pos[1],
+        e2.pos[2],
+        e2.rot[0],
+        e2.rot[1],
+        e2.rot[2],
+        e2.rot[3]
+      );
+    }
+  }
+  if (snapshot.characters.length > 0) {
+    const characters = participants?.get(CHARACTERS_PARTICIPANT_KEY);
+    if (characters === void 0) {
+      throw new Error("snapshot boot: snapshot carries character-controller state but this realm registered no characters participant");
+    }
+    characters.restore(snapshot.characters);
+  }
+  if (snapshot.events.length > 0 || participants?.has(EVENTS_PARTICIPANT_KEY) === true) {
+    participants?.get(EVENTS_PARTICIPANT_KEY)?.restore(snapshot.events);
+  }
+  const managerKeys = Object.keys(snapshot.managers ?? {}).sort();
+  for (const key of managerKeys) {
+    const participant2 = participants?.get(key);
+    if (participant2 === void 0) {
+      throw new Error(`snapshot boot: managers entry '${key}' has no registered snapshot participant -- cannot restore state this realm does not own`);
+    }
+    const parsed = participant2.schema.safeParse(snapshot.managers[key]);
+    if (!parsed.success) {
+      throw new Error(`snapshot boot: managers entry '${key}' failed its participant schema: ${parsed.error.message}`);
+    }
+    participant2.restore(parsed.data);
+  }
+  return { entities: snapshot.entities.length };
+}
+
 // src/browser/sab-transforms.ts
 var BYTES_PER_FLOAT = Float32Array.BYTES_PER_ELEMENT;
+var TRANSFORM_HEADER_BYTES = Int32Array.BYTES_PER_ELEMENT;
 var TRANSFORM_CHANNELS = 10;
 var CHANNEL_BYTES = MAX_ENTITIES * BYTES_PER_FLOAT;
-var TRANSFORM_BUFFER_BYTES = TRANSFORM_CHANNELS * CHANNEL_BYTES;
-var OFF_POS_X = 0 * CHANNEL_BYTES;
-var OFF_POS_Y = 1 * CHANNEL_BYTES;
-var OFF_POS_Z = 2 * CHANNEL_BYTES;
-var OFF_ROT_X = 3 * CHANNEL_BYTES;
-var OFF_ROT_Y = 4 * CHANNEL_BYTES;
-var OFF_ROT_Z = 5 * CHANNEL_BYTES;
-var OFF_ROT_W = 6 * CHANNEL_BYTES;
-var OFF_SCL_X = 7 * CHANNEL_BYTES;
-var OFF_SCL_Y = 8 * CHANNEL_BYTES;
-var OFF_SCL_Z = 9 * CHANNEL_BYTES;
+var TRANSFORM_BUFFER_BYTES = TRANSFORM_HEADER_BYTES + TRANSFORM_CHANNELS * CHANNEL_BYTES;
+var OFF_POS_X = TRANSFORM_HEADER_BYTES + 0 * CHANNEL_BYTES;
+var OFF_POS_Y = TRANSFORM_HEADER_BYTES + 1 * CHANNEL_BYTES;
+var OFF_POS_Z = TRANSFORM_HEADER_BYTES + 2 * CHANNEL_BYTES;
+var OFF_ROT_X = TRANSFORM_HEADER_BYTES + 3 * CHANNEL_BYTES;
+var OFF_ROT_Y = TRANSFORM_HEADER_BYTES + 4 * CHANNEL_BYTES;
+var OFF_ROT_Z = TRANSFORM_HEADER_BYTES + 5 * CHANNEL_BYTES;
+var OFF_ROT_W = TRANSFORM_HEADER_BYTES + 6 * CHANNEL_BYTES;
+var OFF_SCL_X = TRANSFORM_HEADER_BYTES + 7 * CHANNEL_BYTES;
+var OFF_SCL_Y = TRANSFORM_HEADER_BYTES + 8 * CHANNEL_BYTES;
+var OFF_SCL_Z = TRANSFORM_HEADER_BYTES + 9 * CHANNEL_BYTES;
 function sharedArrayBufferAvailable() {
   return typeof SharedArrayBuffer === "function";
 }
@@ -144970,12 +148973,14 @@ var SharedTransformStorage = class {
   /** Scale SoA views over the shared buffer (alias world.ts `Scale`). */
   Scale;
   storageVersion = 0;
+  publication;
+  publicationDepth = 0;
   constructor(opts = {}) {
     if (opts.buffer !== void 0) {
       const buf = opts.buffer;
       if (buf.byteLength !== TRANSFORM_BUFFER_BYTES) {
         throw new RangeError(
-          `SharedTransformStorage: buffer size ${buf.byteLength} bytes does not match the expected transform layout (${TRANSFORM_BUFFER_BYTES} bytes = ${TRANSFORM_CHANNELS} channels x ${MAX_ENTITIES} entities x ${BYTES_PER_FLOAT} bytes).`
+          `SharedTransformStorage: buffer size ${buf.byteLength} bytes does not match the expected transform layout (${TRANSFORM_BUFFER_BYTES} bytes = ${TRANSFORM_HEADER_BYTES}-byte header + ${TRANSFORM_CHANNELS} channels x ${MAX_ENTITIES} entities x ${BYTES_PER_FLOAT} bytes).`
         );
       }
       this.buffer = buf;
@@ -144990,6 +148995,7 @@ var SharedTransformStorage = class {
       }
     }
     const b3 = this.buffer;
+    this.publication = new Int32Array(b3, 0, 1);
     this.Position = {
       x: new Float32Array(b3, OFF_POS_X, MAX_ENTITIES),
       y: new Float32Array(b3, OFF_POS_Y, MAX_ENTITIES),
@@ -145010,11 +149016,45 @@ var SharedTransformStorage = class {
   get version() {
     return this.storageVersion;
   }
+  loadPublicationGeneration() {
+    return this.shared ? Atomics.load(this.publication, 0) : this.publication[0];
+  }
+  storePublicationGeneration(value) {
+    if (this.shared) Atomics.store(this.publication, 0, value);
+    else this.publication[0] = value;
+  }
+  /** Current seqlock generation. Even values are stable; odd values mean the
+   * single writer is publishing a multi-entity transform set. */
+  publicationGeneration() {
+    return this.loadPublicationGeneration();
+  }
+  /** Begin one atomic transform publication. Nesting is supported so a higher
+   * level authoring transaction can contain the fixed-step sync helper. */
+  beginPublication() {
+    if (this.publicationDepth++ > 0) return;
+    const current = this.loadPublicationGeneration();
+    const odd = current + ((current & 1) === 0 ? 1 : 2) | 0;
+    this.storePublicationGeneration(odd);
+  }
+  /** Publish every transform write since beginPublication as one stable set. */
+  endPublication() {
+    if (this.publicationDepth < 1) throw new Error("SharedTransformStorage.endPublication without beginPublication");
+    if (--this.publicationDepth > 0) return;
+    const current = this.loadPublicationGeneration();
+    this.storePublicationGeneration(current + ((current & 1) === 1 ? 1 : 2) | 0);
+  }
   // --- TransformStorage write surface (matches facade.ts EXACTLY) ----------
+  // Every write ALSO mirrors into the module SoA (the facade contract): the SoA
+  // is the sim-truth store creation writes and every capture/skill read path
+  // uses; without the mirror the sim worker's authoring writes were invisible
+  // to the scene adapter's after-state capture and commit replays diverged.
   writePosition(eid, x3, y4, z4) {
     this.Position.x[eid] = x3;
     this.Position.y[eid] = y4;
     this.Position.z[eid] = z4;
+    Position.x[eid] = x3;
+    Position.y[eid] = y4;
+    Position.z[eid] = z4;
     this.storageVersion++;
   }
   writeRotation(eid, x3, y4, z4, w5) {
@@ -145022,12 +149062,19 @@ var SharedTransformStorage = class {
     this.Rotation.y[eid] = y4;
     this.Rotation.z[eid] = z4;
     this.Rotation.w[eid] = w5;
+    Rotation.x[eid] = x3;
+    Rotation.y[eid] = y4;
+    Rotation.z[eid] = z4;
+    Rotation.w[eid] = w5;
     this.storageVersion++;
   }
   writeScale(eid, x3, y4, z4) {
     this.Scale.x[eid] = x3;
     this.Scale.y[eid] = y4;
     this.Scale.z[eid] = z4;
+    Scale.x[eid] = x3;
+    Scale.y[eid] = y4;
+    Scale.z[eid] = z4;
     this.storageVersion++;
   }
   // --- Per-eid read surface (the render-thread side of the zero-copy bridge).
@@ -145266,12 +149313,13 @@ var DerivedLod0TerrainIndex = class {
 };
 
 // src/browser/sim-status.ts
-var SIM_STATUS_INTS = 4;
+var SIM_STATUS_INTS = 5;
 var SIM_STATUS_BYTES = SIM_STATUS_INTS * Int32Array.BYTES_PER_ELEMENT;
 var SIM_STATUS_TICK_INDEX = 0;
 var SIM_STATUS_FLAGS_INDEX = 1;
 var SIM_STATUS_PLAYER_EID_INDEX = 2;
 var SIM_STATUS_GENERATION_INDEX = 3;
+var SIM_STATUS_DROPPED_STEPS_INDEX = 4;
 var SIM_STATUS_FLAG_IN_WATER = 1 << 0;
 var SIM_STATUS_FLAG_SWIMMING = 1 << 1;
 var SIM_STATUS_FLAG_SUBMERGED = 1 << 2;
@@ -145293,14 +149341,15 @@ function createSimStatusView(buffer3) {
   return new Int32Array(buffer3, 0, SIM_STATUS_INTS);
 }
 function initializeSimStatus(view) {
-  if (view.length < SIM_STATUS_INTS) throw new RangeError("sim status view must contain four int32 slots");
+  if (view.length < SIM_STATUS_INTS) throw new RangeError("sim status view must contain five int32 slots");
   view[SIM_STATUS_TICK_INDEX] = 0;
   view[SIM_STATUS_FLAGS_INDEX] = 0;
   view[SIM_STATUS_PLAYER_EID_INDEX] = -1;
   view[SIM_STATUS_GENERATION_INDEX] = 0;
+  view[SIM_STATUS_DROPPED_STEPS_INDEX] = 0;
 }
 function writeSimStatus(view, state) {
-  if (view.length < SIM_STATUS_INTS) throw new RangeError("sim status view must contain four int32 slots");
+  if (view.length < SIM_STATUS_INTS) throw new RangeError("sim status view must contain five int32 slots");
   const shared = sharedView(view);
   const current = load(view, SIM_STATUS_GENERATION_INDEX, shared);
   const oddGeneration = current + (current & 1 ? 2 : 1) | 0;
@@ -145308,6 +149357,7 @@ function writeSimStatus(view, state) {
   store(view, SIM_STATUS_TICK_INDEX, state.tick, shared);
   store(view, SIM_STATUS_FLAGS_INDEX, state.flags & SIM_STATUS_KNOWN_FLAGS, shared);
   store(view, SIM_STATUS_PLAYER_EID_INDEX, state.playerEid, shared);
+  store(view, SIM_STATUS_DROPPED_STEPS_INDEX, state.droppedSteps, shared);
   store(view, SIM_STATUS_GENERATION_INDEX, oddGeneration + 1 | 0, shared);
 }
 
@@ -145332,10 +149382,10 @@ function derivedError(code3, message) {
   return new DerivedSimActivationError(code3, message);
 }
 var derivedPlainError = (message) => derivedError("INVALID_DERIVED_MESSAGE", message);
-function exactPlainRecord(value, keys, optional2, label4) {
-  const record5 = plainRecord2(value, label4, derivedPlainError);
-  exactDataKeys(record5, keys, optional2, label4, derivedPlainError);
-  return record5;
+function exactPlainRecord(value, keys2, optional2, label4) {
+  const record6 = plainRecord2(value, label4, derivedPlainError);
+  exactDataKeys(record6, keys2, optional2, label4, derivedPlainError);
+  return record6;
 }
 function derivedId(value, label4) {
   if (typeof value !== "string" || !DERIVED_SIM_ID.test(value)) {
@@ -145383,38 +149433,38 @@ function parseDerivedTerrainTile(value, label4) {
   return Object.freeze({ nrows, ncols, origin, scale: scale2, heights });
 }
 function parseDerivedSimStageSnapshot(value) {
-  const record5 = exactPlainRecord(
+  const record6 = exactPlainRecord(
     value,
     ["schema", "projectId", "branchId", "source", "manifestHash", "grid", "terrainWindow"],
     ["generatedWater"],
     "derived sim stage snapshot"
   );
-  if (record5.schema !== DERIVED_SIM_STAGE_SCHEMA) {
+  if (record6.schema !== DERIVED_SIM_STAGE_SCHEMA) {
     throw derivedError("INVALID_DERIVED_MESSAGE", `derived sim stage schema must be '${DERIVED_SIM_STAGE_SCHEMA}'`);
   }
-  if (typeof record5.projectId !== "string" || !DERIVED_SIM_PROJECT_ID.test(record5.projectId) || typeof record5.branchId !== "string" || !DERIVED_SIM_BRANCH_ID.test(record5.branchId)) {
+  if (typeof record6.projectId !== "string" || !DERIVED_SIM_PROJECT_ID.test(record6.projectId) || typeof record6.branchId !== "string" || !DERIVED_SIM_BRANCH_ID.test(record6.branchId)) {
     throw derivedError("INVALID_DERIVED_MESSAGE", "derived sim project or branch id is invalid");
   }
-  const source = exactPlainRecord(record5.source, ["revision", "headHash"], [], "derived sim source");
+  const source = exactPlainRecord(record6.source, ["revision", "headHash"], [], "derived sim source");
   if (!Number.isSafeInteger(source.revision) || source.revision < 0) {
     throw derivedError("INVALID_DERIVED_MESSAGE", "derived sim source revision is invalid");
   }
   const headHash = derivedHash(source.headHash, "derived sim source headHash");
-  const manifestHash = derivedHash(record5.manifestHash, "derived sim manifestHash");
-  const gridInput = exactPlainRecord(record5.grid, ["schema", "gridId", "origin", "chunkSizeM", "defaultSamples"], [], "derived sim grid");
+  const manifestHash = derivedHash(record6.manifestHash, "derived sim manifestHash");
+  const gridInput = exactPlainRecord(record6.grid, ["schema", "gridId", "origin", "chunkSizeM", "defaultSamples"], [], "derived sim grid");
   let grid;
   try {
     grid = createTerrainGridSpec(gridInput);
   } catch (error51) {
     throw derivedError("INVALID_DERIVED_TERRAIN", error51 instanceof Error ? error51.message : String(error51));
   }
-  if (!Array.isArray(record5.terrainWindow) || record5.terrainWindow.length < 1 || record5.terrainWindow.length > DERIVED_SIM_MAX_RESIDENT_TILES) {
+  if (!Array.isArray(record6.terrainWindow) || record6.terrainWindow.length < 1 || record6.terrainWindow.length > DERIVED_SIM_MAX_RESIDENT_TILES) {
     throw derivedError("INVALID_DERIVED_TERRAIN", `derived sim terrainWindow must contain 1-${DERIVED_SIM_MAX_RESIDENT_TILES} LOD0 tiles`);
   }
   const entries = [];
   const window2 = [];
-  for (let index = 0; index < record5.terrainWindow.length; index++) {
-    const item = exactPlainRecord(record5.terrainWindow[index], ["key", "tx", "tz", "tile"], [], `derived sim terrainWindow[${index}]`);
+  for (let index = 0; index < record6.terrainWindow.length; index++) {
+    const item = exactPlainRecord(record6.terrainWindow[index], ["key", "tx", "tz", "tile"], [], `derived sim terrainWindow[${index}]`);
     let canonicalKey;
     try {
       canonicalKey = tileKey(item.tx, item.tz);
@@ -145444,8 +149494,8 @@ function parseDerivedSimStageSnapshot(value) {
   }
   let generatedWater;
   let preparedGeneratedWater = void 0;
-  if (record5.generatedWater !== void 0) {
-    const generated = exactPlainRecord(record5.generatedWater, ["artifact", "bytes", "bindings"], [], "derived sim generatedWater");
+  if (record6.generatedWater !== void 0) {
+    const generated = exactPlainRecord(record6.generatedWater, ["artifact", "bytes", "bindings"], [], "derived sim generatedWater");
     try {
       preparedGeneratedWater = prepareGeneratedWaterFieldInput({
         bytes: generated.bytes,
@@ -145459,8 +149509,8 @@ function parseDerivedSimStageSnapshot(value) {
   }
   const snapshot = Object.freeze({
     schema: DERIVED_SIM_STAGE_SCHEMA,
-    projectId: record5.projectId,
-    branchId: record5.branchId,
+    projectId: record6.projectId,
+    branchId: record6.branchId,
     source: Object.freeze({ revision: source.revision, headHash }),
     manifestHash,
     grid,
@@ -145469,32 +149519,7 @@ function parseDerivedSimStageSnapshot(value) {
   });
   return Object.freeze({ snapshot, entries: Object.freeze(entries), index: terrainIndex, preparedGeneratedWater });
 }
-var DEFAULT_GRANTS = /* @__PURE__ */ new Set([
-  "scene.write",
-  "scene.read",
-  "ecs.write",
-  "ecs.read",
-  "three.write",
-  "three.read",
-  "physics.write",
-  "physics.read",
-  "player.write",
-  "player.read",
-  "player.configure",
-  "world.write",
-  "world.read",
-  "terrain.write",
-  "terrain.read",
-  "asset.write",
-  "material.write",
-  "design.write",
-  "design.read",
-  "audio.write",
-  "camera.write",
-  "animation.write",
-  "authoring.read",
-  "authoring.write"
-]);
+var DEFAULT_GRANTS = realmDefaultGrants();
 function stubScene() {
   return {
     position: { set() {
@@ -145518,79 +149543,9 @@ function stubCamera() {
   };
 }
 function composeWorkerOps(P3, assets) {
-  const noop = () => {
-  };
-  return {
-    // ── physics: the REAL wasm-Rapier solver (bound so `this` is the adapter) ──
-    op_physics_create_world: P3.op_physics_create_world.bind(P3),
-    op_physics_add_ground: P3.op_physics_add_ground.bind(P3),
-    op_physics_add_box: P3.op_physics_add_box.bind(P3),
-    op_physics_add_box_material: P3.op_physics_add_box_material.bind(P3),
-    op_physics_add_sphere: P3.op_physics_add_sphere.bind(P3),
-    op_physics_add_capsule: P3.op_physics_add_capsule.bind(P3),
-    op_physics_add_static_box: P3.op_physics_add_static_box.bind(P3),
-    op_physics_add_static_sphere: P3.op_physics_add_static_sphere.bind(P3),
-    op_physics_add_static_capsule: P3.op_physics_add_static_capsule.bind(P3),
-    op_physics_add_heightfield: P3.op_physics_add_heightfield.bind(P3),
-    op_physics_add_character: P3.op_physics_add_character.bind(P3),
-    op_physics_move_character: P3.op_physics_move_character.bind(P3),
-    op_physics_remove_body: P3.op_physics_remove_body.bind(P3),
-    op_physics_apply_impulse: P3.op_physics_apply_impulse.bind(P3),
-    op_physics_step: P3.op_physics_step.bind(P3),
-    op_physics_snapshot: P3.op_physics_snapshot.bind(P3),
-    op_physics_restore: P3.op_physics_restore.bind(P3),
-    op_physics_body_pos: P3.op_physics_body_pos.bind(P3),
-    op_physics_body_transform: P3.op_physics_body_transform.bind(P3),
-    op_physics_set_body_transform: P3.op_physics_set_body_transform.bind(P3),
-    op_physics_drain_collisions: P3.op_physics_drain_collisions.bind(P3),
-    op_physics_raycast: P3.op_physics_raycast.bind(P3),
-    op_physics_overlap_box: P3.op_physics_overlap_box.bind(P3),
-    // ── render / loop / device input — no surface in a worker (input arrives via
-    //    the InputRingBuffer, consumed directly in tick(), not these ops) ──
-    op_create_window_context: () => ({}),
-    op_surface_present: noop,
-    op_surface_resize: noop,
-    op_set_frame_callback: noop,
-    op_set_fixed_step_callback: noop,
-    op_set_resize_callback: noop,
-    op_input_axes: noop,
-    op_input_look: noop,
-    op_input_buttons: noop,
-    // ── host services ──
-    op_log: noop,
-    op_http_post: () => Promise.resolve(""),
-    op_http_post_headers: () => Promise.resolve(""),
-    op_sleep_ms: () => Promise.resolve(),
-    // Asset bytes are cloned into the init message after an async main-thread
-    // prefetch. This keeps worker authoring deterministic without synchronous XHR.
-    op_read_asset: (id4) => assets.get(id4) ?? new Uint8Array(0),
-    op_sha256: () => "",
-    op_read_env: () => "",
-    // ── durable trace ──
-    op_write_trace: noop,
-    op_append_trace: noop,
-    op_read_trace: () => "",
-    // ── sandbox ──
-    op_sandbox_create: () => 0,
-    op_sandbox_eval: () => "",
-    op_sandbox_destroy: () => false,
-    op_sandbox_count: () => 0,
-    // ── native ECS spatial ──
-    op_ecs_spatial_query_batch: noop,
-    // ── audio ──
-    op_audio_init: () => 0,
-    op_audio_play: () => 0,
-    op_audio_ambient: () => 0,
-    op_audio_stop: noop,
-    op_audio_stop_all: noop,
-    op_audio_set_bus_volume: noop,
-    op_audio_play_spatial: () => 0,
-    op_audio_set_emitter: noop,
-    op_audio_set_listener: noop,
-    op_audio_set_volume: noop,
-    op_audio_speak: () => 0,
-    op_audio_play_buffer: () => 0
-  };
+  return composePortableEngineOps(P3, {
+    readAsset: (id7) => assets.get(id7) ?? new Uint8Array(0)
+  });
 }
 var SimWorkerController = class _SimWorkerController {
   /** The headless WorldContext skills + the controller operate over. */
@@ -145613,7 +149568,7 @@ var SimWorkerController = class _SimWorkerController {
   disposed = false;
   activePlayerDirty = true;
   activePlayerCache;
-  statusWrite = { tick: 0, flags: 0, playerEid: -1 };
+  statusWrite = { tick: 0, flags: 0, playerEid: -1, droppedSteps: 0 };
   scratch7 = new Float32Array(7);
   inFrame = { move: [0, 0, 0], look: [0, 0], buttons: [0, 0], tick: 0 };
   lastInputFrame = null;
@@ -145651,6 +149606,7 @@ var SimWorkerController = class _SimWorkerController {
     const assetBytes = /* @__PURE__ */ new Map();
     for (const asset of opts.assets ?? []) assetBytes.set(asset.id, asset.bytes);
     const ops2 = composeWorkerOps(physics, assetBytes);
+    if (ops === void 0) installOps(ops2);
     const world = {
       ecs,
       transforms,
@@ -145670,7 +149626,7 @@ var SimWorkerController = class _SimWorkerController {
     };
     const registry2 = new SkillRegistry(LiminaTracer.ephemeral("ses_sim_worker"));
     const assets = new AssetRegistry(ops2);
-    for (const [id4, bytes] of assetBytes) assets.seed(id4, bytes);
+    for (const [id7, bytes] of assetBytes) assets.seed(id7, bytes);
     const core = registerCoreSkills(registry2, { assets });
     const authoringBinding = new AuthoringProjectBinding((projectId) => {
       registerBrowserAuthoringRuntime(registry2, world, projectId);
@@ -145900,12 +149856,12 @@ var SimWorkerController = class _SimWorkerController {
     });
   }
   collectAuthoredTerrainBodies() {
-    const result = /* @__PURE__ */ new Set();
+    const result2 = /* @__PURE__ */ new Set();
     for (const region of this.core.terrain.regions.values()) {
-      for (const tile of region.tiles.values()) result.add(tile.bodyId);
+      for (const tile of region.tiles.values()) result2.add(tile.bodyId);
     }
-    for (const layer of this.core.terrain.layers.values()) result.add(layer.bodyId);
-    return result;
+    for (const layer of this.core.terrain.layers.values()) result2.add(layer.bodyId);
+    return result2;
   }
   suppressAuthoredTerrainColliders() {
     const current = this.collectAuthoredTerrainBodies();
@@ -145954,6 +149910,12 @@ var SimWorkerController = class _SimWorkerController {
     writeSimStatus(this.status, this.statusWrite);
     return this.tickCount;
   }
+  /** Account for elapsed fixed steps intentionally discarded by the bounded
+   * shell catch-up loop. The value is published with the next completed tick. */
+  recordDroppedSteps(count) {
+    if (!Number.isSafeInteger(count) || count < 0) throw new RangeError("dropped step count must be a non-negative safe integer");
+    this.statusWrite.droppedSteps = Math.min(2147483647, this.statusWrite.droppedSteps + count);
+  }
   activePlayer() {
     if (!this.activePlayerDirty) return this.activePlayerCache;
     let selected;
@@ -145989,14 +149951,33 @@ var SimWorkerController = class _SimWorkerController {
    *  parallel controllers stay independent + deterministic. */
   syncTransforms() {
     const scratch = this.scratch7;
-    for (const [bodyId, id4] of this.entityTable.bodyBound()) {
-      if (this.suppressedAuthoredTerrainBodies.has(bodyId)) continue;
-      const entry = this.entityTable.resolve(id4);
-      if (entry === void 0) continue;
-      this.world.ops.op_physics_body_transform(bodyId, scratch);
-      this.transformStorage.writePosition(entry.eid, scratch[0], scratch[1], scratch[2]);
-      this.transformStorage.writeRotation(entry.eid, scratch[3], scratch[4], scratch[5], scratch[6]);
+    this.transformStorage.beginPublication();
+    try {
+      for (const [bodyId, id7] of this.entityTable.bodyBound()) {
+        if (this.suppressedAuthoredTerrainBodies.has(bodyId)) continue;
+        const entry = this.entityTable.resolve(id7);
+        if (entry === void 0) continue;
+        this.world.ops.op_physics_body_transform(bodyId, scratch);
+        this.transformStorage.writePosition(entry.eid, scratch[0], scratch[1], scratch[2]);
+        this.transformStorage.writeRotation(entry.eid, scratch[3], scratch[4], scratch[5], scratch[6]);
+      }
+    } finally {
+      this.transformStorage.endPublication();
     }
+  }
+  /** Finalize an editor session FAST-BOOT after `loadWorldIsolated` authored the
+   *  snapshot boot PROGRAM (see browser/snapshot-boot.ts): verify allocation
+   *  parity, install both RNG streams, overwrite transforms/tags/manager state,
+   *  re-pose bodies, then sync the restored poses into the transform SAB so the
+   *  render thread frames the restored world before the first tick. THROWS on
+   *  any parity/restore failure — the shell escalates that to a fatal init error
+   *  and the caller falls back to full replay. */
+  finalizeSnapshotBoot(payload) {
+    const snapshot = parseSnapshotBootPayload(payload);
+    const result2 = finalizeSnapshotBoot(this.world, snapshot, this.core.snapshotParticipants);
+    this.activePlayerDirty = true;
+    this.syncTransforms();
+    return result2;
   }
   /** `ecs.updateComponent` is the editor's live transform mutation path. The
    *  worker owns Rapier and then streams body transforms into the SAB, so for a
@@ -146049,24 +150030,60 @@ var SimWorkerController = class _SimWorkerController {
     return f2 === null ? null : { move: [...f2.move], look: [...f2.look], buttons: [...f2.buttons], tick: f2.tick };
   }
 };
+var FixedStepAccumulator = class {
+  stepMs;
+  maxCatchUpSteps;
+  maxElapsedMs;
+  previousMs = null;
+  remainderMs = 0;
+  constructor(hz, maxCatchUpSteps = 5, maxElapsedMs = 250) {
+    if (!Number.isFinite(hz) || hz <= 0) throw new RangeError("fixed-step hz must be positive");
+    if (!Number.isSafeInteger(maxCatchUpSteps) || maxCatchUpSteps < 1) throw new RangeError("maxCatchUpSteps must be positive");
+    if (!Number.isFinite(maxElapsedMs) || maxElapsedMs <= 0) throw new RangeError("maxElapsedMs must be positive");
+    this.stepMs = 1e3 / hz;
+    this.maxCatchUpSteps = maxCatchUpSteps;
+    this.maxElapsedMs = maxElapsedMs;
+  }
+  reset(nowMs) {
+    if (!Number.isFinite(nowMs)) throw new RangeError("fixed-step clock must be finite");
+    this.previousMs = nowMs;
+    this.remainderMs = 0;
+  }
+  advance(nowMs) {
+    if (!Number.isFinite(nowMs)) throw new RangeError("fixed-step clock must be finite");
+    if (this.previousMs === null) {
+      this.reset(nowMs);
+      return { steps: 0, droppedSteps: 0 };
+    }
+    const currentMs = Math.max(this.previousMs, nowMs);
+    const elapsedMs = currentMs - this.previousMs;
+    this.previousMs = currentMs;
+    const totalDebtMs = this.remainderMs + elapsedMs;
+    const totalDue = Math.floor(totalDebtMs / this.stepMs);
+    this.remainderMs = totalDebtMs - totalDue * this.stepMs;
+    const runnableDue = Math.floor(Math.min(totalDebtMs, this.maxElapsedMs) / this.stepMs);
+    const steps = Math.min(totalDue, runnableDue, this.maxCatchUpSteps);
+    return { steps, droppedSteps: totalDue - steps };
+  }
+};
 function parseDerivedRevisionShellMessage(value) {
-  const record5 = exactPlainRecord(value, ["type", "requestId", "manifestHash"], ["snapshot", "stagedRequestId"], "derived revision shell message");
-  const type = record5.type;
+  const record6 = exactPlainRecord(value, ["type", "requestId", "manifestHash"], ["snapshot", "stagedRequestId"], "derived revision shell message");
+  const type = record6.type;
   if (type !== "stageDerivedRevision" && type !== "commitDerivedRevision" && type !== "discardDerivedRevision") {
     throw derivedError("INVALID_DERIVED_MESSAGE", "derived revision shell message type is invalid");
   }
-  const requestId = derivedId(record5.requestId, `derived ${type} requestId`);
-  const manifestHash = derivedHash(record5.manifestHash, `derived ${type} manifestHash`);
+  const requestId = derivedId(record6.requestId, `derived ${type} requestId`);
+  const manifestHash = derivedHash(record6.manifestHash, `derived ${type} manifestHash`);
   if (type === "stageDerivedRevision") {
-    if (!Object.hasOwn(record5, "snapshot") || Object.hasOwn(record5, "stagedRequestId")) {
+    if (!Object.hasOwn(record6, "snapshot") || Object.hasOwn(record6, "stagedRequestId")) {
       throw derivedError("INVALID_DERIVED_MESSAGE", "derived stage message fields are invalid");
     }
-    return Object.freeze({ type, requestId, manifestHash, snapshot: record5.snapshot });
+    return Object.freeze({ type, requestId, manifestHash, snapshot: record6.snapshot });
   }
-  if (!Object.hasOwn(record5, "stagedRequestId") || Object.hasOwn(record5, "snapshot")) {
+  if (!Object.hasOwn(record6, "stagedRequestId") || Object.hasOwn(record6, "snapshot")) {
     throw derivedError("INVALID_DERIVED_MESSAGE", `derived ${type} message fields are invalid`);
   }
-  const stagedRequestId = derivedId(record5.stagedRequestId, `derived ${type} stagedRequestId`);
+  const stagedRequestId = derivedId(record6.stagedRequestId, `derived ${type} stagedRequestId`);
   return Object.freeze({ type, requestId, stagedRequestId, manifestHash });
 }
 function installSimWorker(scope, dependencies = {}) {
@@ -146074,6 +150091,8 @@ function installSimWorker(scope, dependencies = {}) {
   let timer;
   let driveHz = 60;
   let paused = false;
+  let driveAccumulator;
+  const nowMs = dependencies.nowMs ?? (() => typeof performance !== "undefined" ? performance.now() : Date.now());
   const postError = (phase, err) => {
     const e2 = err;
     scope.postMessage({
@@ -146097,19 +150116,20 @@ function installSimWorker(scope, dependencies = {}) {
       controller = null;
     }
     paused = false;
+    driveAccumulator = void 0;
   };
   const rejectControl = (operation, requestId, reason) => {
     scope.postMessage({ type: "controlRejected", operation, requestId, reason });
   };
-  const rejectDerived = (operation, raw, error51) => {
-    const record5 = raw !== null && typeof raw === "object" ? raw : {};
+  const rejectDerived = (operation, raw3, error51) => {
+    const record6 = raw3 !== null && typeof raw3 === "object" ? raw3 : {};
     const message = error51 instanceof Error ? error51.message : String(error51);
     scope.postMessage({
       type: "derivedRevisionRejected",
       operation,
-      ...typeof record5.requestId === "string" && DERIVED_SIM_ID.test(record5.requestId) ? { requestId: record5.requestId } : {},
-      ...typeof record5.stagedRequestId === "string" && DERIVED_SIM_ID.test(record5.stagedRequestId) ? { stagedRequestId: record5.stagedRequestId } : {},
-      ...typeof record5.manifestHash === "string" && DERIVED_SIM_HASH.test(record5.manifestHash) ? { manifestHash: record5.manifestHash } : {},
+      ...typeof record6.requestId === "string" && DERIVED_SIM_ID.test(record6.requestId) ? { requestId: record6.requestId } : {},
+      ...typeof record6.stagedRequestId === "string" && DERIVED_SIM_ID.test(record6.stagedRequestId) ? { stagedRequestId: record6.stagedRequestId } : {},
+      ...typeof record6.manifestHash === "string" && DERIVED_SIM_HASH.test(record6.manifestHash) ? { manifestHash: record6.manifestHash } : {},
       code: error51 instanceof DerivedSimActivationError ? error51.code : "DERIVED_OPERATION_FAILED",
       message: message.length <= DERIVED_SIM_MAX_ERROR_LENGTH ? message : `${message.slice(0, DERIVED_SIM_MAX_ERROR_LENGTH - 3)}...`,
       tick: controller?.ticks ?? 0
@@ -146117,10 +150137,14 @@ function installSimWorker(scope, dependencies = {}) {
   };
   const startDrive = () => {
     if (timer !== void 0 || controller === null || paused) return;
+    driveAccumulator = new FixedStepAccumulator(driveHz);
+    driveAccumulator.reset(nowMs());
     timer = setInterval(() => {
       if (controller === null) return;
       try {
-        controller.tick();
+        const advance = driveAccumulator.advance(nowMs());
+        if (advance.droppedSteps > 0) controller.recordDroppedSteps(advance.droppedSteps);
+        for (let i2 = 0; i2 < advance.steps; i2++) controller.tick();
       } catch (err) {
         teardown();
         postError("tick", err);
@@ -146141,12 +150165,36 @@ function installSimWorker(scope, dependencies = {}) {
           authoringProjectId: msg.authoringProjectId
         });
       }
-      if (msg.commands !== void 0) {
+      if (msg.snapshotBoot !== void 0) {
+        const program = msg.commands ?? [];
+        const programOutcome = await controller.loadWorldIsolated(program);
+        if (programOutcome.failures.length > 0) {
+          postError("snapshotBoot", new Error(
+            `${programOutcome.failures.length} boot-program command(s) failed: ` + programOutcome.failures.map((f2) => `#${f2.index} ${f2.command}: ${f2.message}`).join("; ")
+          ));
+          return;
+        }
+        try {
+          controller.finalizeSnapshotBoot(msg.snapshotBoot.payload);
+        } catch (err) {
+          postError("snapshotBoot", err);
+          return;
+        }
+        const tail = msg.snapshotBoot.tailCommands ?? [];
+        if (tail.length > 0) {
+          postAuthoringFailures("loadWorld", (await controller.loadWorldIsolated(tail)).failures);
+        }
+      } else if (msg.commands !== void 0) {
         postAuthoringFailures("loadWorld", (await controller.loadWorldIsolated(msg.commands)).failures);
       }
+      const requestedHz = msg.hz ?? 60;
+      if (!Number.isFinite(requestedHz) || requestedHz <= 0) {
+        teardown();
+        throw new RangeError("sim worker hz must be positive");
+      }
+      driveHz = requestedHz;
       const b3 = controller.buffers;
       scope.postMessage({ type: "ready", buffer: b3.sab, inputBuffer: b3.input, status: b3.status });
-      driveHz = msg.hz ?? 60;
       paused = false;
       startDrive();
     } else if (msg.type === "step") {
@@ -146193,14 +150241,14 @@ function installSimWorker(scope, dependencies = {}) {
         if (controller === null) throw derivedError("SIM_NOT_INITIALIZED", "sim worker is not initialized");
         const derived = parseDerivedRevisionShellMessage(msg);
         if (derived.type === "stageDerivedRevision") {
-          const result = controller.stageDerivedRevision(derived.requestId, derived.manifestHash, derived.snapshot);
-          scope.postMessage({ type: "derivedRevisionStaged", ...result });
+          const result2 = controller.stageDerivedRevision(derived.requestId, derived.manifestHash, derived.snapshot);
+          scope.postMessage({ type: "derivedRevisionStaged", ...result2 });
         } else if (derived.type === "commitDerivedRevision") {
-          const result = controller.commitDerivedRevision(derived.requestId, derived.stagedRequestId, derived.manifestHash);
-          scope.postMessage({ type: "derivedRevisionCommitted", ...result });
+          const result2 = controller.commitDerivedRevision(derived.requestId, derived.stagedRequestId, derived.manifestHash);
+          scope.postMessage({ type: "derivedRevisionCommitted", ...result2 });
         } else {
-          const result = controller.discardDerivedRevision(derived.requestId, derived.stagedRequestId, derived.manifestHash);
-          scope.postMessage({ type: "derivedRevisionDiscarded", ...result });
+          const result2 = controller.discardDerivedRevision(derived.requestId, derived.stagedRequestId, derived.manifestHash);
+          scope.postMessage({ type: "derivedRevisionDiscarded", ...result2 });
         }
       } catch (error51) {
         rejectDerived(operation, msg, error51);

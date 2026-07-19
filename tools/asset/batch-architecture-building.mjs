@@ -1,37 +1,312 @@
-import {createHash} from "node:crypto";
-import {readFile,writeFile} from "node:fs/promises";
-import {resolve} from "node:path";
+import { createHash } from "node:crypto";
+import { readFile, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
 
-const MAGIC=0x46546c67,JSON_CHUNK=0x4e4f534a,BIN_CHUNK=0x004e4942,pad4=n=>(n+3)&~3,sha=b=>createHash("sha256").update(b).digest("hex");
-const parse=bytes=>{if(bytes.readUInt32LE(0)!==MAGIC||bytes.readUInt32LE(4)!==2)throw Error("architecture LOD: input is not GLB 2.0");const jl=bytes.readUInt32LE(12),bo=20+jl;return{json:JSON.parse(bytes.subarray(20,bo).toString().trim()),bin:bytes.subarray(bo+8,bo+8+bytes.readUInt32LE(bo))};};
-const mul=(a,b)=>{const out=Array(16).fill(0);for(let c=0;c<4;c++)for(let r=0;r<4;r++)for(let k=0;k<4;k++)out[c*4+r]+=a[k*4+r]*b[c*4+k];return out;};
-const local=node=>{if(node.matrix)return node.matrix;const[x,y,z,w]=node.rotation??[0,0,0,1],[sx,sy,sz]=node.scale??[1,1,1],[tx,ty,tz]=node.translation??[0,0,0];return[(1-2*y*y-2*z*z)*sx,(2*x*y+2*w*z)*sx,(2*x*z-2*w*y)*sx,0,(2*x*y-2*w*z)*sy,(1-2*x*x-2*z*z)*sy,(2*y*z+2*w*x)*sy,0,(2*x*z+2*w*y)*sz,(2*y*z-2*w*x)*sz,(1-2*x*x-2*y*y)*sz,0,tx,ty,tz,1];};
-const point=(m,p,w=1)=>[m[0]*p[0]+m[4]*p[1]+m[8]*p[2]+m[12]*w,m[1]*p[0]+m[5]*p[1]+m[9]*p[2]+m[13]*w,m[2]*p[0]+m[6]*p[1]+m[10]*p[2]+m[14]*w],normalise=p=>{const length=Math.hypot(...p)||1;return p.map(value=>value/length);};
+const MAGIC = 0x46546c67,
+  JSON_CHUNK = 0x4e4f534a,
+  BIN_CHUNK = 0x004e4942,
+  pad4 = (n) => (n + 3) & ~3,
+  sha = (b) => createHash("sha256").update(b).digest("hex");
+const parse = (bytes) => {
+  if (bytes.readUInt32LE(0) !== MAGIC || bytes.readUInt32LE(4) !== 2)
+    throw Error("architecture LOD: input is not GLB 2.0");
+  const jl = bytes.readUInt32LE(12),
+    bo = 20 + jl;
+  return {
+    json: JSON.parse(bytes.subarray(20, bo).toString().trim()),
+    bin: bytes.subarray(bo + 8, bo + 8 + bytes.readUInt32LE(bo)),
+  };
+};
+const mul = (a, b) => {
+  const out = Array(16).fill(0);
+  for (let c = 0; c < 4; c++)
+    for (let r = 0; r < 4; r++) for (let k = 0; k < 4; k++) out[c * 4 + r] += a[k * 4 + r] * b[c * 4 + k];
+  return out;
+};
+const local = (node) => {
+  if (node.matrix) return node.matrix;
+  const [x, y, z, w] = node.rotation ?? [0, 0, 0, 1],
+    [sx, sy, sz] = node.scale ?? [1, 1, 1],
+    [tx, ty, tz] = node.translation ?? [0, 0, 0];
+  return [
+    (1 - 2 * y * y - 2 * z * z) * sx,
+    (2 * x * y + 2 * w * z) * sx,
+    (2 * x * z - 2 * w * y) * sx,
+    0,
+    (2 * x * y - 2 * w * z) * sy,
+    (1 - 2 * x * x - 2 * z * z) * sy,
+    (2 * y * z + 2 * w * x) * sy,
+    0,
+    (2 * x * z + 2 * w * y) * sz,
+    (2 * y * z - 2 * w * x) * sz,
+    (1 - 2 * x * x - 2 * y * y) * sz,
+    0,
+    tx,
+    ty,
+    tz,
+    1,
+  ];
+};
+const point = (m, p, w = 1) => [
+    m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12] * w,
+    m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13] * w,
+    m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14] * w,
+  ],
+  normalise = (p) => {
+    const length = Math.hypot(...p) || 1;
+    return p.map((value) => value / length);
+  };
 
-export async function batchArchitectureBuilding(input,output,expectedSha256){
-  const source=await readFile(resolve(input)),sourceHash=sha(source);if(expectedSha256&&sourceHash!==expectedSha256)throw Error(`architecture LOD: source hash mismatch ${sourceHash}`);
-  const {json:g,bin}=parse(source),visual=g.asset?.extras?.liminaFunctionalBuildingVisual;if(!visual)throw Error("architecture LOD: visual contract missing");
-  const roleByMaterial=new Map(visual.materialRoles.map(record=>[record.materialName,record.role])),roles=g.materials.map(material=>roleByMaterial.get(material.name));if(roles.some(role=>!role)||new Set(roles).size!==g.materials.length)throw Error("architecture LOD: material-role closure failed");
-  const parents=Array(g.nodes.length).fill(-1);g.nodes.forEach((node,index)=>(node.children??[]).forEach(child=>parents[child]=index));
-  const world=g.nodes.map((_,index)=>{const chain=[];for(let cursor=index;cursor>=0;cursor=parents[cursor])chain.push(cursor);return chain.reverse().reduce((matrix,nodeIndex)=>mul(matrix,local(g.nodes[nodeIndex])),[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]);});
-  const doorRoots=g.nodes.flatMap((node,index)=>node.extras?.limina?.role==="door"?[index]:[]),door=new Set();if(doorRoots.length===0)throw Error("architecture LOD: articulated door root missing");const addDoor=(index)=>{door.add(index);for(const child of g.nodes[index].children??[])addDoor(child);};for(const doorRoot of doorRoots)addDoor(doorRoot);
-  const components={SCALAR:1,VEC2:2,VEC3:3,VEC4:4},sizes={5123:2,5125:4,5126:4};
-  const data=accessorIndex=>{const accessor=g.accessors[accessorIndex],view=g.bufferViews[accessor.bufferView],count=components[accessor.type],size=sizes[accessor.componentType],stride=view.byteStride??count*size,base=(view.byteOffset??0)+(accessor.byteOffset??0),out=[];for(let row=0;row<accessor.count;row++){const values=[];for(let component=0;component<count;component++){const offset=base+row*stride+component*size;values.push(accessor.componentType===5126?bin.readFloatLE(offset):accessor.componentType===5125?bin.readUInt32LE(offset):bin.readUInt16LE(offset));}out.push(count===1?values[0]:values);}return out;};
-  const groups=Array.from({length:g.materials.length},()=>[]),staticSources=[];
-  for(let nodeIndex=0;nodeIndex<g.nodes.length;nodeIndex++){const node=g.nodes[nodeIndex];if(node.mesh===undefined||door.has(nodeIndex))continue;const id=node.extras?.limina?.id,levels=node.extras?.limina?.lodLevels;if(typeof id!=="string"||!Array.isArray(levels)||levels.length===0||levels.some((level,index)=>![0,1,2].includes(level)||index>0&&level<=levels[index-1])||levels[0]!==0)throw Error(`architecture LOD: invalid compiler LOD authority on ${node.name}`);for(const primitive of g.meshes[node.mesh].primitives){if((primitive.mode??4)!==4||primitive.indices===undefined||primitive.attributes.NORMAL===undefined)throw Error(`architecture LOD: unsupported primitive ${id}`);const positions=data(primitive.attributes.POSITION).map(value=>point(world[nodeIndex],value)),normals=data(primitive.attributes.NORMAL).map(value=>normalise(point(world[nodeIndex],value,0))),uv=primitive.attributes.TEXCOORD_0===undefined?positions.map(()=>[0,0]):data(primitive.attributes.TEXCOORD_0),indices=data(primitive.indices),record={nodeIndex,id,levels,positions,normals,uv,indices};groups[primitive.material].push(record);staticSources.push(record);}delete node.mesh;}
-  const chunks=[Buffer.from(bin)],views=g.bufferViews??=[],accessors=g.accessors??[],meshes=g.meshes??[],nodes=g.nodes;let byteLength=bin.length;
-  const append=(buffer,target)=>{const start=pad4(byteLength);chunks.push(Buffer.alloc(start-byteLength),buffer);byteLength=start+buffer.length;views.push({buffer:0,byteOffset:start,byteLength:buffer.length,...(target?{target}:{})});return views.length-1;};
-  const accessor=(values,type,componentType,target,minmax=false)=>{const flat=values.flat(),size=sizes[componentType],buffer=Buffer.alloc(flat.length*size);flat.forEach((value,index)=>componentType===5126?buffer.writeFloatLE(value,index*4):componentType===5125?buffer.writeUInt32LE(value,index*4):buffer.writeUInt16LE(value,index*2));const record={bufferView:append(buffer,target),componentType,count:values.length,type};if(minmax){record.min=[0,1,2].map(axis=>Math.min(...values.map(value=>value[axis])));record.max=[0,1,2].map(axis=>Math.max(...values.map(value=>value[axis])));}accessors.push(record);return accessors.length-1;};
-  const lodRoots=[],measurements=[];
-  for(const level of [0,1,2]){const root={name:`${visual.lod.identity}/LOD${level}`,extras:{liminaLod:{level,orphan:level>0,strategy:"whole-primitive-semantic-filter"}},children:[]};nodes.push(root);const rootIndex=nodes.length-1;lodRoots.push(rootIndex);let triangles=0,sourcePrimitiveCount=0;
-    for(let material=0;material<groups.length;material++){const selected=groups[material].filter(record=>record.levels.includes(level));if(!selected.length)continue;let positions=[],normals=[],uv=[],indices=[],ranges=[];for(const record of selected){const firstIndex=indices.length,base=positions.length;positions.push(...record.positions);normals.push(...record.normals);uv.push(...record.uv);indices.push(...record.indices.map(index=>index+base));sourcePrimitiveCount++;if(level===0){const min=[0,1,2].map(axis=>Math.min(...record.positions.map(value=>value[axis]))),max=[0,1,2].map(axis=>Math.max(...record.positions.map(value=>value[axis])));ranges.push({record,firstIndex,indexCount:indices.length-firstIndex,bounds:{min,max}});}}
-      const primitive={attributes:{POSITION:accessor(positions,"VEC3",5126,34962,true),NORMAL:accessor(normals,"VEC3",5126,34962),TEXCOORD_0:accessor(uv,"VEC2",5126,34962)},indices:accessor(indices,"SCALAR",positions.length>65535?5125:5123,34963),material};meshes.push({name:`LOD${level}/${roles[material]}`,primitives:[primitive]});nodes.push({name:`LOD${level}/${roles[material]}`,mesh:meshes.length-1,extras:{liminaBatch:{lod:level,materialRole:roles[material],indexCount:indices.length,sourcePrimitiveCount:selected.length,strategy:"whole-primitive-semantic-filter"}}});const batchNode=nodes.length-1;root.children.push(batchNode);triangles+=indices.length/3;if(level===0)for(const range of ranges){nodes[range.record.nodeIndex].extras.visualBatchRange={schema:"limina.visual-batch-range/1",lod:0,batchNode,firstIndex:range.firstIndex,indexCount:range.indexCount,bounds:range.bounds,materialRole:roles[material],authoritative:true};}}
-    measurements.push({level,triangles,draws:root.children.length,sourcePrimitiveCount});
+export async function batchArchitectureBuilding(input, output, expectedSha256) {
+  const source = await readFile(resolve(input)),
+    sourceHash = sha(source);
+  if (expectedSha256 && sourceHash !== expectedSha256)
+    throw Error(`architecture LOD: source hash mismatch ${sourceHash}`);
+  const { json: g, bin } = parse(source),
+    visual = g.asset?.extras?.liminaFunctionalBuildingVisual;
+  if (!visual) throw Error("architecture LOD: visual contract missing");
+  const roleByMaterial = new Map(visual.materialRoles.map((record) => [record.materialName, record.role])),
+    roles = g.materials.map((material) => roleByMaterial.get(material.name));
+  if (roles.some((role) => !role) || new Set(roles).size !== g.materials.length)
+    throw Error("architecture LOD: material-role closure failed");
+  const parents = Array(g.nodes.length).fill(-1);
+  g.nodes.forEach((node, index) => (node.children ?? []).forEach((child) => (parents[child] = index)));
+  const world = g.nodes.map((_, index) => {
+    const chain = [];
+    for (let cursor = index; cursor >= 0; cursor = parents[cursor]) chain.push(cursor);
+    return chain
+      .reverse()
+      .reduce(
+        (matrix, nodeIndex) => mul(matrix, local(g.nodes[nodeIndex])),
+        [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+      );
+  });
+  const doorRoots = g.nodes.flatMap((node, index) => (node.extras?.limina?.role === "door" ? [index] : [])),
+    door = new Set();
+  if (doorRoots.length === 0) throw Error("architecture LOD: articulated door root missing");
+  const addDoor = (index) => {
+    door.add(index);
+    for (const child of g.nodes[index].children ?? []) addDoor(child);
+  };
+  for (const doorRoot of doorRoots) addDoor(doorRoot);
+  const components = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 },
+    sizes = { 5123: 2, 5125: 4, 5126: 4 };
+  const data = (accessorIndex) => {
+    const accessor = g.accessors[accessorIndex],
+      view = g.bufferViews[accessor.bufferView],
+      count = components[accessor.type],
+      size = sizes[accessor.componentType],
+      stride = view.byteStride ?? count * size,
+      base = (view.byteOffset ?? 0) + (accessor.byteOffset ?? 0),
+      out = [];
+    for (let row = 0; row < accessor.count; row++) {
+      const values = [];
+      for (let component = 0; component < count; component++) {
+        const offset = base + row * stride + component * size;
+        values.push(
+          accessor.componentType === 5126
+            ? bin.readFloatLE(offset)
+            : accessor.componentType === 5125
+              ? bin.readUInt32LE(offset)
+              : bin.readUInt16LE(offset),
+        );
+      }
+      out.push(count === 1 ? values[0] : values);
+    }
+    return out;
+  };
+  const groups = Array.from({ length: g.materials.length }, () => []),
+    staticSources = [];
+  for (let nodeIndex = 0; nodeIndex < g.nodes.length; nodeIndex++) {
+    const node = g.nodes[nodeIndex];
+    if (node.mesh === undefined || door.has(nodeIndex)) continue;
+    const id = node.extras?.limina?.id,
+      levels = node.extras?.limina?.lodLevels;
+    if (
+      typeof id !== "string" ||
+      !Array.isArray(levels) ||
+      levels.length === 0 ||
+      levels.some((level, index) => ![0, 1, 2].includes(level) || (index > 0 && level <= levels[index - 1])) ||
+      levels[0] !== 0
+    )
+      throw Error(`architecture LOD: invalid compiler LOD authority on ${node.name}`);
+    for (const primitive of g.meshes[node.mesh].primitives) {
+      if ((primitive.mode ?? 4) !== 4 || primitive.indices === undefined || primitive.attributes.NORMAL === undefined)
+        throw Error(`architecture LOD: unsupported primitive ${id}`);
+      const positions = data(primitive.attributes.POSITION).map((value) => point(world[nodeIndex], value)),
+        normals = data(primitive.attributes.NORMAL).map((value) => normalise(point(world[nodeIndex], value, 0))),
+        uv =
+          primitive.attributes.TEXCOORD_0 === undefined
+            ? positions.map(() => [0, 0])
+            : data(primitive.attributes.TEXCOORD_0),
+        indices = data(primitive.indices),
+        record = { nodeIndex, id, levels, positions, normals, uv, indices };
+      groups[primitive.material].push(record);
+      staticSources.push(record);
+    }
+    delete node.mesh;
   }
-  if(!(measurements[0].triangles>measurements[1].triangles&&measurements[1].triangles>measurements[2].triangles&&measurements[2].triangles>0))throw Error(`architecture LOD: triangle totals do not strictly descend ${measurements.map(item=>item.triangles)}`);
-  const budgets=[visual.lod.triangleBudget,visual.lod.lod1TriangleBudget,visual.lod.lod2TriangleBudget];for(const record of measurements)if(record.triangles>budgets[record.level]||record.draws>visual.lod.drawBudget)throw Error(`architecture LOD: level ${record.level} exceeds budget`);
-  const buildingRoots=g.nodes.flatMap((node,index)=>node.extras?.limina?.role==="root"?[index]:[]);if(buildingRoots.length!==1)throw Error("architecture LOD: expected one semantic building root");const buildingRoot=g.nodes[buildingRoots[0]];buildingRoot.children??=[];buildingRoot.children.push(lodRoots[0]);g.asset.extras.liminaStaticBatch={schema:"limina.static-batch/1",sourceSha256:sourceHash,sourceIrHash:g.scenes[g.scene??0].extras?.limina_architecture_ir_hash,lodRoots,doorRoot:doorRoots[0],doorRoots,materialRoles:roles,lodStrategy:"whole-primitive-semantic-filter",measurements};g.buffers[0].byteLength=pad4(byteLength);
-  const binary=Buffer.concat([...chunks,Buffer.alloc(pad4(byteLength)-byteLength)]),jsonBytes=Buffer.from(JSON.stringify(g)),jsonPadded=Buffer.concat([jsonBytes,Buffer.alloc(pad4(jsonBytes.length)-jsonBytes.length,0x20)]),out=Buffer.alloc(12+8+jsonPadded.length+8+binary.length);out.writeUInt32LE(MAGIC,0);out.writeUInt32LE(2,4);out.writeUInt32LE(out.length,8);out.writeUInt32LE(jsonPadded.length,12);out.writeUInt32LE(JSON_CHUNK,16);jsonPadded.copy(out,20);let offset=20+jsonPadded.length;out.writeUInt32LE(binary.length,offset);out.writeUInt32LE(BIN_CHUNK,offset+4);binary.copy(out,offset+8);await writeFile(resolve(output),out);return{sha256:sha(out),bytes:out.length,sourceSha256:sourceHash,measurements};
+  const chunks = [Buffer.from(bin)],
+    views = (g.bufferViews ??= []),
+    accessors = g.accessors ?? [],
+    meshes = g.meshes ?? [],
+    nodes = g.nodes;
+  let byteLength = bin.length;
+  const append = (buffer, target) => {
+    const start = pad4(byteLength);
+    chunks.push(Buffer.alloc(start - byteLength), buffer);
+    byteLength = start + buffer.length;
+    views.push({ buffer: 0, byteOffset: start, byteLength: buffer.length, ...(target ? { target } : {}) });
+    return views.length - 1;
+  };
+  const accessor = (values, type, componentType, target, minmax = false) => {
+    const flat = values.flat(),
+      size = sizes[componentType],
+      buffer = Buffer.alloc(flat.length * size);
+    flat.forEach((value, index) =>
+      componentType === 5126
+        ? buffer.writeFloatLE(value, index * 4)
+        : componentType === 5125
+          ? buffer.writeUInt32LE(value, index * 4)
+          : buffer.writeUInt16LE(value, index * 2),
+    );
+    const record = { bufferView: append(buffer, target), componentType, count: values.length, type };
+    if (minmax) {
+      record.min = [0, 1, 2].map((axis) => Math.min(...values.map((value) => value[axis])));
+      record.max = [0, 1, 2].map((axis) => Math.max(...values.map((value) => value[axis])));
+    }
+    accessors.push(record);
+    return accessors.length - 1;
+  };
+  const lodRoots = [],
+    measurements = [];
+  for (const level of [0, 1, 2]) {
+    const root = {
+      name: `${visual.lod.identity}/LOD${level}`,
+      extras: { liminaLod: { level, orphan: level > 0, strategy: "whole-primitive-semantic-filter" } },
+      children: [],
+    };
+    nodes.push(root);
+    const rootIndex = nodes.length - 1;
+    lodRoots.push(rootIndex);
+    let triangles = 0,
+      sourcePrimitiveCount = 0;
+    for (let material = 0; material < groups.length; material++) {
+      const selected = groups[material].filter((record) => record.levels.includes(level));
+      if (!selected.length) continue;
+      let positions = [],
+        normals = [],
+        uv = [],
+        indices = [],
+        ranges = [];
+      for (const record of selected) {
+        const firstIndex = indices.length,
+          base = positions.length;
+        positions.push(...record.positions);
+        normals.push(...record.normals);
+        uv.push(...record.uv);
+        indices.push(...record.indices.map((index) => index + base));
+        sourcePrimitiveCount++;
+        if (level === 0) {
+          const min = [0, 1, 2].map((axis) => Math.min(...record.positions.map((value) => value[axis]))),
+            max = [0, 1, 2].map((axis) => Math.max(...record.positions.map((value) => value[axis])));
+          ranges.push({ record, firstIndex, indexCount: indices.length - firstIndex, bounds: { min, max } });
+        }
+      }
+      const primitive = {
+        attributes: {
+          POSITION: accessor(positions, "VEC3", 5126, 34962, true),
+          NORMAL: accessor(normals, "VEC3", 5126, 34962),
+          TEXCOORD_0: accessor(uv, "VEC2", 5126, 34962),
+        },
+        indices: accessor(indices, "SCALAR", positions.length > 65535 ? 5125 : 5123, 34963),
+        material,
+      };
+      meshes.push({ name: `LOD${level}/${roles[material]}`, primitives: [primitive] });
+      nodes.push({
+        name: `LOD${level}/${roles[material]}`,
+        mesh: meshes.length - 1,
+        extras: {
+          liminaBatch: {
+            lod: level,
+            materialRole: roles[material],
+            indexCount: indices.length,
+            sourcePrimitiveCount: selected.length,
+            strategy: "whole-primitive-semantic-filter",
+          },
+        },
+      });
+      const batchNode = nodes.length - 1;
+      root.children.push(batchNode);
+      triangles += indices.length / 3;
+      if (level === 0)
+        for (const range of ranges) {
+          nodes[range.record.nodeIndex].extras.visualBatchRange = {
+            schema: "limina.visual-batch-range/1",
+            lod: 0,
+            batchNode,
+            firstIndex: range.firstIndex,
+            indexCount: range.indexCount,
+            bounds: range.bounds,
+            materialRole: roles[material],
+            authoritative: true,
+          };
+        }
+    }
+    measurements.push({ level, triangles, draws: root.children.length, sourcePrimitiveCount });
+  }
+  if (!(
+    measurements[0].triangles > measurements[1].triangles &&
+    measurements[1].triangles > measurements[2].triangles &&
+    measurements[2].triangles > 0
+  ))
+    throw Error(
+      `architecture LOD: triangle totals do not strictly descend ${measurements.map((item) => item.triangles)}`,
+    );
+  const budgets = [visual.lod.triangleBudget, visual.lod.lod1TriangleBudget, visual.lod.lod2TriangleBudget];
+  for (const record of measurements)
+    if (record.triangles > budgets[record.level] || record.draws > visual.lod.drawBudget)
+      throw Error(
+        `architecture LOD: level ${record.level} exceeds budget (triangles=${record.triangles}/${budgets[record.level]}, draws=${record.draws}/${visual.lod.drawBudget})`,
+      );
+  const buildingRoots = g.nodes.flatMap((node, index) => (node.extras?.limina?.role === "root" ? [index] : []));
+  if (buildingRoots.length !== 1) throw Error("architecture LOD: expected one semantic building root");
+  const buildingRoot = g.nodes[buildingRoots[0]];
+  buildingRoot.children ??= [];
+  buildingRoot.children.push(lodRoots[0]);
+  g.asset.extras.liminaStaticBatch = {
+    schema: "limina.static-batch/1",
+    sourceSha256: sourceHash,
+    sourceIrHash: g.scenes[g.scene ?? 0].extras?.limina_architecture_ir_hash,
+    lodRoots,
+    doorRoot: doorRoots[0],
+    doorRoots,
+    materialRoles: roles,
+    lodStrategy: "whole-primitive-semantic-filter",
+    measurements,
+  };
+  g.buffers[0].byteLength = pad4(byteLength);
+  const binary = Buffer.concat([...chunks, Buffer.alloc(pad4(byteLength) - byteLength)]),
+    jsonBytes = Buffer.from(JSON.stringify(g)),
+    jsonPadded = Buffer.concat([jsonBytes, Buffer.alloc(pad4(jsonBytes.length) - jsonBytes.length, 0x20)]),
+    out = Buffer.alloc(12 + 8 + jsonPadded.length + 8 + binary.length);
+  out.writeUInt32LE(MAGIC, 0);
+  out.writeUInt32LE(2, 4);
+  out.writeUInt32LE(out.length, 8);
+  out.writeUInt32LE(jsonPadded.length, 12);
+  out.writeUInt32LE(JSON_CHUNK, 16);
+  jsonPadded.copy(out, 20);
+  let offset = 20 + jsonPadded.length;
+  out.writeUInt32LE(binary.length, offset);
+  out.writeUInt32LE(BIN_CHUNK, offset + 4);
+  binary.copy(out, offset + 8);
+  await writeFile(resolve(output), out);
+  return { sha256: sha(out), bytes: out.length, sourceSha256: sourceHash, measurements };
 }
 
-if(import.meta.url===`file://${process.argv[1]}`){const[input,output,expected]=process.argv.slice(2);if(!input||!output)throw Error("usage: node batch-architecture-building.mjs <input.glb> <output.glb> [expected-sha256]");console.log(JSON.stringify(await batchArchitectureBuilding(input,output,expected),null,2));}
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const [input, output, expected] = process.argv.slice(2);
+  if (!input || !output)
+    throw Error("usage: node batch-architecture-building.mjs <input.glb> <output.glb> [expected-sha256]");
+  console.log(JSON.stringify(await batchArchitectureBuilding(input, output, expected), null, 2));
+}

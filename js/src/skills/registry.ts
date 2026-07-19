@@ -11,6 +11,7 @@ import type { Tracer } from "../observability/event.ts";
 import type { MCPErrorCode, MCPResponse, MCPTool } from "../mcp/protocol.ts";
 import type { UniformGridSpatialIndex } from "../spatial/index.ts";
 import type { SeededRng } from "../worldlog/log.ts";
+import { cloneReplayValue } from "../worldlog/replay-value.ts";
 import { captureEntityIndex, hasEntityIndex, restoreEntityIndex, type EntityIndexSnapshot } from "../worldlog/snapshot.ts";
 import { armEntityIndexMutationHook } from "../ecs/world.ts";
 import { teardownEntity } from "./entity-teardown.ts";
@@ -22,6 +23,20 @@ export type SkillCategory = "scene" | "ecs" | "three" | "physics" | "agent" | "s
 export type SkillEffect = "read" | "write" | "admin";
 
 const policyAlreadyCommitted: unique symbol = Symbol("limina.policyAlreadyCommitted");
+const preparedInvocation: unique symbol = Symbol("limina.preparedInvocation");
+
+interface PreparedInvocationState {
+  readonly registry: SkillRegistry;
+  readonly name: string;
+  readonly skill: SkillDefinition;
+  readonly rawInput: unknown;
+  readonly input: unknown;
+  used: boolean;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 /** Pick the tick to stamp on an APPLY-TIME event. The apply tick (the reviewer's
  *  current tick for an approval-gated action) is used ONLY when it is a finite number
@@ -95,9 +110,12 @@ export interface ExecutionContext {
   world: WorldContext;
   /** The recording chain this invocation belongs to (set by the WorldRecorder;
    *  undefined when not recording). A skill handler that RE-INVOKES the registry
-   *  MUST pass `chainId: ctx.chainId` so the nested call is folded into the
+   *  MUST pass both `chainId: ctx.chainId` and `chainToken: ctx.chainToken` so the nested call is folded into the
    *  already-recorded top-level command instead of recorded again. */
   chainId?: string;
+  /** Recorder-minted object-identity capability paired with chainId. A nested
+   * invoke forwards both; the string id alone never proves chain membership. */
+  chainToken?: object;
   /** Register a COMPENSATION for a world mutation this handler just applied (H1
    *  failure atomicity). Undos accumulate on ONE LIFO ledger per HEAD chain —
    *  nested invokes append to their head's ledger — and run only when the head
@@ -136,11 +154,14 @@ export interface InvokeBase {
   pkg?: string;
   /** Recording-chain id (set by the WorldRecorder on the base it forwards). A
    *  TOP-LEVEL caller leaves this undefined -- the recorder mints one and records
-   *  the command. A skill handler that re-invokes passes `ctx.chainId` so the
-   *  nested call is classified as part of the same chain (not re-recorded). This
+   *  the command. A skill handler that re-invokes forwards `ctx.chainId` and
+   *  `ctx.chainToken`, so the call is classified as part of the same chain. This
    *  is robust to concurrent top-level chains interleaving on a single thread,
    *  which a depth/flag counter cannot be. */
   chainId?: string;
+  /** Recorder-internal object-identity proof. Top-level callers leave this
+   * undefined; nested invokes forward ctx.chainToken with ctx.chainId. */
+  chainToken?: object;
   /** Internal approval-resolution bypass. Only resolveApproval sets this when it
    *  re-enters invoke() to apply an already-approved parked action; callers must
    *  not use it as a general policy or validation bypass. */
@@ -148,6 +169,9 @@ export interface InvokeBase {
   /** Module-private proof that resolveApproval already committed policy usage at
    *  proposal time. The symbol key prevents callers from forging this bypass. */
   [policyAlreadyCommitted]?: true;
+  /** Module-private, one-shot proof that this registry already validated and
+   * normalized the input. Only prepareInvocation() can create it. */
+  [preparedInvocation]?: PreparedInvocationState;
 }
 
 export interface SkillDefinition<I = unknown, O = unknown> {
@@ -211,6 +235,7 @@ interface PendingApproval {
   input: unknown;
   base: InvokeBase;
   createdTick: number;
+  createdAtMs: number;
 }
 
 /** A pending approval surfaced to a reviewer/editor (no closures or world ref). */
@@ -415,6 +440,29 @@ export class SkillRegistry {
     return this.skills.get(name);
   }
 
+  /** Validate and normalize once before an authority wrapper snapshots input.
+   * The returned applicator carries a module-private one-shot proof, so invoke()
+   * consumes the exact Zod-normalized value without running transforms twice. */
+  prepareInvocation(name: string, input: unknown):
+    | { ok: false }
+    | { ok: true; input: unknown; apply(base: InvokeBase): InvokeBase } {
+    const skill = this.skills.get(name);
+    if (skill === undefined) return { ok: false };
+    const parsed = skill.input.safeParse(input);
+    if (!parsed.success) return { ok: false };
+    const state: PreparedInvocationState = {
+      registry: this, name, skill, rawInput: input, input: parsed.data, used: false,
+    };
+    return {
+      ok: true,
+      input: parsed.data,
+      apply(base: InvokeBase): InvokeBase {
+        if (state.used) throw new Error(`prepared invocation '${name}' was already consumed`);
+        return { ...base, [preparedInvocation]: state };
+      },
+    };
+  }
+
   /** The default BOOTSTRAP core set — the universal cross-domain verbs an agent
    *  starts with (plus discovery, so it can always find more). Grant-filtering then
    *  narrows this to each profile's relevant subset (a builder sees the authoring
@@ -565,6 +613,7 @@ export class SkillRegistry {
   private reviewGate?: ApprovalGate;
   private readonly pending = new Map<string, PendingApproval>();
   private maxPendingApprovals = 1024;
+  private approvalHoldTimeoutMs = 15 * 60 * 1000;
 
   /** Install the review gate (e.g. `reviewProfileGate(...)`), REPLACING any existing. */
   setApprovalGate(gate: ApprovalGate): void {
@@ -590,8 +639,40 @@ export class SkillRegistry {
     }
     this.maxPendingApprovals = limit;
   }
+  /** Bound proposal-time authorization reservations. Approval controls are not
+   * replay commands, so wall time is appropriate here; world mutations remain
+   * deterministic and occur only on a timely grant. */
+  setApprovalHoldTimeoutMs(timeoutMs: number): void {
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+      throw new Error("approval hold timeout must be a positive safe integer");
+    }
+    this.approvalHoldTimeoutMs = timeoutMs;
+    this.expireApprovals();
+  }
+
+  private expireApprovals(nowMs = Date.now()): void {
+    for (const [approvalId, pending] of this.pending) {
+      if (nowMs - pending.createdAtMs < this.approvalHoldTimeoutMs) continue;
+      this.pending.delete(approvalId);
+      this.tracer.emit({
+        type: "skill.approval.denied",
+        actorId: pending.base.agentId,
+        threadId: pending.base.sessionId,
+        parentEventId: null,
+        causedBy: [approvalId],
+        payload: {
+          approvalId,
+          skill: pending.skill,
+          reason: "approval hold expired",
+          holdTimeoutMs: this.approvalHoldTimeoutMs,
+          reservation: "proposal-time policy usage remains consumed until its policy window resets",
+        },
+      });
+    }
+  }
   /** Snapshot of the actions currently held for approval (for a reviewer/editor). */
   pendingApprovals(): PendingApprovalView[] {
+    this.expireApprovals();
     return [...this.pending.values()].map((p) => ({
       approvalId: p.approvalId,
       skill: p.skill,
@@ -619,6 +700,7 @@ export class SkillRegistry {
       tick: base.tick,
       world: base.world,
       chainId,
+      chainToken: base.chainToken,
       undo: (label, fn) => {
         if (!this.chainUndoLedgerEnabled) return;
         const frame = this.chainFrames.get(chainId);
@@ -682,9 +764,33 @@ export class SkillRegistry {
           metadata: meta(),
         };
       }
-      if (skill.hooks?.after) await skill.hooks.after(result, ctx);
+      const normalizedResult = parsedResult.data;
+      if (skill.hooks?.after) await skill.hooks.after(normalizedResult, ctx);
+      // commitFields become authoritative command input. Validate them while the
+      // chain undo frame is still armed so a non-replayable result fails before
+      // live state can be declared successful.
+      if (skill.commitFields !== undefined && skill.commitFields.length > 0 && isRecord(normalizedResult)) {
+        try {
+          for (const field of skill.commitFields) {
+            if (field in normalizedResult) cloneReplayValue(normalizedResult[field]);
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          ctx.emit("skill.contract.violation", {
+            skill: skill.name,
+            version: skill.version,
+            boundary: "commitFields",
+            error: message,
+          }, execCausedBy);
+          return {
+            success: false,
+            error: { code: "contract_error", message: `skill '${skill.name}' returned a non-replayable commit field: ${message}` },
+            metadata: meta(),
+          };
+        }
+      }
       ctx.emit("skill.executed", { skill: skill.name, version: skill.version, input, tick: stampTick(applyTick, base.tick) }, execCausedBy);
-      return { success: true, result, metadata: meta() };
+      return { success: true, result: normalizedResult, metadata: meta() };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const code = err instanceof SkillInvocationError ? err.code : "handler_error";
@@ -715,10 +821,21 @@ export class SkillRegistry {
         metadata: meta(),
       };
     }
-    // 2. Validate input against the skill's schema.
-    const parsed = skill.input.safeParse(input);
-    if (!parsed.success) {
-      return { success: false, error: { code: "invalid_input", message: parsed.error.message }, metadata: meta() };
+    // 2. Validate input against the skill's schema. An authority wrapper may
+    // have prepared it immediately before entry so recorder snapshotting and the
+    // handler see the same transformed/defaulted value exactly once.
+    const prepared = base[preparedInvocation];
+    let normalizedInput: unknown;
+    if (prepared !== undefined && prepared.registry === this && prepared.name === name && prepared.skill === skill && !prepared.used) {
+      prepared.used = true;
+      normalizedInput = prepared.input;
+    } else {
+      const candidate = prepared?.rawInput ?? input;
+      const parsed = skill.input.safeParse(candidate);
+      if (!parsed.success) {
+        return { success: false, error: { code: "invalid_input", message: parsed.error.message }, metadata: meta() };
+      }
+      normalizedInput = parsed.data;
     }
     // 3. Policy decision (M7). With an engine attached it SUBSUMES the static
     //    profile check and adds quota/revocation/budget; every crossing is audited
@@ -736,7 +853,7 @@ export class SkillRegistry {
         permissions: base.permissions,
         requiredPermissions: skill.permissions,
         tick: base.tick,
-        args: parsed.data,
+        args: normalizedInput,
         pkg: base.pkg,
       });
       policyEventId = ctx.emit(policyEventType(decision), policyEventPayload(decision), base.causedBy);
@@ -761,6 +878,7 @@ export class SkillRegistry {
     //     intent for human review instead of applying it — no world change until
     //     a reviewer grants it.
     if (base.approvalGateBypassed !== true && this.reviewGate !== undefined && this.reviewGate(name, base, skill)) {
+      this.expireApprovals();
       if (this.pending.size >= this.maxPendingApprovals) {
         ctx.emit("skill.approval.denied", {
           skill: name,
@@ -775,10 +893,10 @@ export class SkillRegistry {
       }
       const approvalId = ctx.emit(
         "skill.approval.pending",
-        { skill: name, version: skill.version, input: parsed.data, agentId: base.agentId, profile: base.profile, tick: base.tick },
+        { skill: name, version: skill.version, input: normalizedInput, agentId: base.agentId, profile: base.profile, tick: base.tick },
         execCausedBy,
       );
-      this.pending.set(approvalId, { approvalId, skill: name, input: parsed.data, base, createdTick: base.tick });
+      this.pending.set(approvalId, { approvalId, skill: name, input: normalizedInput, base, createdTick: base.tick, createdAtMs: Date.now() });
       return { success: false, error: { code: "pending_approval", message: approvalId }, metadata: meta() };
     }
 
@@ -794,7 +912,7 @@ export class SkillRegistry {
       ? this.beginChainFrame(chainId, skill, base.world)
       : undefined;
     try {
-      const res = await this.applyHandler(skill, parsed.data, base, ctx, meta, execCausedBy);
+      const res = await this.applyHandler(skill, normalizedInput, base, ctx, meta, execCausedBy);
       if (frame !== undefined && !res.success) this.unwindChainFrame(frame, ctx);
       return res;
     } finally {
@@ -968,6 +1086,7 @@ export class SkillRegistry {
     granted: boolean,
     reviewer?: { agentId: string; reason?: string; applyTick?: number },
   ): Promise<MCPResponse> {
+    this.expireApprovals();
     const parked = this.pending.get(approvalId);
     if (parked === undefined) {
       return { success: false, error: { code: "not_found", message: `unknown or already-resolved approval: ${approvalId}` } };
@@ -1001,6 +1120,7 @@ export class SkillRegistry {
       tick: stampTick(applyTick, parked.base.tick),
       causedBy: [approvalId, grantedId],
       chainId: undefined,
+      chainToken: undefined,
       approvalGateBypassed: true,
       [policyAlreadyCommitted]: true,
     };

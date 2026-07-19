@@ -117,6 +117,9 @@ fn parse_cli_args(args: &[String]) -> anyhow::Result<CliOptions> {
     if !windowed && (window_width.is_some() || window_height.is_some()) {
         bail!("--width and --height require --window");
     }
+    if fullscreen && !windowed {
+        bail!("--fullscreen requires --window");
+    }
     if window_width.is_some() != window_height.is_some() {
         bail!("--width and --height must be supplied together");
     }
@@ -369,6 +372,7 @@ mod tests {
         assert!(parse_cli_args(&args(&["--width", "1600", "demo.ts"])).is_err());
         assert!(parse_cli_args(&args(&["--window", "--width", "1600", "demo.ts"])).is_err());
         assert!(parse_cli_args(&args(&["--window", "--height", "900", "demo.ts"])).is_err());
+        assert!(parse_cli_args(&args(&["--fullscreen", "demo.ts"])).is_err());
     }
 
     #[test]

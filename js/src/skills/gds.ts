@@ -55,7 +55,11 @@ export function registerGdsSkills(registry: SkillRegistry): void {
     category: "game",
     permissions: ["game.plan"],
     effect: "read",
-    priority: "core",
+    // GDS planning is a specialized authoring stage, not a universal verb every
+    // builder needs in its initial reasoning window. It remains available through
+    // skills.search/browse and the full authorized catalog; keeping it standard
+    // preserves the hard <=15 bootstrap-surface contract as the catalog grows.
+    priority: "standard",
     input: planInput,
     output: planOutput,
     handler: (input, ctx) => {

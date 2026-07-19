@@ -86,13 +86,20 @@ export function assertReplayable(commands: readonly WorldCommand[]): void {
   }
 }
 
-/** A stable, order-independent digest of a world's reconstructed entity state (count + each
- *  entity's id and rounded position). Replaying a bundle and digesting twice must yield the SAME
- *  string — that's the replay-equivalence the ship gate asserts before publishing a world. Rounded
- *  to 1e-4 so digest equality reflects determinism, not float-print noise. */
+const digestF32 = new Float32Array(1);
+const digestU32 = new Uint32Array(digestF32.buffer);
+function float32BitsHex(value: number): string {
+  digestF32[0] = value;
+  return digestU32[0].toString(16).padStart(8, "0");
+}
+
+/** A stable, order-independent, bit-exact digest of reconstructed entity state.
+ * Positions are encoded as their Float32 bit patterns, matching the transform
+ * store and keyframe wire contract. Thus -0/+0 and adjacent finite f32 values
+ * cannot be hidden by decimal rounding. */
 export function worldStateDigest(world: WorldContext): string {
   const ents = querySpatialEntities(world, { sortBy: "entity" }).entities;
-  const rows = ents.map((e) => `${e.entity}:${e.position[0].toFixed(4)},${e.position[1].toFixed(4)},${e.position[2].toFixed(4)}`);
+  const rows = ents.map((e) => `${e.entity}:${float32BitsHex(e.position[0])},${float32BitsHex(e.position[1])},${float32BitsHex(e.position[2])}`);
   return `${ents.length}|${rows.join(";")}`;
 }
 

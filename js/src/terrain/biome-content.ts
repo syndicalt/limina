@@ -421,6 +421,10 @@ export interface ScatterBiomeContentResult {
   configs: ScatterConfig[];
   /** Total instances placed across all layers. */
   instances: number;
+  /** Total render meshes mounted across all layers. This is the whole population's
+   *  accounting boundary; callers must not infer it from a fixed catalog prefix because
+   *  terrain types can gain additional content layers without changing their existing ones. */
+  mounted: number;
   /** Per-layer asset.scatter results (instances + mounted level-mesh count + pinned hashes +
    *  the computed placements). `placements` are the REAL transforms the mount path placed
    *  (asset.scatter's output), so callers/tests can verify the spawn mask — e.g. that no
@@ -461,11 +465,14 @@ export async function scatterBiomeContent(deps: ScatterBiomeContentDeps): Promis
 
   const layers: ScatterBiomeContentResult["layers"] = [];
   let total = 0;
+  let mounted = 0;
   for (const config of configs) {
     const res = ok(await deps.registry.invoke("asset.scatter", { regionId: deps.regionId, config }, deps.base), `asset.scatter ${deps.type}`);
     const instances = res.instances as number;
+    const layerMounted = res.mounted as number;
     total += instances;
-    layers.push({ instances, mounted: res.mounted as number, assetHashes: res.assetHashes as Record<string, string>, placements: res.placements as AssetInstance[] });
+    mounted += layerMounted;
+    layers.push({ instances, mounted: layerMounted, assetHashes: res.assetHashes as Record<string, string>, placements: res.placements as AssetInstance[] });
   }
-  return { regionId: deps.regionId, type: deps.type, survey, configs, instances: total, layers };
+  return { regionId: deps.regionId, type: deps.type, survey, configs, instances: total, mounted, layers };
 }

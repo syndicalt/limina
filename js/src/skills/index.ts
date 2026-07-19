@@ -50,6 +50,10 @@ import { registerBuildingSkills } from "./building/skill.ts";
 import { registerFunctionalBuildingSkills, type DoorAudio } from "./functional-building.ts";
 import { FunctionalBuildingTopologyManager } from "./functional-building-topology.ts";
 import { registerFunctionalSettlementSkills, type FunctionalSettlementPlacementManager } from "./functional-settlement.ts";
+import {
+  createResidentFunctionalSettlementTerrainSampler,
+  FunctionalSettlementReleaseHost,
+} from "./functional-settlement-live-host.ts";
 import { registerFurnitureSkills } from "./furniture.ts";
 import { registerDirectorSkills, type DirectorManager } from "./director.ts";
 import { registerAbilitySkills, type AbilityManager } from "./ability.ts";
@@ -122,8 +126,11 @@ export interface CoreSkills {
   nav: { navmeshManager: NavmeshManager };
   /** FB-4 layered room/portal, acoustic, visibility-residency, and spawn authority. */
   functionalBuildings: { topologyManager: FunctionalBuildingTopologyManager };
-  /** FB-5 exact catalog/Atlas/site-bound settlement placement ownership. */
-  functionalSettlements: { placementManager: FunctionalSettlementPlacementManager };
+  /** FB-5 exact released-settlement loading, streaming, and placement ownership. */
+  functionalSettlements: {
+    placementManager: FunctionalSettlementPlacementManager;
+    releaseHost: FunctionalSettlementReleaseHost;
+  };
   /** Places Stage 4: the runtime named-place index (gazetteer.load + npc.goToPlace). */
   navigation: { gazetteerManager: GazetteerManager };
   /** Phase 12: visual effects and particles. */
@@ -160,7 +167,11 @@ export function registerCoreSkills(
     grassVisualPackage?: GrassFieldVisualPackage;
     /** Test/host seam for functional-door positional one-shots; defaults to the shared AudioManager. */
     functionalDoorAudio?: DoorAudio;
-    /** Exact resident-terrain authority required by settlement.placeFunctional. */
+    /**
+     * Exact resident-terrain authority required by settlement.placeFunctional. When omitted,
+     * core binds the live generated-region/editable-layer sampler and rejects uncovered points.
+     * Hosts with a separate derived-terrain residency window inject its current sampler here.
+     */
     functionalSettlementSiteSampler?: (x: number, z: number) => number | undefined;
   },
 ): CoreSkills {
@@ -321,7 +332,9 @@ export function registerCoreSkills(
   const behaviorSpec = registerBehaviorSpecSkills(registry);
   const nav = registerNavmeshSkills(registry,{navmeshManager});
   registerFunctionalBuildingSkills(registry,assets,{interaction:interaction.interactionManager,inventory:inventory.inventoryManager,audio:opts?.functionalDoorAudio??audio,nav:nav.navmeshManager,topology:topologyManager});
-  const functionalSettlementPlacementManager = registerFunctionalSettlementSkills(registry, assets, { sampleHeight: opts?.functionalSettlementSiteSampler });
+  const functionalSettlementSiteSampler = opts?.functionalSettlementSiteSampler
+    ?? createResidentFunctionalSettlementTerrainSampler({ source: terrainSource, regions: terrainRegions, layers: terrainLayers });
+  const functionalSettlementPlacementManager = registerFunctionalSettlementSkills(registry, assets, { sampleHeight: functionalSettlementSiteSampler });
   const navigation = registerNavigationSkills(registry);
   const vfx = registerVFXSkills(registry);
   const save = registerSaveSkills(registry);
@@ -348,8 +361,15 @@ export function registerCoreSkills(
     directorManager: director.directorManager,
     behaviorManager: behavior.behaviorManager,
     dialogueManager: behavior.dialogueManager,
+    functionalSettlementPlacementManager,
     eventSpecs: behaviorSpec.events,
   });
+  const functionalSettlementReleaseHost = new FunctionalSettlementReleaseHost(
+    registry,
+    assets,
+    functionalSettlementPlacementManager,
+    snapshotParticipants,
+  );
   return {
     packages, ui, locomotion, social, audio,
     terrain: { source: terrainSource, cache: terrainCache, regions: terrainRegions, layers: terrainLayers },
@@ -357,7 +377,10 @@ export function registerCoreSkills(
     player, camera, animation, interaction, inventory,
     gamestate, triggers, cutscene, director, clips, quest, combat, ability, behavior,
     behaviorSpec,
-    nav, functionalBuildings: { topologyManager }, functionalSettlements: { placementManager: functionalSettlementPlacementManager }, navigation, vfx, save, progression, worldstate,
+    nav, functionalBuildings: { topologyManager }, functionalSettlements: {
+      placementManager: functionalSettlementPlacementManager,
+      releaseHost: functionalSettlementReleaseHost,
+    }, navigation, vfx, save, progression, worldstate,
     snapshotParticipants,
   };
 }

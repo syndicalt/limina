@@ -42,7 +42,9 @@ function artifactRequestUpperBound(manifest) {
   const browser = await loaded.chromium.launch({
     headless,
     executablePath,
-    args: headless ? ["--no-sandbox", "--enable-unsafe-swiftshader"] : ["--no-sandbox"],
+    args: headless
+      ? ["--no-sandbox", "--disable-gpu", "--enable-unsafe-swiftshader"]
+      : ["--no-sandbox", "--disable-gpu"],
   });
   const page = await browser.newPage({ viewport });
   const pageErrors = [];
@@ -140,7 +142,9 @@ function artifactRequestUpperBound(manifest) {
     assert.ok(derivedArtifacts - playArtifactStart <= editArtifactBound,
       `Play loaded ${derivedArtifacts - playArtifactStart} artifacts; exceeded chunk+global bound ${editArtifactBound}`);
     const playingSource = await page.textContent("#viewport-play-source");
-    assert.match(playingSource, /remnants-of-aethon-grey-field · r\d+ · sha256:/, "Playing must show captured project/revision/head identity");
+    assert.equal(playingSource,
+      `${preflightHead.projectId} · r${preflightHead.revision} · ${preflightHead.headHash.slice(0, 15)}…`,
+      "Playing must show the exact captured project/revision/head identity");
     const playingPixels = await canvasSignal(".editor-play-canvas");
     assert.ok(playingPixels.visible > playingPixels.total * 0.5 && playingPixels.colors >= 2,
       `Play canvas is blank/flat: ${JSON.stringify(playingPixels)}`);

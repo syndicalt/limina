@@ -19,7 +19,7 @@ function overlaps(left, right) {
   const loaded = loadChromium();
   if (!loaded.chromium) skip(loaded.error);
   requireChromeBinary(CHROME);
-  const browser = await loaded.chromium.launch({ executablePath: CHROME, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+  const browser = await loaded.chromium.launch({ executablePath: CHROME, args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"] });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
   const pageErrors = [];

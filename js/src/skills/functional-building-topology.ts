@@ -62,6 +62,15 @@ export class FunctionalBuildingTopologyManager {
   private revision = 0;
 
   getRevision(): number { return this.revision; }
+  /** Transaction-only seam used by the registry's per-chain undo ledger. The
+   *  caller must first restore the affected building/portal contents. Head-chain
+   *  overlap is rejected by SkillRegistry before any undo runs, so rewinding the
+   *  monotonic invalidation counter cannot clobber another authoring chain. */
+  restoreRevisionAfterRollback(revision: number): void {
+    if (!Number.isSafeInteger(revision) || revision < 0 || revision > this.revision)
+      throw new Error(`functional building topology: invalid rollback revision ${revision}`);
+    this.revision = revision;
+  }
   size(): number { return this.buildings.size; }
   hasBuilding(id: string): boolean { return this.buildings.has(id); }
 

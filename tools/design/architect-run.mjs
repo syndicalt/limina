@@ -21,7 +21,8 @@
 // directly — a human approves the held catalog.publish in the editor.
 //
 // Usage: node tools/design/architect-run.mjs <assetId.glb> <title> <category> [--out-suffix <sfx>] [--turntable]
-//   category: prop|dwelling|civic|military|religious (catalog.publish enum)
+//    or: node tools/design/architect-run.mjs --isolated-manifest <manifest.json> --import-review <review.json>
+//   category: prop (buildings route through the functional-building pipeline)
 //   --out-suffix: appended to the qc-spec + PNG basenames only (e.g. -piperun), so a dry run
 //                 never overwrites the asset's real QC render.
 //   --turntable: also shoot 8 yaw frames (task #66) and include their paths as qcTurntable on
@@ -32,9 +33,11 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { glbBbox, classifyBounds } from "../qc/asset-sanity.mjs";
 import { measureCard, writeCard } from "../asset/make-card.mjs";
+import { assertGenericAssetAuthoringCategory } from "../../js/src/assets/generic-asset-authoring-policy.mjs";
+import { requireArchitectEditorToken } from "./architect-security.mjs";
+import { importReviewedArchitectArtifact } from "./architect-isolation.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const FALLBACK_TOKEN = "i9y0smdFEIRUFggqryEkpO8jw5P6nLlY";
 const MIN_PNG_BYTES = 20 * 1024; // below this the shot is a blank/failed canvas, not a QC render
 
 // ---- args ----------------------------------------------------------------------------------
@@ -43,17 +46,48 @@ const positional = [];
 let sfx = "";
 let authoredBy = "";
 let turntable = false;
+let isolatedManifest = "";
+let importReview = "";
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--out-suffix") { sfx = args[++i] ?? ""; continue; }
   if (args[i] === "--authored-by") { authoredBy = args[++i] ?? ""; continue; }
   if (args[i] === "--turntable") { turntable = true; continue; }
+  if (args[i] === "--isolated-manifest") { isolatedManifest = args[++i] ?? ""; continue; }
+  if (args[i] === "--import-review") { importReview = args[++i] ?? ""; continue; }
+  if (args[i].startsWith("--")) { console.error(`unknown option: ${args[i]}`); process.exit(2); }
   positional.push(args[i]);
 }
-const [assetId, title, category] = positional;
-if (!assetId || !title || !category) {
-  console.error("usage: node tools/design/architect-run.mjs <assetId.glb> <title> <category> [--out-suffix <sfx>] [--authored-by <model>] [--turntable]");
+let [assetId, title, category] = positional;
+if (Boolean(isolatedManifest) !== Boolean(importReview)) {
+  console.error("--isolated-manifest and --import-review are required together");
   process.exit(2);
 }
+if (!isolatedManifest && (!assetId || !title || !category)) {
+  console.error("usage: node tools/design/architect-run.mjs <assetId.glb> <title> <category> [--out-suffix <sfx>] [--authored-by <model>] [--turntable]\n       node tools/design/architect-run.mjs --isolated-manifest <manifest.json> --import-review <review.json> [--turntable]");
+  process.exit(2);
+}
+let TOKEN;
+try { TOKEN = requireArchitectEditorToken(process.env, "architect-run"); }
+catch (error) { console.error(`✗ [auth] ${error.message}`); process.exit(2); }
+if (isolatedManifest) {
+  if (positional.length > 0) {
+    console.error("positional asset arguments cannot be combined with reviewed isolated import");
+    process.exit(2);
+  }
+  try {
+    const imported = importReviewedArchitectArtifact({ projectRoot: ROOT, manifestPath: isolatedManifest, reviewPath: importReview });
+    assetId = imported.assetId;
+    title = imported.manifest.request.title;
+    category = imported.manifest.request.category;
+    authoredBy ||= imported.manifest.generation?.model || "isolated-provided-source";
+    console.log(`[import] reviewed isolated artifact → assets/${assetId}`);
+  } catch (error) {
+    console.error(`✗ [import] ${error.message}`);
+    process.exit(2);
+  }
+}
+try { assertGenericAssetAuthoringCategory(category, "architect-run"); }
+catch (error) { console.error(`✗ [policy] ${error.message}`); process.exit(2); }
 const base = basename(assetId, ".glb");
 
 const fail = (stage, msg) => { console.error(`✗ [${stage}] ${msg}`); process.exit(1); };
@@ -158,7 +192,6 @@ const entry = {
   ...(qcTurntable ? { qcTurntable } : {}),
   tags: ["building"],
 };
-const TOKEN = process.env.LIMINA_EDITOR_TOKEN || FALLBACK_TOKEN;
 const ws = new WebSocket("ws://localhost:8787/");
 let idc = 1;
 const pending = new Map();

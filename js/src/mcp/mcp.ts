@@ -5,10 +5,12 @@
 import { JSON_RPC_ERRORS, mcpErrorToJsonRpc, type JsonRpcFailure, type JsonRpcId, type JsonRpcRequest, type JsonRpcResponse, type MCPRequest, type MCPResponse, type MCPTool } from "./protocol.ts";
 import type { InvokeBase, SkillRegistry, WorldContext } from "../skills/registry.ts";
 import { resolveProfile } from "../skills/permissions.ts";
+import { PolicyEngine, policyEventPayload, policyEventType, type PolicyDecision } from "../policy/engine.ts";
 
 export interface Session {
   agentId: string;
   sessionId: string;
+  profile: string;
   permissions: ReadonlySet<string>;
 }
 
@@ -39,11 +41,35 @@ export class Mcp {
     const base: InvokeBase = {
       agentId: session.agentId,
       sessionId: session.sessionId,
+      profile: session.profile,
       permissions: session.permissions,
       tick: this.tick,
       world: this.world,
     };
     return this.registry.invoke(req.tool, req.input, base);
+  }
+
+  setPolicy(policy: PolicyEngine): void {
+    this.registry.setPolicy(policy);
+  }
+
+  admitSession(policy: PolicyEngine, params: InitializeParams): PolicyDecision {
+    const decision = policy.admitSession({
+      boundary: "session",
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      cap: "",
+      profile: params.profile,
+    });
+    this.registry.tracer.emit({
+      type: policyEventType(decision),
+      actorId: params.agentId,
+      threadId: params.sessionId,
+      parentEventId: null,
+      causedBy: [],
+      payload: policyEventPayload(decision),
+    });
+    return decision;
   }
 
 }
@@ -118,7 +144,7 @@ const SERVER_VERSION = "0.1.0";
 // installing limina into their agent wants). Making this configurable per
 // connection needs an engine env/argv channel to JS (follow-up); today it is the
 // fixed default for spec-mode sessions.
-const DEFAULT_MCP_PROFILE = "builder.readWrite";
+const DEFAULT_MCP_PROFILE = "system.readonly";
 // MCP protocol version advertised when a spec client omits one.
 const FALLBACK_PROTOCOL_VERSION = "2025-06-18";
 
@@ -127,11 +153,27 @@ export class JsonRpcTransport {
   /** "native" = limina-native init (explicit attribution); "spec" = a standard MCP client. */
   private mode: "native" | "spec" = "native";
   private sessionSeq = 0;
+  private readonly allowedProfiles: ReadonlySet<string>;
+  private readonly policy?: PolicyEngine;
+  private readonly specProfile: string;
 
   constructor(
     private readonly mcp: Mcp,
     private readonly writeLine: (line: string) => void | Promise<void>,
-  ) {}
+    opts: {
+      allowedProfiles?: ReadonlySet<string>;
+      policy?: PolicyEngine;
+      specProfile?: string;
+    } = {},
+  ) {
+    this.allowedProfiles = opts.allowedProfiles ?? new Set([DEFAULT_MCP_PROFILE]);
+    this.policy = opts.policy;
+    this.specProfile = opts.specProfile ?? DEFAULT_MCP_PROFILE;
+    if (!this.allowedProfiles.has(this.specProfile)) {
+      throw new Error(`JsonRpcTransport: spec profile '${this.specProfile}' is not in allowedProfiles`);
+    }
+    if (this.policy !== undefined) this.mcp.setPolicy(this.policy);
+  }
 
   async handleLine(line: string): Promise<void> {
     const req = parseJsonRpc(line);
@@ -148,9 +190,17 @@ export class JsonRpcTransport {
   }
 
   async run(lines: AsyncIterable<string>): Promise<void> {
-    for await (const line of lines) {
-      await this.handleLine(line);
+    try {
+      for await (const line of lines) await this.handleLine(line);
+    } finally {
+      this.close();
     }
+  }
+
+  /** Release admission exactly once on shutdown/EOF/transport teardown. */
+  close(): void {
+    if (this.session !== undefined) this.policy?.releaseSession(this.session.sessionId);
+    this.session = undefined;
   }
 
   private async write(response: JsonRpcResponse): Promise<void> {
@@ -160,14 +210,31 @@ export class JsonRpcTransport {
   private async dispatch(req: JsonRpcRequest, id: JsonRpcId): Promise<JsonRpcResponse> {
     switch (req.method) {
       case "initialize": {
+        if (this.session !== undefined) {
+          return failure(id, JSON_RPC_ERRORS.invalidRequest, "MCP session is already initialized");
+        }
         // limina-native init: caller supplies explicit attribution + profile.
         const native = parseInitializeParams(req.params);
         if (native !== undefined) {
+          if (!this.allowedProfiles.has(native.profile)) {
+            return failure(id, mcpErrorToJsonRpc("forbidden"), `initialize denied: profile '${native.profile}' is not allowed on this transport`);
+          }
+          if (this.policy !== undefined) {
+            const decision = this.mcp.admitSession(this.policy, native);
+            if (!decision.allow) return failure(id, mcpErrorToJsonRpc("forbidden"), `session admission denied: ${decision.reason}`);
+          }
+          let permissions: ReadonlySet<string>;
+          try { permissions = resolveProfile(native.profile); }
+          catch (error) {
+            this.policy?.releaseSession(native.sessionId);
+            return failure(id, mcpErrorToJsonRpc("forbidden"), error instanceof Error ? error.message : String(error));
+          }
           this.mode = "native";
           this.session = {
             agentId: native.agentId,
             sessionId: native.sessionId,
-            permissions: resolveProfile(native.profile),
+            profile: native.profile,
+            permissions,
           };
           return success(id, {
             protocolVersion: "2026-06-23",
@@ -182,10 +249,20 @@ export class JsonRpcTransport {
         const clientInfo = asRecord(params?.clientInfo);
         const clientName = typeof clientInfo?.name === "string" ? clientInfo.name : "mcp-client";
         const requested = typeof params?.protocolVersion === "string" ? params.protocolVersion : FALLBACK_PROTOCOL_VERSION;
-        this.session = {
+        const specInit: InitializeParams = {
           agentId: clientName,
           sessionId: `mcp-${++this.sessionSeq}`,
-          permissions: resolveProfile(DEFAULT_MCP_PROFILE),
+          profile: this.specProfile,
+        };
+        if (this.policy !== undefined) {
+          const decision = this.mcp.admitSession(this.policy, specInit);
+          if (!decision.allow) return failure(id, mcpErrorToJsonRpc("forbidden"), `session admission denied: ${decision.reason}`);
+        }
+        this.session = {
+          agentId: specInit.agentId,
+          sessionId: specInit.sessionId,
+          profile: specInit.profile,
+          permissions: resolveProfile(specInit.profile),
         };
         return success(id, {
           protocolVersion: requested,
@@ -231,7 +308,7 @@ export class JsonRpcTransport {
         return success(id, result);
       }
       case "shutdown":
-        this.session = undefined;
+        this.close();
         return success(id, { ok: true });
       default:
         // Ignore any other client notifications rather than erroring.

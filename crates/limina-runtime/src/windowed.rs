@@ -29,6 +29,10 @@ use crate::module_loader::TypescriptModuleLoader;
 
 const FIXED_DT: f64 = 1.0 / 60.0;
 const MAX_STEPS_PER_FRAME: u32 = 5;
+// Some Vulkan present modes return immediately instead of pacing at vblank. A
+// small host-side ceiling prevents the manual pump loop from consuming a full
+// core in that mode while remaining above common high-refresh displays.
+const MIN_FRAME_INTERVAL: Duration = Duration::from_micros(4_167); // ~240 Hz
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct StepBudgetResult {
@@ -285,6 +289,7 @@ pub fn run_windowed(
         let mut steps: u64 = 0;
 
         loop {
+            let frame_started = Instant::now();
             let status = event_loop.pump_app_events(Some(Duration::ZERO), &mut app);
             if matches!(status, PumpStatus::Exit(_)) || app.close {
                 break;
@@ -340,6 +345,11 @@ pub fn run_windowed(
             // timers, sockets, and other host futures before the next frame starts.
             tokio::task::yield_now().await;
 
+            let frame_elapsed = frame_started.elapsed();
+            if frame_elapsed < MIN_FRAME_INTERVAL {
+                std::thread::sleep(MIN_FRAME_INTERVAL - frame_elapsed);
+            }
+
             frames += 1;
             if max_frames.is_some_and(|max| frames >= max) {
                 break;
@@ -370,7 +380,7 @@ enum Callback {
 }
 
 /// Invoke a registered JS callback inside a `TryCatch` so a thrown error is
-/// surfaced (logged) rather than silently swallowed.
+/// returned as a fatal host error rather than silently swallowed.
 fn invoke_callback(js_runtime: &mut JsRuntime, which: Callback) -> anyhow::Result<()> {
     use limina_render::{FrameCallback, ResizeCallback, StepCallback};
 

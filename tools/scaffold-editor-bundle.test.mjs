@@ -3,7 +3,9 @@ import { EventEmitter } from "node:events";
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -17,7 +19,9 @@ import {
   ensureFreshEditorBundles,
   ensureFreshWorldCompilerBundle,
   parseDerivedRuntimeDiscoveryLine,
+  preparePrivateEditorStateDirectory,
   waitForEditorHostReady,
+  writePrivateEditorCapability,
 } from "./scaffold/scripts/editor.mjs";
 
 {
@@ -34,6 +38,38 @@ import {
       () => atlasLaunchConfig({ environment: { LIMINA_ATLAS_PORT: port } }),
       /canonical TCP port/,
     );
+  }
+}
+
+{
+  const root = mkdtempSync(join(tmpdir(), "limina-editor-capability-"));
+  const stateDir = join(root, ".limina");
+  try {
+    const prepared = preparePrivateEditorStateDirectory(stateDir);
+    assert.equal(statSync(prepared.stateDir).mode & 0o777, 0o700);
+    assert.equal(statSync(prepared.tracesDir).mode & 0o777, 0o700);
+    const token = "T".repeat(32);
+    const capabilityPath = writePrivateEditorCapability({
+      stateDir,
+      home: "/opt/limina",
+      editorPort: 8787,
+      token,
+      randomBytesFn: () => new Uint8Array(12).fill(0x31),
+    });
+    assert.equal(statSync(capabilityPath).mode & 0o777, 0o600);
+    const capability = JSON.parse(readFileSync(capabilityPath, "utf8"));
+    assert.equal(capability.schema, "limina.editor-capability/v1");
+    assert.equal(capability.token, token);
+    assert.equal(capability.bridge.mcpServers.limina.env.LIMINA_EDITOR_TOKEN, token);
+    assert.throws(() => writePrivateEditorCapability({
+      stateDir,
+      home: "/opt/limina",
+      editorPort: 8787,
+      token,
+      randomBytesFn: () => new Uint8Array(11),
+    }), /exactly 12 bytes/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 }
 

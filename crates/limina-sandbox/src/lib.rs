@@ -20,7 +20,10 @@
 //!
 //! Per-agent budgets are first-class in-thread knobs: `set_memory_limit`
 //! (catchable OOM, host survives), a per-decision `set_interrupt_handler`
-//! deadline (CPU budget), and `set_max_stack_size`.
+//! deadline (CPU budget), and `set_max_stack_size`. The interrupt handler is
+//! checked at QuickJS safepoints: it bounds ordinary JS loops but is NOT hard
+//! preemption, and one long native regexp/JSON operation may overshoot it. The
+//! op runs synchronously on the engine thread until QuickJS reaches a safepoint.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -36,7 +39,9 @@ use rquickjs::{
 
 const MAX_SANDBOX_MEMORY_BYTES: usize = 256 * 1024 * 1024;
 const MAX_SANDBOX_STACK_BYTES: usize = 8 * 1024 * 1024;
-const MAX_SANDBOX_DEADLINE_MS: f64 = 5_000.0;
+/// Matches the privileged JS host's longest code-load allowance. This is an
+/// interrupt budget, not a hard wall-clock guarantee (see crate-level caveat).
+const MAX_SANDBOX_DEADLINE_MS: f64 = 1_000.0;
 const DEFAULT_SANDBOX_MEMORY_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_SANDBOX_STACK_BYTES: usize = 256 * 1024;
 const DEFAULT_SANDBOX_DEADLINE_MS: f64 = 50.0;
@@ -339,7 +344,9 @@ fn sandbox_create_impl(
 /// `calls` are the recorded MUTATING intents for the JS host to drive through the
 /// registry; the untrusted code NEVER reaches the registry itself. A runaway
 /// loop, OOM, stack overflow, or uncaught throw surfaces as `ok:false` with the
-/// real error and leaves the sandbox alive and reusable.
+/// real error and leaves the sandbox alive and reusable. The deadline is checked
+/// at QuickJS safepoints; this synchronous op cannot claim hard preemption of a
+/// single long native regexp/JSON operation.
 #[op2]
 #[string]
 pub fn op_sandbox_eval(
@@ -395,7 +402,9 @@ fn sandbox_eval_impl(
         sh.reads = 0;
     }
 
-    let dl = Instant::now() + Duration::from_millis(deadline_ms as u64);
+    // Preserve a caller's positive sub-millisecond budget instead of truncating
+    // it to a zero-duration deadline. Enforcement remains safepoint-coarse.
+    let dl = Instant::now() + Duration::from_secs_f64(deadline_ms / 1_000.0);
     sb.rt
         .set_interrupt_handler(Some(Box::new(move || Instant::now() >= dl)));
 
@@ -413,18 +422,18 @@ fn sandbox_eval_impl(
             }
         }
         match ctx.eval::<Value, _>(code.as_str()).catch(&ctx) {
-                Ok(v) => value_to_envelope_string(&ctx, v).map_err(|err| {
-                    format!("{err}")
-                        .lines()
-                        .next()
-                        .unwrap_or("error")
-                        .to_string()
-                }),
-                Err(err) => Err(format!("{err}")
+            Ok(v) => value_to_envelope_string(&ctx, v).map_err(|err| {
+                format!("{err}")
                     .lines()
                     .next()
                     .unwrap_or("error")
-                    .to_string()),
+                    .to_string()
+            }),
+            Err(err) => Err(format!("{err}")
+                .lines()
+                .next()
+                .unwrap_or("error")
+                .to_string()),
         }
     });
 
@@ -525,6 +534,9 @@ mod tests {
         )
         .is_err());
         assert!(finite_bounded_positive("deadline_ms", 1_000.0, MAX_SANDBOX_DEADLINE_MS).is_ok());
+        assert!(
+            finite_bounded_positive("deadline_ms", 1_000.001, MAX_SANDBOX_DEADLINE_MS).is_err()
+        );
         assert_eq!(
             finite_bounded_or_default(
                 "deadline_ms",

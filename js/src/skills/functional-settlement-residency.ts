@@ -58,6 +58,7 @@ export interface FunctionalSettlementResidencySnapshot {
   readonly explicitInterestUnitIds: readonly string[];
   readonly residentBytes: number;
   readonly revision: number;
+  readonly closed: boolean;
 }
 
 interface Candidate<Resource> {
@@ -179,7 +180,29 @@ export class FunctionalSettlementResidencyManager<Resource> {
   snapshot(): FunctionalSettlementResidencySnapshot {
     const residentUnitIds = frozenSortedIds(this.#resident.keys());
     return Object.freeze({ planId: this.#planId, residentUnitIds,
-      explicitInterestUnitIds: frozenSortedIds(this.#explicit), residentBytes: this.#residentBytes(), revision: this.#revision });
+      explicitInterestUnitIds: frozenSortedIds(this.#explicit), residentBytes: this.#residentBytes(), revision: this.#revision,
+      closed: this.#closed });
+  }
+
+  /**
+   * Restore durable policy state after the runtime's concrete resources have been independently
+   * restored. The resolver is deliberately required for every resident unit: snapshot bytes may
+   * name ownership, but they cannot manufacture a live building/resource. Validation and resource
+   * resolution finish before manager state changes, so a stale or partial ownership table fails
+   * atomically.
+   */
+  restoreSnapshot(input: unknown, resolveResource: (unit: FunctionalSettlementResidencyUnit) => Resource): void {
+    if (this.#updating) throw new Error("cannot restore settlement residency during an update");
+    const snapshot = this.#parseSnapshot(input);
+    const restored = new Map<string, Resource>();
+    for (const unitId of snapshot.residentUnitIds) {
+      const unit = this.#units.get(unitId)!;
+      restored.set(unitId, resolveResource(unit));
+    }
+    this.#resident = restored;
+    this.#explicit = new Set(snapshot.explicitInterestUnitIds);
+    this.#revision = snapshot.revision;
+    this.#closed = snapshot.closed;
   }
 
   /** Idempotent terminal teardown. A failed transaction leaves the manager open and unchanged. */
@@ -227,6 +250,41 @@ export class FunctionalSettlementResidencyManager<Resource> {
     let total = 0;
     for (const id of this.#resident.keys()) total += this.#units.get(id)!.residentBytes;
     return total;
+  }
+  #parseSnapshot(input: unknown): FunctionalSettlementResidencySnapshot {
+    if (input === null || typeof input !== "object" || Array.isArray(input) || Object.getPrototypeOf(input) !== Object.prototype)
+      throw new TypeError("settlement residency snapshot must be a plain object");
+    const value = input as Record<string, unknown>;
+    const keys = Object.keys(value).sort();
+    const expected = ["closed", "explicitInterestUnitIds", "planId", "residentBytes", "residentUnitIds", "revision"];
+    if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index]))
+      throw new TypeError("settlement residency snapshot keys drifted");
+    if (value.planId !== this.#planId) throw new TypeError("settlement residency snapshot plan authority drifted");
+    const ids = (candidate: unknown, label: string): readonly string[] => {
+      if (!Array.isArray(candidate) || candidate.length > MAX_REGISTERED_UNITS)
+        throw new TypeError(`settlement residency snapshot ${label} is not a bounded array`);
+      let previous: string | undefined;
+      for (const unitId of candidate) {
+        if (typeof unitId !== "string" || !this.#units.has(unitId) || (previous !== undefined && previous >= unitId))
+          throw new TypeError(`settlement residency snapshot ${label} is not an exact sorted known-unit inventory`);
+        previous = unitId;
+      }
+      return Object.freeze([...candidate]) as readonly string[];
+    };
+    const residentUnitIds = ids(value.residentUnitIds, "resident units");
+    const explicitInterestUnitIds = ids(value.explicitInterestUnitIds, "explicit interest");
+    if (!Number.isSafeInteger(value.revision) || (value.revision as number) < 0)
+      throw new TypeError("settlement residency snapshot revision is invalid");
+    if (typeof value.closed !== "boolean") throw new TypeError("settlement residency snapshot closed state is invalid");
+    let residentBytes = 0;
+    for (const unitId of residentUnitIds) residentBytes += this.#units.get(unitId)!.residentBytes;
+    if (value.residentBytes !== residentBytes) throw new TypeError("settlement residency snapshot resident-byte accounting drifted");
+    if (residentUnitIds.length > this.#maxActiveUnits || residentBytes > this.#maxResidentBytes)
+      throw new TypeError("settlement residency snapshot exceeds the configured release budget");
+    if (value.closed && (residentUnitIds.length !== 0 || explicitInterestUnitIds.length !== 0))
+      throw new TypeError("closed settlement residency snapshot retains live interest or ownership");
+    return Object.freeze({ planId: this.#planId, residentUnitIds, explicitInterestUnitIds,
+      residentBytes, revision: value.revision as number, closed: value.closed });
   }
   #assertOpen(): void { if (this.#closed) throw new Error("settlement residency manager is closed"); }
 }

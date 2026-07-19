@@ -437,8 +437,8 @@ near-vertical cliffs before the SDF layer exists.
   reuses prior artifacts only across an exact compiler-identity match, and fails profile drift closed
   (`ccb53e2`).
 - **2026-07-09 — Coherent worker swim status shipped (`136fc79`).** Simulation workers publish tick,
-  lowest-live-player id, and in-water/swimming/submerged flags through a 16-byte seqlocked shared status
-  block after physics and transform synchronization. The browser reads into reusable scratch storage,
+  lowest-live-player id, in-water/swimming/submerged flags, and additive dropped-step telemetry through
+  a 20-byte v2 seqlocked shared status block after physics and transform synchronization. The browser reads into reusable scratch storage,
   so render and editor consumers need neither per-tick messages nor per-frame allocations. Pausing does
   not fabricate generations or ticks, authoring batches update the chosen player deterministically, and
   focused worker plus type/bundle gates are green.

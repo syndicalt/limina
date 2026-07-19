@@ -149,7 +149,7 @@ assert(tracer.trace("agt_pirate_spoof").length === 0, "the package's spoofed pay
 ops.op_log("  [P1 load+run] orbit-mover@1.2.0 loaded ISOLATED + moved its body x " + before[0].toFixed(2) + " -> " + after[0].toFixed(2) + " via SkillRegistry.invoke (spoof ignored)");
 
 // POLICY-GOVERNED — a REAL quota denial on the loaded package agent.
-engine.setQuota({ cap: "physics.applyImpulse", perSession: true, limit: 3, windowMs: 60_000 });
+engine.setQuota({ cap: "physics.applyImpulse", perSession: true, limit: 3, windowTicks: 60_000 });
 for (let i = 0; i < 3; i++) {
   const r = await host.runDecision("agt_orbit", { perception: orbitPerception, world, tick: 6 + i });
   assert(r.executed === 1, "within-quota package crossing #" + (i + 1) + " executes");

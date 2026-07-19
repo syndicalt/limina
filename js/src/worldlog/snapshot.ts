@@ -194,6 +194,19 @@ export class SnapshotParticipantRegistry {
     this.participants.set(participant.key, participant);
   }
 
+  /**
+   * Remove a dynamically owned participant. Supplying the expected object makes teardown
+   * ownership-safe: a stale session cannot unregister a newer participant that reused its key.
+   */
+  unregister(key: string, expected?: SnapshotParticipant): boolean {
+    const current = this.participants.get(key);
+    if (current === undefined) return false;
+    if (expected !== undefined && current !== expected) {
+      throw new Error(`snapshot participants: key '${key}' is owned by a different participant`);
+    }
+    return this.participants.delete(key);
+  }
+
   get(key: string): SnapshotParticipant | undefined {
     return this.participants.get(key);
   }

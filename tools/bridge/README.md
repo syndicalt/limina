@@ -6,13 +6,13 @@ connects to the same localhost WebSocket server that the browser viewport uses,
 authenticates with the editor token, and forwards `tools/list` and `tools/call`
 without keeping local world state or adding local skill logic.
 
-The bridge needs a running `editor_host` and the `EDITOR_AUTH_TOKEN` printed when
-that host boots.
+The bridge needs a running `editor_host` and the `LIMINA_EDITOR_TOKEN` stored in
+the private capability file reported by the project editor launcher.
 
 ## Configuration
 
 - `LIMINA_EDITOR_URL`: WebSocket URL, default `ws://localhost:8787/`
-- `LIMINA_EDITOR_TOKEN`: required editor auth token
+- `LIMINA_EDITOR_TOKEN`: required editor auth token from the launcher's private capability file
 - `LIMINA_AGENT_ID`: default `limina-coordinator`
 - `LIMINA_SESSION_ID`: default stable per-process id
 - `LIMINA_PROFILE`: default `builder.readWrite`

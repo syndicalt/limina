@@ -1,0 +1,33 @@
+{
+  "schema": "limina.building-cue-profile/v1",
+  "id": "building/functional-hall-house/fb4-v2",
+  "visualDesignContractHash": "sha256:5e716b437c155fe1e4b46802161593f59d0614189513eda960336b1609c7fe96",
+  "programPath": "assets/buildings/programs/functional-hall-house-fb4-program-v2.json",
+  "mappings": [
+    {
+      "cueId": "three-part-silhouette",
+      "owner": "rulebook.articulation.secondary-silhouette-elements",
+      "verification": "cpu-proxy-and-human"
+    },
+    {
+      "cueId": "attic-dormer-weather-layer",
+      "owner": "compiler.dormer.weather-layer",
+      "verification": "compiler"
+    },
+    {
+      "cueId": "covered-primary-entry",
+      "owner": "compiler.entrance-canopy",
+      "verification": "compiler"
+    },
+    {
+      "cueId": "centerline-chimney-closure",
+      "owner": "compiler.roof-penetration",
+      "verification": "compiler"
+    },
+    {
+      "cueId": "occupied-upper-daylight",
+      "owner": "program.requirements.daylight",
+      "verification": "compiler"
+    }
+  ]
+}

@@ -47,7 +47,7 @@ async function canvasBytes(page, selector, path) {
   const browser = await loaded.chromium.launch({
     headless: true,
     executablePath,
-    args: ["--no-sandbox", "--enable-unsafe-swiftshader"],
+    args: ["--no-sandbox", "--disable-gpu", "--enable-unsafe-swiftshader"],
   });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const pageErrors = [];
@@ -97,14 +97,39 @@ async function canvasBytes(page, selector, path) {
     assert.ok(initialSignal.opaque > initialSignal.sampled * 0.99 && initialSignal.colors >= 8,
       `initial editor frame is blank or visually flat: ${JSON.stringify(initialSignal)}`);
 
+    const readCameraTarget = async () => {
+      await page.click("#viewport-navigation-goto-toggle");
+      await page.waitForFunction(() => document.getElementById("viewport-navigation-goto")?.hidden === false);
+      const target = await page.evaluate(() => ({
+        x: Number(document.getElementById("viewport-navigation-x").value),
+        y: Number(document.getElementById("viewport-navigation-y").value),
+        z: Number(document.getElementById("viewport-navigation-z").value),
+      }));
+      await page.click("#viewport-navigation-goto-cancel");
+      return target;
+    };
+    const initialTarget = await readCameraTarget();
+
     const box = await canvas.boundingBox();
     assert.ok(box && box.width >= 600 && box.height >= 400, "editor canvas is not interactable");
     const artifactsBeforePan = artifactResponses;
     const currentsBeforePan = currentResponses;
-    await page.mouse.move(box.x + box.width * 0.82, box.y + box.height * 0.52);
-    await page.mouse.down({ button: "right" });
-    await page.mouse.move(box.x + box.width * 0.18, box.y + box.height * 0.52, { steps: 30 });
-    await page.mouse.up({ button: "right" });
+    let pannedTarget = initialTarget;
+    // A single pixel-distance gesture is not a world-distance contract: OrbitControls
+    // scales pan by the framed camera distance. Drive repeated real RMB pan gestures
+    // until the target has crossed two 48m chunks, then require incremental residency.
+    for (let attempt = 0; attempt < 12; attempt++) {
+      await page.mouse.move(box.x + box.width * 0.82, box.y + box.height * 0.52);
+      await page.mouse.down({ button: "right" });
+      await page.mouse.move(box.x + box.width * 0.18, box.y + box.height * 0.52, { steps: 30 });
+      await page.mouse.up({ button: "right" });
+      await page.waitForTimeout(100);
+      pannedTarget = await readCameraTarget();
+      if (Math.hypot(pannedTarget.x - initialTarget.x, pannedTarget.z - initialTarget.z) >= 96) break;
+    }
+    const panDistance = Math.hypot(pannedTarget.x - initialTarget.x, pannedTarget.z - initialTarget.z);
+    assert.ok(panDistance >= 96,
+      `real RMB pan did not cross the two-chunk streaming threshold: ${JSON.stringify({ initialTarget, pannedTarget, panDistance })}`);
 
     const deadline = Date.now() + 30_000;
     while (artifactResponses === artifactsBeforePan && Date.now() < deadline) await page.waitForTimeout(100);
@@ -122,7 +147,7 @@ async function canvasBytes(page, selector, path) {
     assert.deepEqual(pageErrors, [], "camera navigation must not raise page errors");
     for (const path of Object.values(screenshots)) assert.ok(fs.statSync(path).size > 10_000);
     console.log(`camera_navigation_browser.test OK: framed scene ${initialSignal.colors} colors; `
-      + `${incrementalCurrents} publication poll(s), ${incrementalArtifacts} bounded pan-triggered artifact load(s); `
+      + `${panDistance.toFixed(1)}m pan, ${incrementalCurrents} publication poll(s), ${incrementalArtifacts} bounded pan-triggered artifact load(s); `
       + `screenshots ${Object.values(screenshots).join(", ")}`);
   } finally {
     await page.close();

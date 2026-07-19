@@ -101,10 +101,47 @@ for part in contract["parts"]:
     uv_project(obj)
     obj["limina.id"]=part["id"];obj["limina.role"]="furniture-part";obj["limina.kind"]=part["kind"];obj["limina.materialRole"]=part["materialRole"];obj["limina.editPolicy"]="bounded-validate";obj["limina.contractCenter"]=part["center"];obj["limina.contractRotationDeg"]=part["rotationDeg"];obj["limina.geometryJson"]=json.dumps(part["geometry"],sort_keys=True,separators=(",",":"))
 for socket in contract["sockets"]:
-    obj=bpy.data.objects.new(socket["id"],None);SOCKETS.objects.link(obj);obj.location=e2b(socket["position"]);obj.parent=root;obj.empty_display_type="ARROWS";obj.empty_display_size=.12;obj["limina.id"]=socket["id"];obj["limina.role"]="socket";obj["limina.kind"]=socket["kind"];obj["limina.editPolicy"]="bounded-validate";obj["limina.position"]=socket["position"];obj["limina.facing"]=socket["facing"];obj["limina.supportedBy"]=socket["supportedBy"];obj["limina.clearanceRadiusM"]=socket["clearanceRadiusM"]
+    obj=bpy.data.objects.new(socket["id"],None)
+    SOCKETS.objects.link(obj)
+    obj.location=e2b(socket["position"])
+    obj.parent=root
+    obj.empty_display_type="ARROWS"
+    obj.empty_display_size=.12
+    obj["limina.id"]=socket["id"]
+    obj["limina.role"]="socket"
+    obj["limina.kind"]=socket["kind"]
+    obj["limina.editPolicy"]="bounded-validate"
+    obj["limina.position"]=socket["position"]
+    obj["limina.facing"]=socket["facing"]
+    obj["limina.supportedBy"]=socket["supportedBy"]
+    obj["limina.clearanceRadiusM"]=socket["clearanceRadiusM"]
 for collider in contract["colliders"]:
-    obj=bpy.data.objects.new(collider["id"],None);COLLISION.objects.link(obj);obj.location=e2b(collider["center"]);obj.scale=(collider["halfExtents"][0],collider["halfExtents"][2],collider["halfExtents"][1]);obj.parent=root;obj.empty_display_type="CUBE";obj.empty_display_size=1;obj.hide_render=True;obj["limina.id"]=collider["id"];obj["limina.role"]="collider";obj["limina.editPolicy"]="protected-generated";obj["limina.center"]=collider["center"];obj["limina.halfExtents"]=collider["halfExtents"];obj["limina.covers"]=collider["covers"]
-scene=bpy.context.scene;scene["limina.handoffSchema"]="limina.blender-furniture-handoff/v1";scene["limina.furnitureContractHash"]=CONTRACT_HASH;scene["limina.visualDesignHash"]=VISUAL_HASH;scene["limina.coordinateContract"]="engine[x,y-up,z]=>blender[x,-z,y]";scene["limina.profileExtrusionSemantics"]="axis=profile-horizontal; y=profile-vertical; remaining-horizontal=extrusion";scene["limina.jointsJson"]=json.dumps(contract["joints"],sort_keys=True,separators=(",",":"));scene["limina.genericGltfExportAllowed"]=False
+    obj=bpy.data.objects.new(collider["id"],None)
+    COLLISION.objects.link(obj)
+    obj.location=e2b(collider["center"])
+    obj.scale=(
+        collider["halfExtents"][0],
+        collider["halfExtents"][2],
+        collider["halfExtents"][1],
+    )
+    obj.parent=root
+    obj.empty_display_type="CUBE"
+    obj.empty_display_size=1
+    obj.hide_render=True
+    obj["limina.id"]=collider["id"]
+    obj["limina.role"]="collider"
+    obj["limina.editPolicy"]="protected-generated"
+    obj["limina.center"]=collider["center"]
+    obj["limina.halfExtents"]=collider["halfExtents"]
+    obj["limina.covers"]=collider["covers"]
+scene=bpy.context.scene
+scene["limina.handoffSchema"]="limina.blender-furniture-handoff/v1"
+scene["limina.furnitureContractHash"]=CONTRACT_HASH
+scene["limina.visualDesignHash"]=VISUAL_HASH
+scene["limina.coordinateContract"]="engine[x,y-up,z]=>blender[x,-z,y]"
+scene["limina.profileExtrusionSemantics"]="axis=profile-horizontal; y=profile-vertical; remaining-horizontal=extrusion"
+scene["limina.jointsJson"]=json.dumps(contract["joints"],sort_keys=True,separators=(",",":"))
+scene["limina.genericGltfExportAllowed"]=False
 for obj in bpy.context.scene.objects: obj.select_set(obj.get("limina.role") in {"furniture-part","socket","collider"} or obj is root)
 bpy.context.view_layer.objects.active=root
 os.makedirs(os.path.dirname(BLEND_OUT),exist_ok=True);bpy.ops.wm.save_as_mainfile(filepath=BLEND_OUT,compress=True)
@@ -113,7 +150,20 @@ def patch_glb(path):
     raw=open(path,"rb").read();magic,version,total=struct.unpack_from("<4sII",raw,0);offset=12;chunks=[]
     while offset<total:
         length,kind=struct.unpack_from("<II",raw,offset);offset+=8;chunks.append((kind,raw[offset:offset+length]));offset+=length
-    doc=json.loads(next(data for kind,data in chunks if kind==0x4E4F534A).decode().rstrip(" \0"));extras=doc["asset"].setdefault("extras",{});extras["liminaFurnitureContract"]=contract;extras["liminaFurnitureContractHash"]=CONTRACT_HASH;extras["liminaVisualDesignHash"]=VISUAL_HASH;extras["liminaMaterialSources"]={"schema":"limina.material-sources/v1","packs":[{"id":"cottage-structural-oak","manifestSha256":MATERIALS["oak-frame"]["limina.sourceManifestSha256"],"provider":"Poly Haven","licenseSpdx":"CC0-1.0"}]}
+    doc=json.loads(next(data for kind,data in chunks if kind==0x4E4F534A).decode().rstrip(" \0"))
+    extras=doc["asset"].setdefault("extras",{})
+    extras["liminaFurnitureContract"]=contract
+    extras["liminaFurnitureContractHash"]=CONTRACT_HASH
+    extras["liminaVisualDesignHash"]=VISUAL_HASH
+    extras["liminaMaterialSources"]={
+        "schema":"limina.material-sources/v1",
+        "packs":[{
+            "id":"cottage-structural-oak",
+            "manifestSha256":MATERIALS["oak-frame"]["limina.sourceManifestSha256"],
+            "provider":"Poly Haven",
+            "licenseSpdx":"CC0-1.0",
+        }],
+    }
     encoded=json.dumps(doc,separators=(",",":"),ensure_ascii=False).encode();encoded+=b" "*((4-len(encoded)%4)%4);rebuilt=[(0x4E4F534A,encoded)]+[(k,d) for k,d in chunks if k!=0x4E4F534A];body=b"".join(struct.pack("<II",len(d),k)+d for k,d in rebuilt);open(path,"wb").write(struct.pack("<4sII",b"glTF",2,12+len(body))+body)
 patch_glb(OUT)
 depsgraph=bpy.context.evaluated_depsgraph_get();points=[]

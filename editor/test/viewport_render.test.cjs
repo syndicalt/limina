@@ -23,7 +23,7 @@ function fail(m) { console.error("FAIL: " + m); process.exit(1); }
   try {
     // SwiftShader gives a software WebGL2 backend with no GPU — enough to render the scene headlessly.
     browser = await chromium.launch({ executablePath: CHROME, args: [
-      "--no-sandbox", "--disable-dev-shm-usage",
+      "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
       "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader",
     ] });
   } catch (e) { console.log("SKIP: could not launch chromium (" + e.message + ")"); process.exit(2); }

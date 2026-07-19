@@ -135,9 +135,9 @@ function makeRegistry(tracer: LiminaTracer, opts: { ledger?: boolean; catchAll?:
   registerVillageSkills(registry, layers, stubAssets, footprints, vegetationClears);
   registerAssetSkills(registry, stubAssets, undefined, layers);
 
-  const nested = (ctx: { agentId: string; sessionId: string; tick: number; world: WorldContext; chainId?: string }): InvokeBase => ({
+  const nested = (ctx: { agentId: string; sessionId: string; tick: number; world: WorldContext; chainId?: string; chainToken?: object }): InvokeBase => ({
     agentId: ctx.agentId, sessionId: ctx.sessionId, permissions: new Set<string>(["scene.write"]),
-    tick: ctx.tick, world: ctx.world, chainId: ctx.chainId,
+    tick: ctx.tick, world: ctx.world, chainId: ctx.chainId, chainToken: ctx.chainToken,
   });
 
   // The multi-step offender in miniature: entity + standalone collider (asset.place),

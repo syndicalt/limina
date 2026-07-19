@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "lineLimitBytes": 500,
+  "sourceExtensions": [
+    ".astro",
+    ".cjs",
+    ".css",
+    ".cts",
+    ".html",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".mts",
+    ".ps1",
+    ".py",
+    ".rs",
+    ".sh",
+    ".ts",
+    ".tsx"
+  ],
+  "artifacts": [
+    {
+      "path": "gates/design/spike/silhouette.js",
+      "recipeId": "esbuild:silhouette-spike@1"
+    },
+    {
+      "path": "js/build/bitecs.bundle.mjs",
+      "recipeId": "esbuild:bitecs-bundle@1"
+    },
+    {
+      "path": "js/build/three.bundle.mjs",
+      "recipeId": "esbuild:three-bundle@1"
+    },
+    {
+      "path": "runtime/basis/basis_transcoder.js",
+      "recipeId": "copy:three-0.184.0-basis-transcoder@1"
+    },
+    {
+      "path": "site/public/examples/limina-player.js",
+      "recipeId": "esbuild:browser-player@1"
+    },
+    {
+      "path": "tools/scaffold/public/limina-player.js",
+      "recipeId": "esbuild:browser-player@1"
+    },
+    {
+      "path": "tools/scaffold/public/runtime/basis/basis_transcoder.js",
+      "recipeId": "copy:three-0.184.0-basis-transcoder@1"
+    },
+    {
+      "path": "web/public/limina-runtime.js",
+      "recipeId": "esbuild:browser-runtime@1"
+    },
+    {
+      "path": "web/public/runtime/basis/basis_transcoder.js",
+      "recipeId": "copy:three-0.184.0-basis-transcoder@1"
+    },
+    {
+      "path": "web/public/sim-worker-entry.js",
+      "recipeId": "esbuild:sim-worker@1"
+    }
+  ]
+}

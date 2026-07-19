@@ -1,12 +1,180 @@
-import {createHash} from "node:crypto";
-import {mkdir,readFile,writeFile} from "node:fs/promises";
-import {dirname,relative,resolve,sep} from "node:path";
-import {buildingCompositionManifestV2Hash,validateBuildingCompositionManifestV2} from "../../js/src/assets/building-composition-manifest-v2.mjs";
-import {resolveBlender} from "./blender-toolchain.mjs";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, relative, resolve, sep } from "node:path";
+import {
+  buildingCompositionManifestV2Hash,
+  validateBuildingCompositionManifestV2,
+} from "../../js/src/assets/building-composition-manifest-v2.mjs";
+import { resolveBlender } from "./blender-toolchain.mjs";
 
-const ROOT=resolve(import.meta.dirname,"../.."),sha=bytes=>`sha256:${createHash("sha256").update(bytes).digest("hex")}`,portable=path=>{const value=relative(ROOT,path).split(sep).join("/");if(!value||value===".."||value.startsWith("../"))throw new Error(`C1 build path escapes repository: ${path}`);return value;},args=process.argv.slice(2),at=flag=>{const index=args.indexOf(flag);if(index<0||!args[index+1])throw new Error("usage: bun tools/architecture/build-furnished-c1-source.mjs --manifest <v2.json> --out <glb> --blend-out <blend> --evidence <json>");return resolve(args[index+1]);},manifestPath=at("--manifest"),out=at("--out"),blendOut=at("--blend-out"),evidencePath=at("--evidence"),toolchain=resolveBlender(),adapterPath=new URL("../blender/building-composition-adapter.py",import.meta.url).pathname,validatorPath=new URL("../blender/validate-building-composition-blend.py",import.meta.url).pathname;
-for(const path of [out,blendOut,evidencePath]){try{await readFile(path);throw new Error(`append-only C1 build output already exists: ${path}`);}catch(error){if(error?.code!=="ENOENT")throw error;}}const manifestBytes=await readFile(manifestPath),manifest=validateBuildingCompositionManifestV2(JSON.parse(manifestBytes)),manifestHash=buildingCompositionManifestV2Hash(manifest);await Promise.all([mkdir(dirname(out),{recursive:true}),mkdir(dirname(blendOut),{recursive:true}),mkdir(dirname(evidencePath),{recursive:true})]);
-const build=Bun.spawnSync([toolchain.binary,"--background","--factory-startup","--python",adapterPath,"--","--manifest",manifestPath,"--out",out,"--blend-out",blendOut],{stdout:"pipe",stderr:"pipe"});if(build.exitCode!==0)throw new Error(`C1 Blender adapter failed (${build.exitCode})\n${build.stdout}\n${build.stderr}`);const outputLine=build.stdout.toString().split("\n").find(line=>line.startsWith("LIMINA_BUILDING_COMPOSITION_OUTPUT="));if(!outputLine)throw new Error(`C1 Blender adapter produced no attestation\nstdout:\n${build.stdout}\nstderr:\n${build.stderr}`);const adapterOutput=JSON.parse(outputLine.slice(outputLine.indexOf("=")+1));if(adapterOutput.schema!=="limina.blender-building-composition-output/v2"||adapterOutput.manifestHash!==manifestHash||adapterOutput.instances?.length!==manifest.instances.length)throw new Error("C1 Blender adapter attestation drifted");
-const validation=Bun.spawnSync([toolchain.binary,"--background",blendOut,"--python",validatorPath,"--","--manifest",manifestPath],{stdout:"pipe",stderr:"pipe"});if(validation.exitCode!==0)throw new Error(`C1 fresh-process Blender validator failed (${validation.exitCode})\n${validation.stdout}\n${validation.stderr}`);const validationLine=validation.stdout.toString().split("\n").find(line=>line.startsWith("LIMINA_BUILDING_COMPOSITION_BLEND_VALIDATION="));if(!validationLine)throw new Error(`C1 Blender validator produced no attestation\nstdout:\n${validation.stdout}\nstderr:\n${validation.stderr}`);const sourceValidation=JSON.parse(validationLine.slice(validationLine.indexOf("=")+1));if(sourceValidation.schema!=="limina.blender-building-composition-source-validation/v2"||sourceValidation.manifestHash!==manifestHash||sourceValidation.instances?.length!==manifest.instances.length)throw new Error("C1 fresh-process validation attestation drifted");
-const [glb,blend,adapter,validator]=await Promise.all([readFile(out),readFile(blendOut),readFile(adapterPath),readFile(validatorPath)]);if(glb.toString("ascii",0,4)!=="glTF"||glb.readUInt32LE(4)!==2||glb.readUInt32LE(8)!==glb.length)throw new Error("C1 output is not a valid GLB envelope");let offset=12,document;while(offset<glb.length){const length=glb.readUInt32LE(offset),kind=glb.readUInt32LE(offset+4);offset+=8;if(kind===0x4e4f534a)document=JSON.parse(glb.subarray(offset,offset+length).toString("utf8").trim());offset+=length;}const provenance=document?.asset?.extras?.liminaBuildingCompositionProvenance;if(document?.asset?.extras?.liminaBuildingComposition?.id!==manifest.id||provenance?.schema!=="limina.building-composition-provenance/v2"||provenance.manifestHash!==manifestHash||provenance.instances?.length!==manifest.instances.length)throw new Error("C1 exported GLB provenance drifted");
-const evidence={schema:"limina.building-composition-build-evidence/v1",id:manifest.id,manifest:{path:portable(manifestPath),sha256:sha(manifestBytes),canonicalHash:manifestHash},toolchain,adapter:{path:portable(adapterPath),sha256:sha(adapter)},validator:{path:portable(validatorPath),sha256:sha(validator)},sourceBlend:{path:portable(blendOut),sha256:sha(blend),bytes:blend.length},asset:{path:portable(out),sha256:sha(glb),bytes:glb.length},inventory:{instances:manifest.instances.length,roles:Object.fromEntries([...new Set(manifest.instances.map(instance=>instance.role))].sort().map(role=>[role,manifest.instances.filter(instance=>instance.role===role).length]))},adapterOutput,sourceValidation,glbValidation:{version:document.asset.version,generator:document.asset.generator,nodes:document.nodes?.length??0,meshes:document.meshes?.length??0,materials:document.materials?.length??0,provenance:true},rendered:false,gpuUsed:false,status:"cpu-authored-unreviewed"};await writeFile(evidencePath,`${JSON.stringify(evidence,null,2)}\n`,{mode:0o600,flag:"wx"});console.log(JSON.stringify({schema:evidence.schema,id:evidence.id,instances:evidence.inventory.instances,asset:evidence.asset,sourceBlend:evidence.sourceBlend},null,2));
+const ROOT = resolve(import.meta.dirname, "../.."),
+  sha = (bytes) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+  portable = (path) => {
+    const value = relative(ROOT, path).split(sep).join("/");
+    if (!value || value === ".." || value.startsWith("../"))
+      throw new Error(`C1 build path escapes repository: ${path}`);
+    return value;
+  },
+  args = process.argv.slice(2),
+  at = (flag) => {
+    const index = args.indexOf(flag);
+    if (index < 0 || !args[index + 1])
+      throw new Error(
+        "usage: bun tools/architecture/build-furnished-c1-source.mjs --manifest <v2.json> --out <glb> --blend-out <blend> --evidence <json>",
+      );
+    return resolve(args[index + 1]);
+  },
+  manifestPath = at("--manifest"),
+  out = at("--out"),
+  blendOut = at("--blend-out"),
+  evidencePath = at("--evidence"),
+  toolchain = resolveBlender(),
+  adapterPath = new URL("../blender/building-composition-adapter.py", import.meta.url).pathname,
+  validatorPath = new URL("../blender/validate-building-composition-blend.py", import.meta.url).pathname;
+for (const path of [out, blendOut, evidencePath]) {
+  try {
+    await readFile(path);
+    throw new Error(`append-only C1 build output already exists: ${path}`);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+const manifestBytes = await readFile(manifestPath),
+  manifest = validateBuildingCompositionManifestV2(JSON.parse(manifestBytes)),
+  manifestHash = buildingCompositionManifestV2Hash(manifest);
+await Promise.all([
+  mkdir(dirname(out), { recursive: true }),
+  mkdir(dirname(blendOut), { recursive: true }),
+  mkdir(dirname(evidencePath), { recursive: true }),
+]);
+const build = Bun.spawnSync(
+  [
+    toolchain.binary,
+    "--background",
+    "--factory-startup",
+    "--python",
+    adapterPath,
+    "--",
+    "--manifest",
+    manifestPath,
+    "--out",
+    out,
+    "--blend-out",
+    blendOut,
+  ],
+  { stdout: "pipe", stderr: "pipe" },
+);
+if (build.exitCode !== 0)
+  throw new Error(`C1 Blender adapter failed (${build.exitCode})\n${build.stdout}\n${build.stderr}`);
+const outputLine = build.stdout
+  .toString()
+  .split("\n")
+  .find((line) => line.startsWith("LIMINA_BUILDING_COMPOSITION_OUTPUT="));
+if (!outputLine)
+  throw new Error(`C1 Blender adapter produced no attestation\nstdout:\n${build.stdout}\nstderr:\n${build.stderr}`);
+const adapterOutput = JSON.parse(outputLine.slice(outputLine.indexOf("=") + 1));
+if (
+  adapterOutput.schema !== "limina.blender-building-composition-output/v2" ||
+  adapterOutput.manifestHash !== manifestHash ||
+  adapterOutput.instances?.length !== manifest.instances.length
+)
+  throw new Error("C1 Blender adapter attestation drifted");
+const validation = Bun.spawnSync(
+  [toolchain.binary, "--background", blendOut, "--python", validatorPath, "--", "--manifest", manifestPath],
+  { stdout: "pipe", stderr: "pipe" },
+);
+if (validation.exitCode !== 0)
+  throw new Error(
+    `C1 fresh-process Blender validator failed (${validation.exitCode})\n${validation.stdout}\n${validation.stderr}`,
+  );
+const validationLine = validation.stdout
+  .toString()
+  .split("\n")
+  .find((line) => line.startsWith("LIMINA_BUILDING_COMPOSITION_BLEND_VALIDATION="));
+if (!validationLine)
+  throw new Error(
+    `C1 Blender validator produced no attestation\nstdout:\n${validation.stdout}\nstderr:\n${validation.stderr}`,
+  );
+const sourceValidation = JSON.parse(validationLine.slice(validationLine.indexOf("=") + 1));
+if (
+  sourceValidation.schema !== "limina.blender-building-composition-source-validation/v2" ||
+  sourceValidation.manifestHash !== manifestHash ||
+  sourceValidation.instances?.length !== manifest.instances.length
+)
+  throw new Error("C1 fresh-process validation attestation drifted");
+const [glb, blend, adapter, validator] = await Promise.all([
+  readFile(out),
+  readFile(blendOut),
+  readFile(adapterPath),
+  readFile(validatorPath),
+]);
+if (glb.toString("ascii", 0, 4) !== "glTF" || glb.readUInt32LE(4) !== 2 || glb.readUInt32LE(8) !== glb.length)
+  throw new Error("C1 output is not a valid GLB envelope");
+let offset = 12,
+  document;
+while (offset < glb.length) {
+  const length = glb.readUInt32LE(offset),
+    kind = glb.readUInt32LE(offset + 4);
+  offset += 8;
+  if (kind === 0x4e4f534a)
+    document = JSON.parse(
+      glb
+        .subarray(offset, offset + length)
+        .toString("utf8")
+        .trim(),
+    );
+  offset += length;
+}
+const provenance = document?.asset?.extras?.liminaBuildingCompositionProvenance;
+if (
+  document?.asset?.extras?.liminaBuildingComposition?.id !== manifest.id ||
+  provenance?.schema !== "limina.building-composition-provenance/v2" ||
+  provenance.manifestHash !== manifestHash ||
+  provenance.instances?.length !== manifest.instances.length
+)
+  throw new Error("C1 exported GLB provenance drifted");
+const evidence = {
+  schema: "limina.building-composition-build-evidence/v1",
+  id: manifest.id,
+  manifest: { path: portable(manifestPath), sha256: sha(manifestBytes), canonicalHash: manifestHash },
+  toolchain,
+  adapter: { path: portable(adapterPath), sha256: sha(adapter) },
+  validator: { path: portable(validatorPath), sha256: sha(validator) },
+  sourceBlend: { path: portable(blendOut), sha256: sha(blend), bytes: blend.length },
+  asset: { path: portable(out), sha256: sha(glb), bytes: glb.length },
+  inventory: {
+    instances: manifest.instances.length,
+    roles: Object.fromEntries(
+      [...new Set(manifest.instances.map((instance) => instance.role))]
+        .sort()
+        .map((role) => [role, manifest.instances.filter((instance) => instance.role === role).length]),
+    ),
+  },
+  adapterOutput,
+  sourceValidation,
+  glbValidation: {
+    version: document.asset.version,
+    generator: document.asset.generator,
+    nodes: document.nodes?.length ?? 0,
+    meshes: document.meshes?.length ?? 0,
+    materials: document.materials?.length ?? 0,
+    provenance: true,
+  },
+  rendered: false,
+  gpuUsed: false,
+  status: "cpu-authored-unreviewed",
+};
+await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+console.log(
+  JSON.stringify(
+    {
+      schema: evidence.schema,
+      id: evidence.id,
+      instances: evidence.inventory.instances,
+      asset: evidence.asset,
+      sourceBlend: evidence.sourceBlend,
+    },
+    null,
+    2,
+  ),
+);

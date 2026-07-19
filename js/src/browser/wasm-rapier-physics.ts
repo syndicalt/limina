@@ -53,6 +53,7 @@ type KinematicCharacterController = RAPIER_NS.KinematicCharacterController;
 
 type Vec3 = { x: number; y: number; z: number };
 const DEG = Math.PI / 180;
+const MAX_COLLISION_EVENTS = 4096;
 
 /** Init rapier-compat's wasm, working around the native host's non-pumped async
  *  `WebAssembly.instantiate` (see file header). Browser main thread keeps the
@@ -97,6 +98,10 @@ export class WasmRapierPhysics {
   private idToHandle = new Map<number, number>();
   /** rapier RigidBodyHandle -> stable body id (reverse of idToHandle). */
   private handleToId = new Map<number, number>();
+  /** Browser/native parity: collisions survive until polled, bounded exactly like
+   * the native host instead of Rapier auto-draining them before the next step. */
+  private readonly collisionEvents: CollisionEventRecord[] = [];
+  private collisionOverflow = 0;
 
   private constructor(RAPIER: RapierModule) {
     this.R = RAPIER;
@@ -135,6 +140,8 @@ export class WasmRapierPhysics {
     this.nextBodyId = 0;
     this.idToHandle.clear();
     this.handleToId.clear();
+    this.collisionEvents.length = 0;
+    this.collisionOverflow = 0;
   }
 
   /** Resolve a stable id to its live RigidBody, or null for unknown/removed ids. */
@@ -151,6 +158,45 @@ export class WasmRapierPhysics {
     const parent = collider?.parent();
     if (!parent) return undefined;
     return this.handleToId.get(parent.handle);
+  }
+
+  private collisionRecord(h1: number, h2: number, started: boolean): CollisionEventRecord | null {
+    const w = this.world;
+    if (w === null) return null;
+    const idA = this.idForCollider(h1);
+    const idB = this.idForCollider(h2);
+    // Parent-less ground contacts are intentionally omitted to match native.
+    if (idA === undefined || idB === undefined) return null;
+    const a = Math.min(idA, idB);
+    const b = Math.max(idA, idB);
+    if (!started) return { kind: 0, a, b, point: null, normal: null };
+    const swapped = idA > idB;
+    let point: [number, number, number] | null = null;
+    let normal: [number, number, number] | null = null;
+    const c1 = w.getCollider(h1);
+    const c2 = w.getCollider(h2);
+    if (c1 && c2) {
+      w.contactPair(c1, c2, (manifold) => {
+        const n = manifold.normal();
+        normal = swapped ? [-n.x, -n.y, -n.z] : [n.x, n.y, n.z];
+        if (manifold.numSolverContacts() > 0) {
+          const p = manifold.solverContactPoint(0);
+          point = [p.x, p.y, p.z];
+        }
+      });
+    }
+    return { kind: 1, a, b, point, normal };
+  }
+
+  private retainStepCollisionEvents(): void {
+    const q = this.events;
+    if (q === null) return;
+    q.drainCollisionEvents((h1, h2, started) => {
+      const record = this.collisionRecord(h1, h2, started);
+      if (record === null) return;
+      if (this.collisionEvents.length < MAX_COLLISION_EVENTS) this.collisionEvents.push(record);
+      else this.collisionOverflow = Math.min(0x7fffffff, this.collisionOverflow + 1);
+    });
   }
 
   /** Insert a rigid body + its collider, allocate the next monotonic id, record
@@ -195,7 +241,7 @@ export class WasmRapierPhysics {
     this.gravityY = gravityY;
     this.world = new this.R.World({ x: 0, y: gravityY, z: 0 });
     this.configureWorld();
-    this.events = new this.R.EventQueue(true);
+    this.events = new this.R.EventQueue(false);
     this.controller = this.makeController();
     this.nextBodyId = 0;
     this.idToHandle.clear();
@@ -348,6 +394,7 @@ export class WasmRapierPhysics {
   op_physics_step(): void {
     const w = this.requireWorld();
     w.step(this.events ?? undefined);
+    this.retainStepCollisionEvents();
   }
 
   op_physics_body_transform(id: number, out: Float32Array): void {
@@ -381,42 +428,14 @@ export class WasmRapierPhysics {
   }
 
   op_physics_drain_collisions(): CollisionEventRecord[] {
-    const records: CollisionEventRecord[] = [];
-    const w = this.world;
-    const q = this.events;
-    if (w === null || q === null) return records;
-    q.drainCollisionEvents((h1, h2, started) => {
-      const idA = this.idForCollider(h1);
-      const idB = this.idForCollider(h2);
-      // Skip events touching a parent-less collider (ground) — matches native,
-      // which drops a contact whose collider has no body id.
-      if (idA === undefined || idB === undefined) return;
-      const a = Math.min(idA, idB);
-      const b = Math.max(idA, idB);
-      const swapped = idA > idB;
-      if (!started) {
-        records.push({ kind: 0, a, b, point: null, normal: null });
-        return;
-      }
-      let point: [number, number, number] | null = null;
-      let normal: [number, number, number] | null = null;
-      const c1 = w.getCollider(h1);
-      const c2 = w.getCollider(h2);
-      if (c1 && c2) {
-        w.contactPair(c1, c2, (manifold) => {
-          const n = manifold.normal();
-          // manifold.normal() points from collider h1 toward h2; ids may have
-          // swapped to enforce a<=b, so flip the normal to point a -> b.
-          normal = swapped ? [-n.x, -n.y, -n.z] : [n.x, n.y, n.z];
-          if (manifold.numSolverContacts() > 0) {
-            const p = manifold.solverContactPoint(0); // world space
-            point = [p.x, p.y, p.z];
-          }
-        });
-      }
-      records.push({ kind: 1, a, b, point, normal });
-    });
+    const records = this.collisionEvents.splice(0);
     return records;
+  }
+
+  op_physics_take_collision_overflow_count(): number {
+    const count = this.collisionOverflow;
+    this.collisionOverflow = 0;
+    return count;
   }
 
   op_physics_raycast(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxToi: number, out: Float32Array): void {
@@ -502,7 +521,7 @@ export class WasmRapierPhysics {
     this.world = restoredWorld;
     this.gravityY = meta.gravityY;
     this.configureWorld();
-    this.events = new this.R.EventQueue(true);
+    this.events = new this.R.EventQueue(false);
     this.controller = this.makeController();
     this.nextBodyId = meta.nextBodyId;
     this.idToHandle = new Map(meta.entries);

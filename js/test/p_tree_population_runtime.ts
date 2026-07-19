@@ -59,10 +59,22 @@ assert(meshDisposals === 5 && materialDisposals === 3 && impostorGeometryDisposa
 await runtime.settle();
 assert(removed.includes(runtime.root), "runtime disposal did not detach the shared root");
 
+// Browser/hash-less hosts return the explicit "sha256:" sentinel. That means the host supplied no
+// verifiable digest; it must not turn every manifest-pinned impostor into a false mismatch. The
+// descriptor remains required and real host hashes still fail closed below.
+const hashlessAdded: unknown[] = [], hashlessRemoved: unknown[] = [];
+const hashless = new TreePopulationRuntime({ speciesId: "oak", placements,
+  treeLod: { reducedId: "oak-lod", reducedDistance: 20, impostorId: "oak-impostor", impostorDistance: 45, cullDistance: 300 },
+  sourceHash: "sha256:", reducedHash: "sha256:", baseRoot: treeRoot(10), reducedRoot: treeRoot(6),
+  impostorRoot: impostorRoot(sourceHash, reducedHash), scene: { add(object: unknown) { hashlessAdded.push(object); }, remove(object: unknown) { hashlessRemoved.push(object); } } });
+assert(hashlessAdded.includes(hashless.root), "hash-less host rejected a descriptor-pinned impostor");
+hashless.dispose(); await hashless.settle();
+assert(hashlessRemoved.includes(hashless.root), "hash-less host runtime did not retire cleanly");
+
 let invalid: unknown;
 try { new TreePopulationRuntime({ speciesId: "oak", placements, treeLod: { reducedId: "oak-lod", reducedDistance: 20, impostorId: "bad", impostorDistance: 45, cullDistance: 300 },
   sourceHash, reducedHash, baseRoot: treeRoot(10), reducedRoot: treeRoot(6), impostorRoot: impostorRoot(sourceHash, `sha256:${"c".repeat(64)}`), scene }); }
 catch (error) { invalid = error; }
 assert(invalid instanceof Error && /descriptor/.test(invalid.message), "mismatched impostor source chain was admitted");
 
-console.log("p_tree_population_runtime OK: flattened branch/foliage plus pinned v2 impostor compose into one shared five-draw root, camera residency converges/culls, terminal dispose retires all batch resources before returning, errors stay observable, and descriptor mismatch fails closed");
+console.log("p_tree_population_runtime OK: flattened branch/foliage plus pinned v2 impostor compose into one shared five-draw root, camera residency converges/culls, hash-less hosts admit descriptor-pinned assets, terminal dispose retires all batch resources before returning, errors stay observable, and real descriptor mismatch fails closed");

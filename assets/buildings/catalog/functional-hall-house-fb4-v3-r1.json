@@ -1,0 +1,144 @@
+{
+  "schema": "limina.functional-building-publication/v1",
+  "publicationId": "publication/functional-hall-house/fb4-v3-r1",
+  "candidateId": "functional-hall-house/fb4/1f375ec3abe1",
+  "candidateManifest": {
+    "path": "assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-1f375ec3abe1/candidate-manifest.json",
+    "sha256": "sha256:1539931ba24f0a70b80375d0865dfa478c5b54130efb6e30125cc2489e825425",
+    "contentHash": "sha256:da46573fc01f40a435b1b7907cea5a5fc2fb399e5ad84785c63b46e21a41f708",
+    "bytes": 21106
+  },
+  "approval": {
+    "status": "approved",
+    "reviewOutcome": {
+      "path": "assets/buildings/authoring/functional-hall-house-v4/review-outcomes/fb4-1f375ec3abe1-v4-r1-hitl-approved.json",
+      "sha256": "sha256:3856d6a9b03fad5cf82e838b587ff44be1d5465fdfd55fca06b4c3fb6f7a55ac",
+      "contentHash": "sha256:7665cfd88113bacccd1ae1ec3ef68fd131a42312e9d2abec912b0f79b4799b2e",
+      "bytes": 2776
+    },
+    "reviewLedger": [
+      {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/review-outcomes/fb4-1f375ec3abe1-v4-r1-central-passed.json",
+        "sha256": "sha256:b14215c408554690e45e2375476331844fa10fda42929f896ed92b2049edc46c",
+        "contentHash": "sha256:523989a0c97443f6995a9a101ea7708e5bd8a1ff90bf6ec9f02954e0598152ee",
+        "bytes": 2040
+      },
+      {
+        "path": "assets/buildings/authoring/functional-hall-house-v4/review-outcomes/fb4-1f375ec3abe1-v4-r1-hitl-approved.json",
+        "sha256": "sha256:3856d6a9b03fad5cf82e838b587ff44be1d5465fdfd55fca06b4c3fb6f7a55ac",
+        "contentHash": "sha256:7665cfd88113bacccd1ae1ec3ef68fd131a42312e9d2abec912b0f79b4799b2e",
+        "bytes": 2776
+      }
+    ],
+    "decision": {
+      "schema": "limina.building-hitl-decision/v2",
+      "path": "assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-1f375ec3abe1/review-v4-r1/hitl-decision-approve.json",
+      "sha256": "sha256:b5bfb9ebdab3ba6f628778dfea46c8575e00a43ba26e148461721587973ee561",
+      "contentHash": "sha256:0be82e62027bf102f74a0c1150a789f61e91d55c2d8b38cda9fb6c718789823e"
+    }
+  },
+  "asset": {
+    "path": "assets/buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-1f375ec3abe1/functional-hall-house-fb4-multi-room-lod.glb",
+    "sha256": "sha256:cd609e491dc48ebb63174eb1a17f62e08dee7b575386b06b1578865a8d7eb507",
+    "contentHash": "sha256:5d998519683da7e603ee3dc76e4e8daecd1bc19639b844f47cf81bd21ac437b5",
+    "bytes": 22158688
+  },
+  "catalog": {
+    "schema": "limina.functional-building-catalog/v1",
+    "catalogId": "settlement/functional-buildings",
+    "revision": 1,
+    "entries": [
+      {
+        "entryId": "building/functional-hall-house-fb4",
+        "placementClass": "functional-building",
+        "asset": {
+          "assetId": "buildings/authoring/functional-hall-house-v4/fb4-multi-room-candidate-v3-1f375ec3abe1/functional-hall-house-fb4-multi-room-lod.glb",
+          "hashKind": "raw-sha256",
+          "hash": "sha256:cd609e491dc48ebb63174eb1a17f62e08dee7b575386b06b1578865a8d7eb507",
+          "byteLength": 22158688
+        },
+        "variant": {
+          "familyId": "house/functional-hall",
+          "variantId": "fb4-v3-cross-gable"
+        },
+        "functionalContract": {
+          "schema": "limina.functional-building/v2",
+          "hash": "sha256:4e486b2083ca4b3b374d3d5c4450f403297de30d18420e7bda8ef7a732d16614"
+        },
+        "semanticIdentity": {
+          "buildingId": "synth/ad7c0571c019/target/front-to-rear/right-wall",
+          "rooms": [
+            "room/space/bedroom-a",
+            "room/space/bedroom-b",
+            "room/space/ground-hall",
+            "room/space/kitchen",
+            "room/space/service-pantry",
+            "room/space/upper-landing"
+          ],
+          "portals": [
+            "portal/connection/hall-service-pantry",
+            "portal/exterior",
+            "portal/hall-kitchen",
+            "portal/landing-front",
+            "portal/landing-rear"
+          ],
+          "exteriorPortals": [
+            "portal/exterior"
+          ],
+          "doors": [
+            "door/entry",
+            "door/landing-front",
+            "door/landing-rear"
+          ],
+          "spawns": [
+            "spawn/0",
+            "spawn/1",
+            "spawn/2",
+            "spawn/3",
+            "spawn/4",
+            "spawn/service-cross-gable"
+          ],
+          "cells": [
+            "cell/room/space/bedroom-a",
+            "cell/room/space/bedroom-b",
+            "cell/room/space/ground-hall",
+            "cell/room/space/kitchen",
+            "cell/room/space/service-pantry",
+            "cell/room/space/upper-landing"
+          ],
+          "fingerprint": "sha256:0a5c4a000aede91a661f642570a3a42f7818309f953040a6dd9b95dac5bcf5ca"
+        },
+        "lodSemanticIdentity": {
+          "schema": "limina.functional-building-lod-semantic-proof/v1",
+          "articulatedDoorPolicy": "shared-outside-static-lods",
+          "articulatedDoorRootIndex": 147,
+          "levels": [
+            {
+              "level": 0,
+              "rootIndex": 922,
+              "semanticFingerprint": "sha256:0a5c4a000aede91a661f642570a3a42f7818309f953040a6dd9b95dac5bcf5ca"
+            },
+            {
+              "level": 1,
+              "rootIndex": 939,
+              "semanticFingerprint": "sha256:0a5c4a000aede91a661f642570a3a42f7818309f953040a6dd9b95dac5bcf5ca"
+            },
+            {
+              "level": 2,
+              "rootIndex": 951,
+              "semanticFingerprint": "sha256:0a5c4a000aede91a661f642570a3a42f7818309f953040a6dd9b95dac5bcf5ca"
+            }
+          ]
+        },
+        "productionClosure": {
+          "schema": "limina.exact-production-closure-pointer/v1",
+          "artifactId": "fb4/1f375ec3abe1/000002-hitl-approved-v4-r1",
+          "path": "assets/buildings/authoring/functional-hall-house-v4/review-outcomes/fb4-1f375ec3abe1-v4-r1-hitl-approved.json",
+          "sha256": "sha256:3856d6a9b03fad5cf82e838b587ff44be1d5465fdfd55fca06b4c3fb6f7a55ac"
+        }
+      }
+    ]
+  },
+  "catalogHash": "sha256:c354239891faf412f47b5217f2024bb5715f55be0fbed4409467351deba0a100",
+  "closureHash": "sha256:25dd7c2236726b595e11963877bee990c967191b97a5d5a2f4a2f23c63d95ced"
+}

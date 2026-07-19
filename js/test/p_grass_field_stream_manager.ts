@@ -12,7 +12,7 @@ function assert(value: boolean, message: string): asserts value {
 const n = 33;
 const tile: TerrainTile = {
   nrows: n, ncols: n,
-  origin: [1_000_024.25, 0, -2_000_023.75], scale: [48, 1, 48],
+  origin: [1_000_012.25, 0, -2_000_011.75], scale: [24, 1, 24],
   heights: new Float32Array(n * n), paintMat: new Uint8Array(n * n).fill(2), paintW: new Float32Array(n * n).fill(1),
 };
 let dispatches = 0, builds = 0, disposals = 0, densitySamples = 0;
@@ -23,7 +23,7 @@ const renderer = {
 };
 const scene = new THREE.Scene();
 const manager = new GrassFieldStreamManager(scene, {
-  tileSize: 48, radius: 0, renderer,
+  tileSize: 24, radius: 0, renderer,
   visualPackage: INTERACTIVE_TEMPERATE_MEADOW_PACKAGE,
   source: () => ({
     seed: -91,
@@ -45,7 +45,11 @@ assert(launched.grown === 1 && launched.pending === 1 && manager.grassKeys().siz
 await manager.settle();
 const expectedPages = prepareGrassFieldTerrainPages(tile, {
   seed: -91,
-  spacing: 0.75 * INTERACTIVE_TEMPERATE_MEADOW_PACKAGE.profile("balanced").spacingMultipliers[0],
+  // The authored 0.75 m pitch is deliberately too sparse. Stream reservation and construction
+  // must both clamp it to the visual package's published density floor.
+  spacing: Math.sqrt(INTERACTIVE_TEMPERATE_MEADOW_PACKAGE.profile("balanced").bladesPerInstance[0]
+    / INTERACTIVE_TEMPERATE_MEADOW_PACKAGE.profile("balanced").bladesPerSquareMeter[0])
+    * INTERACTIVE_TEMPERATE_MEADOW_PACKAGE.profile("balanced").spacingMultipliers[0],
   elevationMin: -1,
   densityAt: () => 0.25,
   paintPolicy: "ignore",

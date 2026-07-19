@@ -5,6 +5,13 @@ import type { GrassFieldLod, GrassFieldVisualPackage, GrassFieldVisualProfile } 
 
 export const BIOME_GRASS_POPULATION_MAX_PAGE_INSTANCES = 1_024;
 export const BIOME_GRASS_POPULATION_MAX_RESIDENT_DRAWS = 128;
+export const BIOME_GRASS_POPULATION_LOD_HYSTERESIS = 0.1;
+export const BIOME_GRASS_POPULATION_MAX_RECYCLED_GEOMETRIES_PER_LOD = 8;
+
+/** Defers package construction off the caller's render-frame stack. Tests inject a manually
+ * advanced scheduler; production uses one zero-delay task per page so a residency change never
+ * constructs more than one bounded page in one turn. */
+export type BiomeGrassPopulationBuildScheduler = <Result>(work: () => Result) => Promise<Result>;
 
 export interface BiomeGrassPopulationPlacement {
   readonly x: number;
@@ -25,6 +32,8 @@ export interface BiomeGrassPopulationRuntimeInput {
   readonly bladeScale: readonly [number, number];
   readonly scene: { add?(object: unknown): void; remove?(object: unknown): void };
   readonly onError?: (error: unknown) => void;
+  readonly lodHysteresis?: number;
+  readonly buildScheduler?: BiomeGrassPopulationBuildScheduler;
 }
 
 interface Page {
@@ -38,7 +47,21 @@ interface Page {
 
 interface RankedPlacement extends BiomeGrassPopulationPlacement { readonly rank: number }
 interface Selection { readonly page: Page; readonly lod: GrassFieldLod; readonly placements: readonly RankedPlacement[]; readonly signature: string }
-interface MountedPage { readonly signature: string; readonly lod: GrassFieldLod; readonly blades: number; readonly mesh: THREE.InstancedMesh }
+interface MountedPage {
+  readonly signature: string;
+  readonly lod: GrassFieldLod;
+  readonly blades: number;
+  readonly mesh: THREE.InstancedMesh;
+  readonly visual: CachedVisual;
+}
+interface CachedVisual {
+  readonly key: string;
+  readonly geometry: THREE.BufferGeometry;
+  readonly material: THREE.Material;
+  readonly recycled: THREE.BufferGeometry[];
+  disposed: boolean;
+}
+interface PendingBuild { readonly key: string; readonly signature: string; readonly generation: number; readonly task: Promise<void> }
 
 function finite(value: number, label: string): number {
   if (!Number.isFinite(value) || Object.is(value, -0)) throw new RangeError(`${label} must be a canonical finite number`);
@@ -87,13 +110,40 @@ function pageDistance(page: Page, x: number, z: number): number {
   return Math.hypot(dx, dz);
 }
 
-function disposeMesh(mesh: THREE.InstancedMesh): void {
+function defaultBuildScheduler<Result>(work: () => Result): Promise<Result> {
+  return new Promise<Result>((resolve, reject) => {
+    setTimeout(() => {
+      try { resolve(work()); } catch (error) { reject(error); }
+    }, 0);
+  });
+}
+
+function releasePageGeometry(resource: CachedVisual, geometry: THREE.BufferGeometry, errors: unknown[]): void {
+  // Do not retain per-page wind arrays while an otherwise reusable topology wrapper is idle.
+  geometry.deleteAttribute("aWind");
+  if (!resource.disposed && resource.recycled.length < BIOME_GRASS_POPULATION_MAX_RECYCLED_GEOMETRIES_PER_LOD) {
+    resource.recycled.push(geometry);
+    return;
+  }
+  try { geometry.dispose(); } catch (error) { errors.push(error); }
+}
+
+/** Page geometries own their instance attributes; package templates/materials are cache-owned. */
+function disposeMountedPage(mounted: MountedPage): void {
   const errors: unknown[] = [];
-  try { mesh.geometry.dispose(); } catch (error) { errors.push(error); }
-  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-  for (const material of materials) try { material.dispose(); } catch (error) { errors.push(error); }
-  try { mesh.dispose(); } catch (error) { errors.push(error); }
-  if (errors.length > 0) throw new AggregateError(errors, `biome grass mesh disposal failed in ${errors.length} operation(s)`);
+  try { mounted.mesh.dispose(); } catch (error) { errors.push(error); }
+  releasePageGeometry(mounted.visual, mounted.mesh.geometry, errors);
+  if (errors.length > 0) throw new AggregateError(errors, `biome grass page disposal failed in ${errors.length} operation(s)`);
+}
+
+function disposeCachedVisual(resource: CachedVisual): void {
+  if (resource.disposed) return;
+  resource.disposed = true;
+  const errors: unknown[] = [];
+  for (const geometry of resource.recycled.splice(0)) try { geometry.dispose(); } catch (error) { errors.push(error); }
+  try { resource.geometry.dispose(); } catch (error) { errors.push(error); }
+  try { resource.material.dispose(); } catch (error) { errors.push(error); }
+  if (errors.length > 0) throw new AggregateError(errors, `biome grass cached visual disposal failed in ${errors.length} operation(s)`);
 }
 
 function buildPages(placements: readonly BiomeGrassPopulationPlacement[]): readonly Page[] {
@@ -142,7 +192,16 @@ export class BiomeGrassPopulationRuntime {
   private readonly profile: GrassFieldVisualProfile;
   private readonly pages: readonly Page[];
   private readonly errors: unknown[] = [];
+  private readonly buildScheduler: BiomeGrassPopulationBuildScheduler;
+  private readonly hysteresis: number;
+  private readonly visualCache = new Map<GrassFieldLod, CachedVisual>();
   private active = new Map<string, MountedPage>();
+  private desired = new Map<string, Selection>();
+  private desiredIdentity = "";
+  private pending: PendingBuild | undefined;
+  private failed: Readonly<{ key: string; signature: string; generation: number }> | undefined;
+  private generation = 0;
+  private initialized = false;
   private published = false;
   private disposed = false;
 
@@ -156,10 +215,18 @@ export class BiomeGrassPopulationRuntime {
     this.profile = profile(input);
     this.maxResidentBlades = this.profile.maxResidentBlades;
     this.pages = buildPages(input.placements);
+    const hysteresis = input.lodHysteresis ?? BIOME_GRASS_POPULATION_LOD_HYSTERESIS;
+    if (!Number.isFinite(hysteresis) || hysteresis < 0 || hysteresis > 0.5) {
+      throw new RangeError("biome grass LOD hysteresis must be finite and in [0, 0.5]");
+    }
+    this.hysteresis = hysteresis;
+    this.buildScheduler = input.buildScheduler ?? defaultBuildScheduler;
     this.root.name = `limina:biome-grass-population:${input.role}`;
   }
 
-  initialize(camera: CameraLike): void { this.reconcile(camera); }
+  /** Initial staging is synchronous so publication cannot expose an empty candidate. Subsequent
+   * camera-driven changes are deferred through the bounded scheduler. */
+  initialize(camera: CameraLike): void { this.initializeSelection(this.select(camera)); }
 
   publish(): void {
     if (this.disposed) throw new Error("cannot publish a disposed biome grass population");
@@ -182,15 +249,25 @@ export class BiomeGrassPopulationRuntime {
   get draws(): number { return this.active.size; }
   get bladeCount(): number { let count = 0; for (const mounted of this.active.values()) count += mounted.blades; return count; }
   get lods(): ReadonlySet<GrassFieldLod> { return new Set([...this.active.values()].map((mounted) => mounted.lod)); }
+  get pendingBuilds(): number { return this.pending === undefined ? 0 : 1; }
+  get cachedVisuals(): number { return this.visualCache.size; }
+  get recycledGeometries(): number {
+    let count = 0; for (const resource of this.visualCache.values()) count += resource.recycled.length; return count;
+  }
   takeErrors(): unknown[] { return this.errors.splice(0); }
+  async settle(): Promise<void> {
+    while (this.pending !== undefined) await this.pending.task;
+  }
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.generation++; this.desired.clear(); this.desiredIdentity = ""; this.failed = undefined;
     const errors: unknown[] = [];
     if (this.published) try { this.input.scene.remove?.(this.root); } catch (error) { errors.push(error); }
-    for (const mounted of this.active.values()) try { disposeMesh(mounted.mesh); } catch (error) { errors.push(error); }
+    for (const mounted of this.active.values()) try { disposeMountedPage(mounted); } catch (error) { errors.push(error); }
     this.active.clear(); this.root.clear(); this.published = false;
+    this.clearVisualCache(errors);
     if (errors.length > 0) throw new AggregateError(errors, `biome grass population disposal failed in ${errors.length} operation(s)`);
   }
 
@@ -202,15 +279,22 @@ export class BiomeGrassPopulationRuntime {
     if (!(fineDistance >= 0) || !(cullDistance > fineDistance)) {
       throw new RangeError(`grass visual package '${this.input.visualPackage.id}' has invalid LOD distance coverage`);
     }
+    const fineBand = Math.max(1, fineDistance) * this.hysteresis;
+    const cullBand = Math.max(1, cullDistance) * this.hysteresis;
     const candidates = this.pages.map((page) => ({ page, distance: pageDistance(page, position.x, position.z) }))
-      .filter((entry) => entry.distance <= cullDistance)
+      .filter((entry) => entry.distance <= cullDistance + (this.active.has(entry.page.key) ? cullBand : 0))
       .sort((left, right) => left.distance - right.distance || left.page.pageZ - right.page.pageZ
         || left.page.pageX - right.page.pageX || left.page.key.localeCompare(right.page.key));
     const selected = new Map<string, Selection>();
     let blades = 0, draws = 0;
     for (const candidate of candidates) {
       if (draws >= this.maxResidentDraws || blades >= this.maxResidentBlades) break;
-      const lod: GrassFieldLod = candidate.distance <= fineDistance ? 0 : 1;
+      const previous = this.active.get(candidate.page.key);
+      const lod: GrassFieldLod = previous?.lod === 0
+        ? (candidate.distance <= fineDistance + fineBand ? 0 : 1)
+        : previous?.lod === 1
+        ? (candidate.distance < fineDistance - fineBand ? 0 : 1)
+        : (candidate.distance <= fineDistance ? 0 : 1);
       const bladesPerInstance = this.profile.bladesPerInstance[lod];
       const densityCap = Math.max(1, Math.ceil(candidate.page.ranked.length / this.profile.spacingMultipliers[lod] ** 2));
       const budgetCap = Math.floor((this.maxResidentBlades - blades) / bladesPerInstance);
@@ -224,17 +308,43 @@ export class BiomeGrassPopulationRuntime {
     return selected;
   }
 
+  private cachedVisual(lod: GrassFieldLod): CachedVisual {
+    const prior = this.visualCache.get(lod);
+    if (prior !== undefined) return prior;
+    const bladesPerInstance = this.profile.bladesPerInstance[lod];
+    const context = { quality: this.input.quality, lod,
+      maxBlades: Math.min(this.maxResidentBlades, BIOME_GRASS_POPULATION_MAX_PAGE_INSTANCES * bladesPerInstance),
+      variant: this.input.variant } as const;
+    let geometry: THREE.BufferGeometry | undefined;
+    try {
+      geometry = this.input.visualPackage.createGeometry(context);
+      const material = this.input.visualPackage.createMaterial(context);
+      const resource: CachedVisual = {
+        key: `${this.input.visualPackage.id}@${this.input.visualPackage.version}:${this.input.quality}:${this.input.variant}:lod${lod}`,
+        geometry, material, recycled: [], disposed: false,
+      };
+      this.visualCache.set(lod, resource);
+      return resource;
+    } catch (primary) {
+      if (geometry === undefined) throw primary;
+      try { geometry.dispose(); } catch (rollback) {
+        throw new AggregateError([primary, rollback], "biome grass cached visual construction rollback failed");
+      }
+      throw primary;
+    }
+  }
+
   private build(selection: Selection): MountedPage {
     const bladesPerInstance = this.profile.bladesPerInstance[selection.lod];
-    const context = { quality: this.input.quality, lod: selection.lod,
-      maxBlades: selection.placements.length * bladesPerInstance, featureOrigin: selection.page.origin,
-      variant: this.input.variant } as const;
-    let geometry: THREE.BufferGeometry | undefined, material: THREE.Material | undefined, mesh: THREE.InstancedMesh | undefined;
+    let geometry: THREE.BufferGeometry | undefined, mesh: THREE.InstancedMesh | undefined;
     try {
       const visual = this.profile.lod[selection.lod];
-      geometry = this.input.visualPackage.createGeometry(context);
-      material = this.input.visualPackage.createMaterial(context);
-      mesh = new THREE.InstancedMesh(geometry, material, selection.placements.length);
+      const cached = this.cachedVisual(selection.lod);
+      // aWind is page-local. Cloning the package template preserves isolation while the expensive
+      // package construction and node-material graph remain cached once per package/LOD identity.
+      geometry = cached.recycled.pop() ?? cached.geometry.clone();
+      mesh = new THREE.InstancedMesh(geometry, cached.material, selection.placements.length);
+      mesh.userData.liminaGrassVisualCacheKey = cached.key;
       const wind = new Float32Array(selection.placements.length * 4);
       const matrix = new THREE.Matrix4(), rotation = new THREE.Quaternion(), position = new THREE.Vector3(), scale = new THREE.Vector3();
       const yAxis = new THREE.Vector3(0, 1, 0), scaleMin = this.input.bladeScale[0], scaleSpan = this.input.bladeScale[1] - scaleMin;
@@ -254,48 +364,130 @@ export class BiomeGrassPopulationRuntime {
       mesh.castShadow = false; mesh.receiveShadow = false; mesh.frustumCulled = true; mesh.computeBoundingSphere();
       if (mesh.boundingSphere !== null) mesh.boundingSphere.radius += visual.maxHorizontalDisplacement + visual.footprintRadius;
       return Object.freeze({ signature: selection.signature, lod: selection.lod,
-        blades: selection.placements.length * bladesPerInstance, mesh });
+        blades: selection.placements.length * bladesPerInstance, mesh, visual: cached });
     } catch (primary) {
       const errors: unknown[] = [primary];
       if (mesh !== undefined) try { mesh.dispose(); } catch (error) { errors.push(error); }
-      if (material !== undefined) try { material.dispose(); } catch (error) { errors.push(error); }
-      if (geometry !== undefined) try { geometry.dispose(); } catch (error) { errors.push(error); }
+      if (geometry !== undefined) {
+        const cached = this.visualCache.get(selection.lod);
+        if (cached === undefined) try { geometry.dispose(); } catch (error) { errors.push(error); }
+        else releasePageGeometry(cached, geometry, errors);
+      }
       throw errors.length === 1 ? primary : new AggregateError(errors, "biome grass page build rollback failed");
     }
   }
 
-  private reconcile(camera: CameraLike): void {
-    const selected = this.select(camera), built = new Map<string, MountedPage>();
+  private initializeSelection(selected: Map<string, Selection>): void {
+    if (this.disposed) throw new Error("cannot initialize a disposed biome grass population");
+    if (this.initialized) throw new Error("biome grass population is already initialized");
+    const built = new Map<string, MountedPage>();
     try {
-      for (const [key, selection] of selected) {
-        if (this.active.get(key)?.signature === selection.signature) continue;
-        built.set(key, this.build(selection));
-      }
+      for (const [key, selection] of selected) built.set(key, this.build(selection));
     } catch (primary) {
       const errors: unknown[] = [primary];
-      for (const mounted of built.values()) try { disposeMesh(mounted.mesh); } catch (error) { errors.push(error); }
+      for (const mounted of built.values()) try { disposeMountedPage(mounted); } catch (error) { errors.push(error); }
+      this.clearVisualCache(errors);
       throw errors.length === 1 ? primary : new AggregateError(errors, "biome grass population build rollback failed");
     }
-
-    const removed = [...this.active.entries()].filter(([key, mounted]) => selected.get(key)?.signature !== mounted.signature);
     const added: MountedPage[] = [];
     try {
       for (const mounted of built.values()) { this.root.add(mounted.mesh); added.push(mounted); }
-      for (const [, mounted] of removed) this.root.remove(mounted.mesh);
     } catch (primary) {
       const errors: unknown[] = [primary];
-      for (const [, mounted] of removed) try { this.root.add(mounted.mesh); } catch (error) { errors.push(error); }
       for (const mounted of added) try { this.root.remove(mounted.mesh); } catch (error) { errors.push(error); }
-      for (const mounted of built.values()) try { disposeMesh(mounted.mesh); } catch (error) { errors.push(error); }
+      for (const mounted of built.values()) try { disposeMountedPage(mounted); } catch (error) { errors.push(error); }
+      this.clearVisualCache(errors);
       throw errors.length === 1 ? primary : new AggregateError(errors, "biome grass population publication rollback failed");
     }
+    this.active = built;
+    this.desired = selected;
+    this.desiredIdentity = this.selectionIdentity(selected);
+    this.initialized = true;
+  }
 
-    const next = new Map<string, MountedPage>();
-    for (const [key, selection] of selected) next.set(key, built.get(key) ?? this.active.get(key)!);
-    this.active = next;
-    const disposalErrors: unknown[] = [];
-    for (const [, mounted] of removed) try { disposeMesh(mounted.mesh); } catch (error) { disposalErrors.push(error); }
-    if (disposalErrors.length > 0) throw new AggregateError(disposalErrors, `biome grass replacement disposal failed in ${disposalErrors.length} operation(s)`);
+  private reconcile(camera: CameraLike): void {
+    const selected = this.select(camera);
+    const identity = this.selectionIdentity(selected);
+    if (identity !== this.desiredIdentity) {
+      this.generation++;
+      this.desiredIdentity = identity;
+      this.failed = undefined;
+    }
+    this.desired = selected;
+    for (const [key, mounted] of [...this.active]) {
+      if (selected.has(key)) continue;
+      this.root.remove(mounted.mesh);
+      this.active.delete(key);
+      try { disposeMountedPage(mounted); } catch (error) { this.report(error); }
+    }
+    this.launchNext();
+  }
+
+  private selectionIdentity(selected: ReadonlyMap<string, Selection>): string {
+    return [...selected].map(([key, selection]) => `${key}=${selection.signature}`).join("|");
+  }
+
+  private launchNext(): void {
+    if (this.disposed || this.pending !== undefined) return;
+    const candidate = [...this.desired].find(([key, selection]) => {
+      if (this.active.get(key)?.signature === selection.signature) return false;
+      return this.failed?.generation !== this.generation || this.failed.key !== key || this.failed.signature !== selection.signature;
+    });
+    if (candidate === undefined) return;
+    const [key, selection] = candidate, generation = this.generation;
+    let scheduled: Promise<MountedPage | undefined>;
+    try {
+      scheduled = this.buildScheduler(() => {
+        if (this.disposed || generation !== this.generation || this.desired.get(key)?.signature !== selection.signature) return undefined;
+        return this.build(selection);
+      });
+    } catch (error) {
+      this.failed = Object.freeze({ key, signature: selection.signature, generation });
+      this.report(error); return;
+    }
+    const task = scheduled.then((mounted) => {
+      if (mounted === undefined) return;
+      if (this.disposed || generation !== this.generation || this.desired.get(key)?.signature !== selection.signature) {
+        try { disposeMountedPage(mounted); } catch (error) { this.report(error); }
+        return;
+      }
+      if (!this.commitCandidate(key, mounted) && generation === this.generation) {
+        this.failed = Object.freeze({ key, signature: selection.signature, generation });
+      }
+    }).catch((error) => {
+      if (generation === this.generation) this.failed = Object.freeze({ key, signature: selection.signature, generation });
+      this.report(error);
+    }).finally(() => {
+      if (this.pending?.generation === generation && this.pending.key === key) this.pending = undefined;
+      this.launchNext();
+    });
+    this.pending = Object.freeze({ key, signature: selection.signature, generation, task });
+  }
+
+  private commitCandidate(key: string, mounted: MountedPage): boolean {
+    const previous = this.active.get(key);
+    let added = false, removed = false;
+    try {
+      this.root.add(mounted.mesh); added = true;
+      if (previous !== undefined) { this.root.remove(previous.mesh); removed = true; }
+    } catch (primary) {
+      const errors: unknown[] = [primary];
+      if (removed && previous !== undefined) try { this.root.add(previous.mesh); } catch (error) { errors.push(error); }
+      if (added) try { this.root.remove(mounted.mesh); } catch (error) { errors.push(error); }
+      try { disposeMountedPage(mounted); } catch (error) { errors.push(error); }
+      this.report(errors.length === 1 ? primary : new AggregateError(errors, "biome grass population publication rollback failed"));
+      return false;
+    }
+    this.active.set(key, mounted);
+    if (previous !== undefined) try { disposeMountedPage(previous); } catch (error) { this.report(error); }
+    return true;
+  }
+
+  private clearVisualCache(errors: unknown[]): void {
+    for (const resource of this.visualCache.values()) {
+      try { disposeCachedVisual(resource); } catch (error) { errors.push(error); }
+    }
+    this.visualCache.clear();
   }
 
   private report(error: unknown): void {

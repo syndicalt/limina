@@ -1,4 +1,7 @@
 import { parseFunctionalBuildingCatalog } from "../assets/functional-building-catalog.mjs";
+import { assertApprovedFunctionalBuildingPublication } from "../assets/functional-building-publication.mjs";
+import { assertApprovedFunctionalSettlementRelease } from "../assets/functional-settlement-release.mjs";
+import { assertApprovedFunctionalSettlementFurnishingAuthority } from "../assets/functional-settlement-furnishing.mjs";
 import { resolveFunctionalSettlementAtlas } from "../assets/functional-settlement-atlas.mjs";
 import { canonicalCompilerJson } from "../world/compiler/canonical.mjs";
 import { sha256 } from "../world/sha256.mjs";
@@ -12,6 +15,10 @@ import {
   FunctionalSettlementPlacementManager,
   type FunctionalSettlementBuildingHandle,
 } from "./functional-settlement.ts";
+import {
+  FunctionalSettlementFurnishingRuntime,
+  type FunctionalSettlementFurnishingRuntimeOptions,
+} from "./functional-settlement-furnishing-runtime.ts";
 
 export interface FunctionalSettlementResidentBuilding {
   readonly unitId: string;
@@ -32,6 +39,32 @@ export interface FunctionalSettlementRuntimeResidencyInput {
   readonly maxActiveUnits: number;
   readonly maxResidentBytes: number;
   readonly invokeBase: () => InvokeBase;
+  /** Optional exact sidecar lifecycle; production callers use the furnishing-closed constructor. */
+  readonly furnishingLifecycle?: Pick<FunctionalSettlementFurnishingRuntime, "furnish" | "ownerDestroyed">;
+}
+
+export interface ApprovedFunctionalSettlementRuntimeResidencyInput
+  extends Omit<FunctionalSettlementRuntimeResidencyInput, "catalog"> {
+  /** In-process result of exact review-ledger verification and catalog derivation. */
+  readonly publication: unknown;
+}
+
+export interface ReleasedFunctionalSettlementRuntimeResidencyInput {
+  readonly namespace: string;
+  /** In-process result of exact publication/plan/WorldMap/site/release verification. */
+  readonly release: unknown;
+  readonly invokeBase: () => InvokeBase;
+}
+
+export interface FurnishedReleasedFunctionalSettlementRuntimeResidencyInput extends ReleasedFunctionalSettlementRuntimeResidencyInput {
+  /** In-process result of exact furnishing-sidecar verification against this same release. */
+  readonly furnishingAuthority: unknown;
+  readonly beforeFurnitureInstancePlacement?: FunctionalSettlementFurnishingRuntimeOptions["beforeInstancePlacement"];
+}
+
+export interface FurnishedReleasedFunctionalSettlementRuntimeResidency {
+  readonly residency: FunctionalSettlementResidencyManager<FunctionalSettlementResidentBuilding>;
+  readonly furnishing: FunctionalSettlementFurnishingRuntime;
 }
 
 function settlementId(namespace: string, planId: string, unitId: string): string {
@@ -69,11 +102,22 @@ export function createFunctionalSettlementRuntimeResidency(
     const handle = placementManager.get(id);
     if (handle === undefined || handle.buildings.length !== 1 || handle.buildings[0]!.placementId !== placementId)
       throw new Error(`functional settlement residency: placement manager returned partial ownership for '${unitId}'`);
+    if (input.furnishingLifecycle !== undefined) {
+      try { await input.furnishingLifecycle.furnish(handle.buildings[0]!); }
+      catch (error) {
+        const failures: unknown[] = [error];
+        try { result(await invoke("settlement.destroyFunctional", { settlementId: id }), `cleanup unfurnished '${unitId}'`); }
+        catch (failure) { failures.push(failure); }
+        if (failures.length > 1) throw new AggregateError(failures, `functional settlement residency: furnishing and building cleanup failed for '${unitId}'`);
+        throw error;
+      }
+    }
     return { unitId, placementId, settlementId: id, building: handle.buildings[0]! };
   };
   const destroyOne = async (resource: FunctionalSettlementResidentBuilding): Promise<void> => {
     const output = result(await invoke("settlement.destroyFunctional", { settlementId: resource.settlementId }), `unload '${resource.unitId}'`);
     if (output.buildingsRemoved !== 1) throw new Error(`functional settlement residency: unload '${resource.unitId}' did not destroy exactly one whole building`);
+    input.furnishingLifecycle?.ownerDestroyed(resource.placementId);
   };
 
   const stageTransition: FunctionalSettlementResidencyOptions<FunctionalSettlementResidentBuilding>["stageTransition"] = async (delta) => {
@@ -129,4 +173,85 @@ export function createFunctionalSettlementRuntimeResidency(
     },
     stageTransition,
   });
+}
+
+/**
+ * Production FB-5 entry point. It admits only the catalog derived from an exact HITL-approved
+ * functional-building publication; forged/deserialized lookalikes and catalog substitution fail
+ * before Atlas resolution, asset reads, or runtime mutation. The unprefixed constructor above is
+ * retained as the lower-level mechanical adapter used by isolated engine tests.
+ */
+export function createApprovedFunctionalSettlementRuntimeResidency(
+  registry: SkillRegistry,
+  placementManager: FunctionalSettlementPlacementManager,
+  input: ApprovedFunctionalSettlementRuntimeResidencyInput,
+): FunctionalSettlementResidencyManager<FunctionalSettlementResidentBuilding> {
+  const publication = assertApprovedFunctionalBuildingPublication(input.publication);
+  return createFunctionalSettlementRuntimeResidency(registry, placementManager, {
+    namespace: input.namespace,
+    catalog: publication.catalog,
+    plan: input.plan,
+    worldMap: input.worldMap,
+    connectorToleranceM: input.connectorToleranceM,
+    loadDistance: input.loadDistance,
+    keepDistance: input.keepDistance,
+    maxActiveUnits: input.maxActiveUnits,
+    maxResidentBytes: input.maxResidentBytes,
+    furnishingLifecycle: input.furnishingLifecycle,
+    invokeBase: input.invokeBase,
+  });
+}
+
+/**
+ * Fully closed FB-5 production entry point. Unlike the publication-only adapter, callers cannot
+ * substitute plan, Atlas, site, terrain, or residency limits after release verification.
+ */
+export function createReleasedFunctionalSettlementRuntimeResidency(
+  registry: SkillRegistry,
+  placementManager: FunctionalSettlementPlacementManager,
+  input: ReleasedFunctionalSettlementRuntimeResidencyInput,
+): FunctionalSettlementResidencyManager<FunctionalSettlementResidentBuilding> {
+  const loaded: any = assertApprovedFunctionalSettlementRelease(input.release);
+  return createApprovedFunctionalSettlementRuntimeResidency(registry, placementManager, {
+    namespace: input.namespace,
+    publication: loaded.publication,
+    plan: loaded.plan,
+    worldMap: loaded.worldMap,
+    connectorToleranceM: 0,
+    loadDistance: loaded.runtime.loadDistance,
+    keepDistance: loaded.runtime.keepDistance,
+    maxActiveUnits: loaded.runtime.maxActiveUnits,
+    maxResidentBytes: loaded.runtime.maxResidentBytes,
+    invokeBase: input.invokeBase,
+  });
+}
+
+/** Exact release + exact dormant furnishing sidecar production boundary (zero meshes/colliders). */
+export function createFurnishedReleasedFunctionalSettlementRuntimeResidency(
+  registry: SkillRegistry,
+  placementManager: FunctionalSettlementPlacementManager,
+  input: FurnishedReleasedFunctionalSettlementRuntimeResidencyInput,
+): FurnishedReleasedFunctionalSettlementRuntimeResidency {
+  const loaded: any = assertApprovedFunctionalSettlementRelease(input.release);
+  const authority: any = assertApprovedFunctionalSettlementFurnishingAuthority(input.furnishingAuthority);
+  if (authority.release !== loaded) throw new Error("functional settlement furnishing: authority was not verified against this exact in-process release");
+  const furnishing = new FunctionalSettlementFurnishingRuntime(registry, {
+    authority,
+    invokeBase: input.invokeBase,
+    beforeInstancePlacement: input.beforeFurnitureInstancePlacement,
+  });
+  const residency = createFunctionalSettlementRuntimeResidency(registry, placementManager, {
+    namespace: input.namespace,
+    catalog: loaded.publication.catalog,
+    plan: loaded.plan,
+    worldMap: loaded.worldMap,
+    connectorToleranceM: 0,
+    loadDistance: loaded.runtime.loadDistance,
+    keepDistance: loaded.runtime.keepDistance,
+    maxActiveUnits: loaded.runtime.maxActiveUnits,
+    maxResidentBytes: loaded.runtime.maxResidentBytes,
+    invokeBase: input.invokeBase,
+    furnishingLifecycle: furnishing,
+  });
+  return Object.freeze({ residency, furnishing });
 }

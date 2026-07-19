@@ -1,6 +1,7 @@
 import { SimWorkerController, type AuthorCommand } from "../src/browser/sim-worker.ts";
 import {
   SIM_STATUS_BYTES,
+  SIM_STATUS_DROPPED_STEPS_INDEX,
   SIM_STATUS_FLAG_IN_WATER,
   SIM_STATUS_FLAG_SUBMERGED,
   SIM_STATUS_FLAG_SWIMMING,
@@ -47,10 +48,11 @@ function installContact(controller: SimWorkerController, contact: CharacterWater
   };
 }
 
-assert(SIM_STATUS_LAYOUT_VERSION === 1, "unexpected status layout version");
-assert(SIM_STATUS_INTS === 4 && SIM_STATUS_BYTES === 16, "status layout is not the compatible 16-byte buffer");
+assert(SIM_STATUS_LAYOUT_VERSION === 2, "unexpected status layout version");
+assert(SIM_STATUS_INTS === 5 && SIM_STATUS_BYTES === 20, "status layout is not the additive 20-byte buffer");
 assert(SIM_STATUS_TICK_INDEX === 0 && SIM_STATUS_FLAGS_INDEX === 1 && SIM_STATUS_PLAYER_EID_INDEX === 2 && SIM_STATUS_GENERATION_INDEX === 3,
-  "status slot assignments changed");
+  "legacy status slot assignments changed");
+assert(SIM_STATUS_DROPPED_STEPS_INDEX === 4, "dropped-step telemetry is not in the additive slot");
 assert(SIM_STATUS_FLAG_IN_WATER === 1 && SIM_STATUS_FLAG_SWIMMING === 2 && SIM_STATUS_FLAG_SUBMERGED === 4,
   "water flag bit assignments changed");
 
@@ -64,7 +66,7 @@ assert(SIM_STATUS_FLAG_IN_WATER === 1 && SIM_STATUS_FLAG_SWIMMING === 2 && SIM_S
   assert(initial !== null && initial.tick === 0 && initial.playerEid === -1 && initial.flags === 0 && initial.generation === 0,
     "initial status was not no-player/tick-zero");
   assert(Object.isFrozen(initial), "reader snapshot is mutable");
-  const scratch = { tick: -1, flags: -1, playerEid: -1, generation: -1, inWater: false, swimming: false, submerged: false };
+  const scratch = { tick: -1, flags: -1, playerEid: -1, droppedSteps: -1, generation: -1, inWater: false, swimming: false, submerged: false };
   assert(readSimStatusInto(view, scratch) && scratch.tick === 0 && scratch.playerEid === -1,
     "allocation-free reader did not populate its caller-owned target");
 
@@ -83,9 +85,9 @@ assert(SIM_STATUS_FLAG_IN_WATER === 1 && SIM_STATUS_FLAG_SWIMMING === 2 && SIM_S
 
   for (let tick = 1; tick <= 5_000; tick++) {
     const flags = tick % 3 === 0 ? SIM_STATUS_FLAG_IN_WATER | SIM_STATUS_FLAG_SWIMMING : 0;
-    writeSimStatus(view, { tick, flags, playerEid: tick % 11 });
+    writeSimStatus(view, { tick, flags, playerEid: tick % 11, droppedSteps: tick % 13 });
     const snapshot = readSimStatus(view, 2);
-    assert(snapshot !== null && snapshot.tick === tick && snapshot.flags === flags && snapshot.playerEid === tick % 11,
+    assert(snapshot !== null && snapshot.tick === tick && snapshot.flags === flags && snapshot.playerEid === tick % 11 && snapshot.droppedSteps === tick % 13,
       `coherent read failed at torture tick ${tick}`);
     assert((snapshot.generation & 1) === 0, `reader returned odd generation ${snapshot.generation}`);
   }
@@ -107,9 +109,11 @@ assert(SIM_STATUS_FLAG_IN_WATER === 1 && SIM_STATUS_FLAG_SWIMMING === 2 && SIM_S
   const controller = await create();
   const before = read(controller);
   assert(before !== null && before.tick === 0 && before.playerEid === -1 && before.flags === 0, "pre-tick no-player status invalid");
+  controller.recordDroppedSteps(7);
   controller.tick();
   const after = read(controller);
-  assert(after !== null && after.tick === 1 && after.playerEid === -1 && after.flags === 0, "completed no-player tick did not clear status");
+  assert(after !== null && after.tick === 1 && after.playerEid === -1 && after.flags === 0 && after.droppedSteps === 7,
+    "completed no-player tick did not publish dropped-step telemetry");
   const legacyTickView = new Int32Array(controller.buffers.status, 0, 1);
   assert(Atomics.load(legacyTickView, 0) === 1 && controller.ticks === 1, "legacy slot-0 tick reader changed");
   controller.dispose();
@@ -203,4 +207,4 @@ assert(SIM_STATUS_FLAG_IN_WATER === 1 && SIM_STATUS_FLAG_SWIMMING === 2 && SIM_S
   b.dispose();
 }
 
-console.log("p_swim_worker OK: 16-byte v1 status layout; bounded seqlock; legacy tick slot; water modes; post-sync tick coherence; deterministic live-player selection/despawn; isolated worker buffers.");
+console.log("p_swim_worker OK: additive 20-byte v2 status layout; bounded seqlock; legacy tick slots; dropped-step telemetry; water modes; post-sync tick coherence; deterministic live-player selection/despawn; isolated worker buffers.");

@@ -1,11 +1,13 @@
 import { canonicalStringify } from "../authoring/canonical.ts";
 import { sha256 } from "../world/sha256.mjs";
-import { buildingProgramHash, parseBuildingProgram, type BuildingProgramObjective, type BuildingProgramV1 } from "./building-program.ts";
+import { buildingProgramHash, buildingProgramV2Hash, parseBuildingProgram, parseBuildingProgramV2, type BuildingProgramObjective, type BuildingProgramV1, type BuildingProgramV2 } from "./building-program.ts";
 import { compileArchitecture } from "./compiler.ts";
 import type { ArchitectureSpec, BuildingVolumeSpec, CompiledArchitecture, FunctionalArchitectureSpecV2, InteriorPartitionSpec, V2, V3, VolumeOpeningSpec } from "./schema.ts";
 
 export const TIMBER_HALL_HOUSE_RULEBOOK_V1 = "limina.architecture-rulebook/timber-hall-house/v1" as const;
+export const TIMBER_HALL_HOUSE_RULEBOOK_V2 = "limina.architecture-rulebook/timber-hall-house/v2" as const;
 export const BUILDING_SYNTHESIS_MANIFEST_V1 = "limina.building-synthesis-manifest/v1" as const;
+export const BUILDING_SYNTHESIS_MANIFEST_V2 = "limina.building-synthesis-manifest/v2" as const;
 
 const RULEBOOK = Object.freeze({
   schema: TIMBER_HALL_HOUSE_RULEBOOK_V1,
@@ -20,6 +22,17 @@ const RULEBOOK = Object.freeze({
 
 const hash = (value: unknown): `sha256:${string}` => `sha256:${sha256(canonicalStringify(value))}`;
 export const TIMBER_HALL_HOUSE_RULEBOOK_V1_HASH = hash(RULEBOOK);
+const RULEBOOK_V2 = Object.freeze({
+  ...RULEBOOK,
+  schema: TIMBER_HALL_HOUSE_RULEBOOK_V2,
+  articulation: Object.freeze({
+    dormer: "one-front-gable-attic-articulation-with-own-opening",
+    entrance: "compiler-owned-supported-weather-canopy",
+    chimney: Object.freeze({ assembly: "distinct-host-plane-with-curb-flashing-cricket-cap", minimumRidgeProjectionM: 1.5 }),
+    proxy: "three-view-cpu-before-native-capture",
+  }),
+});
+export const TIMBER_HALL_HOUSE_RULEBOOK_V2_HASH = hash(RULEBOOK_V2);
 
 type StairPlacement = "left-wall" | "right-wall" | "center";
 type StairDirection = "front-to-rear" | "rear-to-front";
@@ -388,4 +401,150 @@ export function synthesizeTimberHallHouse(programInput: unknown): BuildingProgra
   }
   const candidates = accepted.sort(compareScores).slice(0, 3).map((candidate, index) => Object.freeze({ ...candidate, rank: index + 1 }));
   return Object.freeze({ schema: "limina.building-program-synthesis-result/v1", programHash, rulebookHash: TIMBER_HALL_HOUSE_RULEBOOK_V1_HASH, evaluatedDecisionCount: allDecisions.length, acceptedDecisionCount: accepted.length, candidates: Object.freeze(candidates), rejections: Object.freeze(rejections) });
+}
+
+type BuildingProgramObjectiveV2 = BuildingProgramV2["objectives"][number];
+export interface SynthesisScoreEntryV2 {
+  readonly criterion: BuildingProgramObjectiveV2;
+  readonly value: number;
+  readonly unit: SynthesisScoreEntry["unit"];
+}
+export interface SynthesisBindingManifestV2 {
+  readonly schema: typeof BUILDING_SYNTHESIS_MANIFEST_V2;
+  readonly programHash: `sha256:${string}`;
+  readonly visualFloorHash: `sha256:${string}`;
+  readonly rulebookId: typeof TIMBER_HALL_HOUSE_RULEBOOK_V2;
+  readonly rulebookHash: `sha256:${string}`;
+  readonly decisionId: string;
+  readonly decisionHash: `sha256:${string}`;
+  readonly architectureSpecHash: string;
+  readonly architectureIrHash: string;
+  readonly compiledArticulation: {
+    readonly dormerId: string;
+    readonly dormerWindowId: string;
+    readonly entranceCanopyId: string;
+    readonly roofPenetrationId: string;
+    readonly distinctRoofPlanes: true;
+    readonly secondarySilhouetteElements: 3;
+    readonly facadeAsymmetry: true;
+  };
+  readonly evidenceRequirements: { readonly cpuProxy: { readonly required: true; readonly views: readonly ["front-elevation", "front-three-quarter", "roof-junctions"] } };
+  readonly perceptualRequirements: readonly [{ readonly id: "timber-frame-expression"; readonly verification: "perceptual-only" }];
+}
+export interface SynthesizedArchitectureCandidateV2 {
+  readonly rank: number;
+  readonly decision: TimberHallHouseDecisionV1;
+  readonly score: readonly SynthesisScoreEntryV2[];
+  readonly spec: ArchitectureSpec;
+  readonly compiled: CompiledArchitecture;
+  readonly manifest: SynthesisBindingManifestV2;
+}
+export interface BuildingProgramSynthesisResultV2 {
+  readonly schema: "limina.building-program-synthesis-result/v2";
+  readonly programHash: `sha256:${string}`;
+  readonly rulebookHash: `sha256:${string}`;
+  readonly evaluatedDecisionCount: number;
+  readonly acceptedDecisionCount: number;
+  readonly candidates: readonly SynthesizedArchitectureCandidateV2[];
+  readonly rejections: readonly SynthesisRejection[];
+}
+
+function realizeV2Articulation(program: BuildingProgramV2, base: ArchitectureSpec): ArchitectureSpec {
+  const spec = structuredClone(base) as ArchitectureSpec;
+  const sourceOpenings = (spec.volumes ?? []).flatMap((item) => item.openings ?? []).filter((opening) =>
+    opening.kind === "window" && opening.edgeIndex === 0 && opening.sillY > program.envelope.groundClearHeightM.minimum);
+  if (!sourceOpenings.length) throw new RulebookRejection("DORMER_BAY_SOURCE_MISSING", "front dormer requires an occupied upper-window rhythm for rulebook bay selection");
+  const fireplace = spec.fireplaces?.find((item) => item.id === "fireplace/hall");
+  const roof = spec.roofSystems?.find((item) => item.id === "roof/main");
+  const entrance = spec.entrances.find((item) => item.id === "entrance/main");
+  const entryOpening = (spec.volumes ?? []).flatMap((item) => item.openings ?? []).find((opening) => opening.id === entrance?.openingId);
+  if (!fireplace || !roof || !entrance || !entryOpening) throw new RulebookRejection("V2_BASE_AUTHORITY_MISSING", "v2 articulation requires the compiler-owned hearth, roof, and primary entrance");
+  const selected = [...sourceOpenings].sort((a,b) => Math.abs(b.offset-fireplace.center[0])-Math.abs(a.offset-fireplace.center[0]) || a.id.localeCompare(b.id))[0];
+  const volume = (spec.volumes ?? []).find((item) => item.openings?.some((opening) => opening.id === selected.id));
+  if (!volume) throw new RulebookRejection("DORMER_BAY_SOURCE_MISSING", "dormer bay reference escaped its structural volume");
+  const halfDepth = (Math.max(...volume.footprint.map((point) => point[1]))-Math.min(...volume.footprint.map((point) => point[1])))/2,
+    slopeLength = halfDepth / Math.cos(roof.pitchDegrees*Math.PI/180), ridgeY = volume.eaveY + halfDepth*Math.tan(roof.pitchDegrees*Math.PI/180),
+    far = slopeLength*.78, near = slopeLength*.43, hostFrontY = ridgeY-far*Math.sin(roof.pitchDegrees*Math.PI/180),
+    wallBaseY = hostFrontY+.06, dormerEaveY = Math.min(ridgeY-.72,wallBaseY+1.52), windowSillY = wallBaseY+.42,
+    windowHeight = Math.min(selected.height,dormerEaveY-windowSillY-.08), dormerWidth = Math.max(1.55,selected.width+.5);
+  const canopyWidth = Math.max(2.3,entrance.width+.7), canopyProjection = Math.max(1.85,entryOpening.width+.5,entrance.landingDepth+.65),
+    wallPlateY = entryOpening.sillY+entryOpening.height+.9;
+  const dormer = {
+    id:"dormer/front",hostPlaneId:"roof/main/south",alongCenter:selected.offset,width:dormerWidth,downslopeRange:[near,far] as const,
+    wallBaseY,eaveY:dormerEaveY,roofPitchDegrees:35,roofThickness:.14,wallThickness:Math.min(.28,volume.wallThickness),eaveOverhang:.2,rakeOverhang:.2,
+    curbHeight:.16,flashingWidth:.22,flashingThickness:.025,windowId:"window/attic-dormer/0",windowWidth:Math.min(1.05,selected.width),windowHeight,windowSillY,
+    hostConnection:"intersecting-gable" as const,roofWallConnection:"soffit-bearing" as const,
+  };
+  const penetration = {
+    id:"chimney/hall",fireplaceId:fireplace.id,roofPlaneId:fireplace.roofPlaneId,center:[fireplace.center[0],fireplace.center[2]] as const,
+    shaftSize:[1.05,.92] as const,shaftBottomY:Math.max(2.4,fireplace.center[1]+fireplace.apertureHalfExtents[1]+.25),topY:Math.max(fireplace.chimneyTopY,ridgeY+RULEBOOK_V2.articulation.chimney.minimumRidgeProjectionM),
+    clearance:.04,minimumRoofProjection:.9,curbWidth:.12,curbHeight:.18,flashingWidth:.22,apronDepth:.3,backpanDepth:.3,flashingThickness:.025,
+    capOverhang:.115,capThickness:.22,cricketDepth:.42,cricketRise:.18,alignmentPolicy:"fireplace-centerline" as const,
+  };
+  const fireplaces=(spec.fireplaces??[]).map((item)=>item.id===fireplace.id?{...item,chimneyTopY:penetration.topY,fireboxPolicy:"rear-soot-lining" as const}:item);
+  return {
+    ...spec,
+    fireplaces,
+    dormers:[dormer],roofPenetrations:[penetration],
+    entranceCanopies:[{id:"canopy/primary",entranceId:entrance.id,width:canopyWidth,projection:canopyProjection,wallPlateY,pitchDegrees:18,
+      roofThickness:.14,postSize:.16,footingDepth:.18,lateralClearance:.18,flashingWidth:.18,flashingThickness:.025,counterflashingUpstand:.12}],
+  };
+}
+
+function assertV2Articulation(program:BuildingProgramV2,spec:ArchitectureSpec,compiled:CompiledArchitecture):SynthesisBindingManifestV2["compiledArticulation"] {
+  const dormerSpec=spec.dormers?.[0],dormer=compiled.dormers[0],canopy=compiled.entranceCanopies?.[0],penetration=compiled.roofPenetrations[0],
+    penetrationSpec=spec.roofPenetrations?.[0],fireplaceSpec=spec.fireplaces?.find((item)=>item.id===penetrationSpec?.fireplaceId);
+  if(spec.dormers?.length!==1||compiled.dormers.length!==1||!dormerSpec||!dormer)throw new RulebookRejection("V2_DORMER_COUNT","v2 must compile exactly one front dormer");
+  if(dormer.hostPlaneId!=="roof/main/south"||dormer.hostConnection!=="intersecting-gable"||dormer.roofWallConnection!=="soffit-bearing")
+    throw new RulebookRejection("V2_DORMER_CONNECTION","front dormer must resolve its south host, valleys, and soffit-bearing roof-wall connection");
+  if(spec.entranceCanopies?.length!==1||compiled.entranceCanopies?.length!==1||!canopy||canopy.posts.length!==2||canopy.footings.length!==2)
+    throw new RulebookRejection("V2_COVERED_ENTRY","v2 must compile exactly one supported primary entrance canopy");
+  const canopyRoles=new Map(compiled.primitives.filter((item)=>item.id.includes("entrance-canopy")).map((item)=>[item.id,item.materialRole]));
+  if(canopyRoles.get(canopy.roof.id)!=="roof"||canopyRoles.get(canopy.flashing.id)!=="roof-flashing"||canopyRoles.get(canopy.counterflashing.id)!=="roof-flashing"||
+    canopy.footings.some((item)=>canopyRoles.get(item.id)!=="foundation")||compiled.functionalContract?.colliders.filter((item)=>canopy.posts.some((post)=>item.id===`collider/${post.id}`)).length!==2)
+    throw new RulebookRejection("V2_CANOPY_CONSTRUCTION","covered entry lacks weather-layer, bearing, material, or functional-collider closure");
+  if(spec.roofPenetrations?.length!==1||compiled.roofPenetrations.length!==1||!penetration||penetration.roofPlaneId===dormer.hostPlaneId)
+    throw new RulebookRejection("V2_DISTINCT_CHIMNEY_BAY","v2 chimney must compile through a roof plane distinct from the dormer");
+  if(!penetrationSpec||!fireplaceSpec||penetrationSpec.alignmentPolicy!=="fireplace-centerline"||Math.abs(penetrationSpec.center[0]-fireplaceSpec.center[0])>.001||Math.abs(penetrationSpec.center[1]-fireplaceSpec.center[2])>.001||
+    penetration.shaft.length!==4||penetration.curb.length!==4||penetration.flashing.length!==4||penetration.counterflashing.length!==4||penetration.cricket.length!==2||penetration.cap.length!==4||penetration.flueLiner.length!==4)
+    throw new RulebookRejection("V2_CHIMNEY_CONSTRUCTION","chimney requires one centerline shaft with complete curb, flashing, cricket, cap, and liner inventories");
+  const functional=spec.functional;
+  let hearthRoom:FunctionalArchitectureSpecV2["rooms"][number]|undefined;
+  if(functional&&"schema" in functional&&functional.schema==="limina.functional-architecture/v2")
+    hearthRoom=functional.rooms.find((room)=>room.id===`room/${program.articulation.chimney.fireplaceSpaceId}`);
+  if(!hearthRoom||fireplaceSpec.supportY!==hearthRoom.finishedFloorY||Math.abs(fireplaceSpec.center[0]-hearthRoom.bounds.center[0])>hearthRoom.bounds.halfExtents[0]||Math.abs(fireplaceSpec.center[2]-hearthRoom.bounds.center[2])>hearthRoom.bounds.halfExtents[2])
+    throw new RulebookRejection("V2_HEARTH_ROOM_BEARING","fireplace must bear on and remain inside its selected ground room");
+  for(const space of program.spaces.filter((item)=>item.storey==="upper"&&item.daylight.exteriorWindows==="required"))
+    if(compiled.windows.filter((window)=>window.openingId.startsWith(`window/${space.id}/`)).length!==space.daylight.minimumWindowCount)
+      throw new RulebookRejection("V2_UPPER_DAYLIGHT_DRIFT","attic articulation must not consume or impersonate habitable upper windows");
+  if(dormer.windowId!=="window/attic-dormer/0")throw new RulebookRejection("V2_DORMER_ROLE_DRIFT","dormer window must remain explicit non-habitable attic articulation");
+  const entryOffset=(spec.volumes??[]).flatMap((item)=>item.openings??[]).find((opening)=>opening.id==="opening/entry")?.offset??0;
+  if(Math.abs(dormerSpec.alongCenter)<.2&&Math.abs(entryOffset)<.2||Math.abs(dormerSpec.alongCenter+entryOffset)<.05)
+    throw new RulebookRejection("V2_FACADE_SYMMETRY","v2 front articulation must remain measurably asymmetric");
+  return Object.freeze({dormerId:dormer.id,dormerWindowId:dormer.windowId,entranceCanopyId:canopy.id,roofPenetrationId:penetration.id,
+    distinctRoofPlanes:true,secondarySilhouetteElements:3,facadeAsymmetry:true});
+}
+
+/** Additive V2 rulebook. V1 parsing, decisions, manifests, hashes, and output objects are untouched. */
+export function synthesizeTimberHallHouseV2(programInput:unknown):BuildingProgramSynthesisResultV2{
+  const program=parseBuildingProgramV2(programInput),programHash=buildingProgramV2Hash(program),allDecisions=decisions(),accepted:Omit<SynthesizedArchitectureCandidateV2,"rank">[]=[],rejections:SynthesisRejection[]=[];
+  const common=program as unknown as BuildingProgramV1;
+  try{assertEnvelopeAreaFeasible(common);}catch(error){if(!(error instanceof RulebookRejection))throw error;return Object.freeze({schema:"limina.building-program-synthesis-result/v2",programHash,rulebookHash:TIMBER_HALL_HOUSE_RULEBOOK_V2_HASH,evaluatedDecisionCount:allDecisions.length,acceptedDecisionCount:0,candidates:Object.freeze([]),rejections:Object.freeze(allDecisions.map(decision=>({decisionId:decision.id,stage:"rulebook" as const,code:error.code,message:error.message})))});}
+  for(const decision of allDecisions)try{
+    const base=makeSpec(common,programHash,decision),spec=realizeV2Articulation(program,base.spec),compiled=compileArchitecture(spec);
+    assertDaylightFulfilled(common,compiled);const compiledArticulation=assertV2Articulation(program,spec,compiled);
+    const metrics:Record<BuildingProgramObjectiveV2,number>={
+      "circulation-efficiency":base.metrics["circulation-efficiency"],daylight:base.metrics.daylight,"usable-area":base.metrics["usable-area"],
+      "construction-expression":-4,"facade-rhythm":base.metrics["facade-rhythm"],"roof-simplicity":base.metrics["roof-simplicity"],"silhouette-articulation":-3,
+    },units:Record<BuildingProgramObjectiveV2,SynthesisScoreEntryV2["unit"]>={
+      "circulation-efficiency":"millimetres",daylight:"count-negated","usable-area":"parts-per-million","construction-expression":"count-negated",
+      "facade-rhythm":"millimetres","roof-simplicity":"millidegrees","silhouette-articulation":"count-negated",
+    },score=program.objectives.map(criterion=>({criterion,value:metrics[criterion],unit:units[criterion]}));
+    accepted.push({decision,score,spec,compiled,manifest:{schema:BUILDING_SYNTHESIS_MANIFEST_V2,programHash,visualFloorHash:program.budgets.visualFloorHash,
+      rulebookId:TIMBER_HALL_HOUSE_RULEBOOK_V2,rulebookHash:TIMBER_HALL_HOUSE_RULEBOOK_V2_HASH,decisionId:decision.id,decisionHash:hash(decision),
+      architectureSpecHash:compiled.specHash,architectureIrHash:compiled.irHash,compiledArticulation,
+      evidenceRequirements:{cpuProxy:{required:true,views:["front-elevation","front-three-quarter","roof-junctions"]}},perceptualRequirements:[{id:"timber-frame-expression",verification:"perceptual-only"}]}});
+  }catch(error){const rulebook=error instanceof RulebookRejection;rejections.push({decisionId:decision.id,stage:rulebook?"rulebook":"architecture-compiler",code:rulebook?error.code:"ARCHITECTURE_COMPILE_FAILED",message:error instanceof Error?error.message:String(error)});}
+  const candidates=accepted.sort((a,b)=>{for(let i=0;i<a.score.length;i++){const difference=a.score[i].value-b.score[i].value;if(difference)return difference;}return a.decision.id.localeCompare(b.decision.id);}).slice(0,3).map((candidate,index)=>Object.freeze({...candidate,rank:index+1}));
+  return Object.freeze({schema:"limina.building-program-synthesis-result/v2",programHash,rulebookHash:TIMBER_HALL_HOUSE_RULEBOOK_V2_HASH,evaluatedDecisionCount:allDecisions.length,acceptedDecisionCount:accepted.length,candidates:Object.freeze(candidates),rejections:Object.freeze(rejections)});
 }
