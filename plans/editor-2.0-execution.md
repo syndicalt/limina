@@ -25,7 +25,7 @@ NO HACK · NO TECH DEBT · NO REWARD HACKING. Enforced by review, not trust:
 
 ### Phase 0 — Stabilize (foundation; the editor must survive real use)
 - **0.1 Base checkpoint** — DONE (orchestrator). Committed `06a90f6` + pushed: baselined the 176-file uncommitted 2.0 program so it's backed up and codex builds on a clean, compiling base. Removed stale `sim-worker.ts}`.
-- **Slice 1 — durable trace stops tracing read-only polls** — IN PROGRESS (codex). Root fix for the 195 MB-trace boot-OOM that killed UAT. Durable trace = authoring audit; read-effect skill executions → in-memory ring only, decided from `skillEffect` (same authority the recorder uses). Falsifiable gate `p_trace_reads_not_durable`.
+- **Slice 1 — durable trace stops tracing read-only polls** — DONE (codex + review), committed 3c30a50. Root fix for the 195 MB-trace boot-OOM that killed UAT. Durable trace = authoring audit; read-effect skill executions → in-memory ring only, decided from `skillEffect` (same authority the recorder uses). Falsifiable gate `p_trace_reads_not_durable`.
 - **Slice 2 — bounded boot-replay for pre-existing large traces** — QUEUED (integrity-sensitive; orchestrator specs carefully). Boot must not replay the whole durable file from offset 0; read only the tail needed for the ring + hash-chain continuation, without weakening `TraceIntegrityError`.
 
 ### Phase 1 — World-class editor foundations (highest feel-per-effort; code-verified gaps)
