@@ -27,6 +27,12 @@ export interface EngineEvent {
 
 export type EmitInput = Omit<EngineEvent, "id" | "timestamp" | "integrity">;
 
+/** Controls the append-backed streaming boundary. Batch/export tracers retain
+ * every event; callers may keep an observation ring-only in a live stream. */
+export interface EmitOptions {
+  durable?: boolean;
+}
+
 export interface InspectorSnapshot {
   threadId: string;
   eventCount: number;
@@ -109,7 +115,7 @@ export interface TraceWorkMetrics {
 }
 
 export interface Tracer {
-  emit(e: EmitInput): string;
+  emit(e: EmitInput, options?: EmitOptions): string;
   trace(actorId: string, sinceTick?: number): EngineEvent[];
   exportJsonl(): string;
   inspect(): InspectorSnapshot;
@@ -422,14 +428,14 @@ export class LiminaTracer implements Tracer {
     return this;
   }
 
-  emit(e: EmitInput): string {
+  emit(e: EmitInput, options: EmitOptions = {}): string {
     if (this.appendTraceName !== undefined) this.syncAppendTrace();
     const seq = this.seq;
     const timestamp = new Date().toISOString();
     const body = stableStringify({ seq, type: e.type, actorId: e.actorId, payload: e.payload });
     const id = `evt_${e.actorId}_${String(seq).padStart(12, "0")}_${fnv1a16(body)}`;
     const event = { id, timestamp, ...e };
-    if (this.appendTraceName !== undefined) {
+    if (this.appendTraceName !== undefined && options.durable !== false) {
       const state = this.requireAppendState();
       if (state.partialFinalLine.length > 0) {
         throw new TraceIntegrityError(

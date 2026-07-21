@@ -67,6 +67,7 @@ QUICK_DETERMINISM_GLOBS=(js/test/p4_*.ts
   js/test/p_engine_op_composition.ts
   js/test/p8_browser_trace_segments.ts
   js/test/p_studio_trace_append_replay.ts
+  js/test/p_trace_reads_not_durable.ts
   js/test/p_studio_recorder_seam.ts
   js/test/p_studio_approval_replay.ts
   js/test/p_fb5_functional_settlement_furnishing.ts

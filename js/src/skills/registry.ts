@@ -7,7 +7,7 @@ import { z } from "../../build/zod.bundle.mjs";
 import type { World } from "bitecs";
 import type { CameraLike, EngineOps, EntityTable, SceneLike } from "../engine.ts";
 import type { TransformStorage } from "../ecs/facade.ts";
-import type { Tracer } from "../observability/event.ts";
+import type { EmitOptions, Tracer } from "../observability/event.ts";
 import type { MCPErrorCode, MCPResponse, MCPTool } from "../mcp/protocol.ts";
 import type { UniformGridSpatialIndex } from "../spatial/index.ts";
 import type { SeededRng } from "../worldlog/log.ts";
@@ -139,7 +139,7 @@ export interface ExecutionContext {
    *  diverge on replay. The unwind emits `skill.rollback.stepsDuringChain` when
    *  this window was observed, so the boundary is loud, never silent. */
   undo(label: string, fn: () => void): void;
-  emit(type: string, payload: unknown, causedBy?: string[]): string;
+  emit(type: string, payload: unknown, causedBy?: string[], options?: EmitOptions): string;
 }
 
 /** Per-invocation inputs the caller supplies; the registry builds `emit`. */
@@ -725,7 +725,7 @@ export class SkillRegistry {
         }
         frame.ledger.push({ label, fn });
       },
-      emit: (type, payload, causedBy) => {
+      emit: (type, payload, causedBy, options) => {
         const id = this.tracer.emit({
           type,
           actorId: base.agentId,
@@ -733,7 +733,7 @@ export class SkillRegistry {
           parentEventId: null,
           causedBy: causedBy ?? [],
           payload,
-        });
+        }, options);
         emitted.push(id);
         return id;
       },
@@ -802,7 +802,12 @@ export class SkillRegistry {
           };
         }
       }
-      ctx.emit("skill.executed", { skill: skill.name, version: skill.version, input, tick: stampTick(applyTick, base.tick) }, execCausedBy);
+      ctx.emit(
+        "skill.executed",
+        { skill: skill.name, version: skill.version, input, tick: stampTick(applyTick, base.tick) },
+        execCausedBy,
+        { durable: skillEffect(skill) !== "read" },
+      );
       return { success: true, result: normalizedResult, metadata: meta() };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
