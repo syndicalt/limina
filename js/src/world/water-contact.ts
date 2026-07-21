@@ -53,6 +53,16 @@ export interface WaterContactSample {
 
 export type TerrainHeightSampler = (worldX: number, worldZ: number) => number;
 
+/** Binding-id prefix for DERIVED SELF-BINDINGS: the placeholder the sim's derived stage path
+ *  installs when generated water arrives with NO authored worldlog map binding. Its identity is
+ *  computed from the water artifact's own verified hydrology-field binding, and it ALWAYS yields
+ *  to a later authored verified binding (see prepareVerifiedMap). */
+export const DERIVED_SELF_BINDING_ID_PREFIX = "derived:self:";
+
+export function isDerivedSelfBindingId(bindingId: string): boolean {
+  return bindingId.startsWith(DERIVED_SELF_BINDING_ID_PREFIX);
+}
+
 interface ActiveBinding extends PreparedWaterContactBinding {
   field: WaterFieldLike;
   worldMap: WorldMap;
@@ -152,10 +162,16 @@ export class WaterContactRuntime {
     const candidate = Object.freeze({ contentHash, generatedArtifactContentHash, identity, bindingId: spec.bindingId, offset, bounds });
 
     if (this.#active !== null && this.#active.bindingId !== candidate.bindingId) {
-      throw new Error(
-        `water contact binding conflict: '${this.#active.bindingId}'/${this.#active.contentHash} is active; `
-        + `cannot bind '${candidate.bindingId}'/${candidate.contentHash}`,
-      );
+      // A derived self-binding is a placeholder for absent authored identity, never a conflict
+      // owner: an authored verified binding arriving later PREEMPTS it. The sim's derived
+      // stage/commit flow re-binds generated water against the authored map on its next revision.
+      if (isDerivedSelfBindingId(this.#active.bindingId)) this.#active = null;
+      else {
+        throw new Error(
+          `water contact binding conflict: '${this.#active.bindingId}'/${this.#active.contentHash} is active; `
+          + `cannot bind '${candidate.bindingId}'/${candidate.contentHash}`,
+        );
+      }
     }
     if (this.#active !== null && this.#active.contentHash !== candidate.contentHash) {
       throw new Error(`water contact map conflict: '${this.#active.contentHash}' is active; cannot replace it with '${candidate.contentHash}'`);

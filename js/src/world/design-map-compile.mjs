@@ -39,7 +39,7 @@ import {
 const DEFAULT_UNITS = { kind: "m", unitsPerMeter: 1, origin: [0, 0] };
 // The biome raster's cell vocabulary: cell = index + 1, 0 = unpainted. MUST MATCH BIOME_KINDS
 // in js/src/world/worldmap.ts (this pure .mjs can't import the .ts — the mapstudio gate asserts
-// the two stay identical) and the frontend palette in tools/design/frontend/map-paint.js.
+// the two stay identical) and the native Atlas palette in editor/src/atlas/atlas-doc.js.
 export const BIOME_CLASSES = ["grass", "forest", "mountain", "desert", "tundra", "swamp", "water", "blight"];
 // River width scales with the zone span (clamped): a fixed 3m channel is narrower than one
 // rasterizer cell on a km-scale map — it aliases away entirely and the drawn river never renders.

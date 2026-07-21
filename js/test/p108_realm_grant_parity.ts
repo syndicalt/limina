@@ -16,6 +16,13 @@
 // today); anything else is drift and FAILS here.
 //
 // PROOF SHAPE:
+//   0. DERIVATION PIN — sim-worker.ts's exported DEFAULT_GRANTS is the LITERAL the
+//      worker realm boots with; this leg asserts it still EQUALS realmDefaultGrants()
+//      (the shared single-source function browser-entry.ts's runLive now also calls).
+//      This is the leg that ACTUALLY FAILS on the shipped regression — a hand-typed
+//      DEFAULT_GRANTS diverges from the shared derivation here. Legs 1–2 below are
+//      then guaranteed equal BY CONSTRUCTION (both sides trace to one function); they
+//      remain as invokability-parity documentation, not as the load-bearing assertion.
 //   1. PARITY — symmetric difference between the worker's DEFAULT_GRANTS and
 //      the render realm's default (resolveProfile(REALM_DEFAULT_PROFILE)) is a
 //      subset of the documented allowlist.
@@ -32,10 +39,16 @@
 //      comparator; a synthetic removal fails it; a bogus permission name fails
 //      leg 4's comparator.
 //
+// HONEST BOUNDARY: the render realm (browser-entry.ts runLive) cannot be imported
+// into a headless gate without its WebGPU stack, so leg 1 re-derives the render side
+// from REALM_DEFAULT_PROFILE. The genuine cross-realm pin is therefore leg 0 (the
+// worker literal vs the shared function) PLUS browser-entry.ts routing its default
+// through that same realmDefaultGrants() function — verified there by construction.
+//
 // Run: LIMINA_AUDIO=null ./target/release/limina js/test/p108_realm_grant_parity.ts
 
 import { DEFAULT_GRANTS } from "../src/browser/sim-worker.ts";
-import { REALM_DEFAULT_PROFILE, REALM_GRANT_ALLOWED_ASYMMETRY, resolveProfile } from "../src/skills/permissions.ts";
+import { REALM_DEFAULT_PROFILE, REALM_GRANT_ALLOWED_ASYMMETRY, realmDefaultGrants, resolveProfile } from "../src/skills/permissions.ts";
 import { SkillRegistry } from "../src/skills/registry.ts";
 import { registerCoreSkills } from "../src/skills/index.ts";
 import { LiminaTracer } from "../src/observability/event.ts";
@@ -63,6 +76,18 @@ function undocumentedAsymmetries(a: ReadonlySet<string>, b: ReadonlySet<string>,
 function unknownGrants(grants: ReadonlySet<string>, universe: ReadonlySet<string>): string[] {
   return [...grants].filter((g) => !universe.has(g)).sort();
 }
+
+// ═════════ Leg 0 — derivation pin (the leg that catches the shipped regression) ═════════
+// The worker's EXPORTED literal must still be the shared derivation. A hand-typed
+// DEFAULT_GRANTS (the exact bug in the header) diverges here, in seconds, headless.
+const sharedDerivation = realmDefaultGrants();
+const derivationDrift = [
+  ...[...DEFAULT_GRANTS].filter((g) => !sharedDerivation.has(g)).map((g) => `worker-only: ${g}`),
+  ...[...sharedDerivation].filter((g) => !DEFAULT_GRANTS.has(g)).map((g) => `derivation-only: ${g}`),
+].sort();
+assert(derivationDrift.length === 0,
+  "sim-worker.ts DEFAULT_GRANTS has been hand-edited away from realmDefaultGrants() — the two realms will fork on replay:\n  " +
+  derivationDrift.join("\n  "));
 
 // ═════════ Leg 1 — realm parity ═════════
 

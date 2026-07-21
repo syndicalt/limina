@@ -5,6 +5,10 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  defaultEditorCapabilityPath,
+  readEditorCapability,
+} from "../bridge/editor-client.mjs";
 import { compileDesignMap } from "../../js/src/world/design-map-compile.mjs";
 import { parseAtlasDesignRef } from "../../js/src/world/design-ref.mjs";
 import {
@@ -239,7 +243,12 @@ async function main() {
     if (existsSync(join(candidate, "maps.json"))) vault = candidate;
   }
   if (!vault || !existsSync(join(vault, "maps.json"))) throw new Error("design vault not found; pass its directory or run from a project with design/maps.json");
-  if (!token) throw new Error("need LIMINA_EDITOR_TOKEN (or pass the token as an argument)");
+  // Token resolution order: LIMINA_EDITOR_TOKEN, positional arg, then the
+  // launcher's private capability file (LIMINA_EDITOR_CAPABILITY overrides its path).
+  if (!token) {
+    const capability = readEditorCapability(process.env.LIMINA_EDITOR_CAPABILITY ?? defaultEditorCapabilityPath());
+    token = capability.token;
+  }
   const projectConfig = loadBuildProjectConfig(vault);
   vault = projectConfig.vaultDir;
   const compiled = compileProjectMap(vault, process.env.LIMINA_MAP_ID, projectConfig.projectRoot);

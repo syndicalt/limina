@@ -611,3 +611,34 @@ test("close timeout forcibly terminates an unresponsive worker", async () => {
   assert.equal(state.worker.terminated, 1);
   assert.equal(state.statuses.at(-1).phase, "closed");
 });
+
+test("fetch progress forwards the exact loading-screen contract and rejects out-of-contract counts", async () => {
+  const state = harness();
+  state.client.start(discovery(), { residency: residency() });
+  ready(state, "watch");
+  const progress = (fetched, total, extra = {}) => state.worker.emit({
+    schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "fetch-progress", fetched, total, ...extra,
+  });
+  progress(0, 3);
+  progress(1, 3);
+  progress(3, 3);
+  const events = state.statuses.filter(({ phase }) => phase === "fetch");
+  assert.deepEqual(events, [
+    { phase: "fetch", fetched: 0, total: 3 },
+    { phase: "fetch", fetched: 1, total: 3 },
+    { phase: "fetch", fetched: 3, total: 3 },
+  ]);
+  assert.equal(events.every(Object.isFrozen), true);
+  progress(4, 3);
+  await tick();
+  assert.equal(state.client.phase, "closing", "fetched exceeding total was not a fatal protocol violation");
+  const beforeError = state.statuses.filter(({ phase }) => phase === "fetch").length;
+  assert.equal(beforeError, 3, "out-of-contract progress leaked into the loading screen");
+
+  const malformed = harness();
+  malformed.client.start(discovery(), { residency: residency() });
+  ready(malformed, "watch");
+  malformed.worker.emit({ schema: DERIVED_RUNTIME_WORKER_SCHEMA, type: "fetch-progress", fetched: 1, total: 2, manifest: {} });
+  await tick();
+  assert.equal(malformed.client.phase, "closing", "an extra progress field was not a fatal protocol violation");
+});

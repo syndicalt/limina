@@ -44,11 +44,3 @@ test("zone size derives from the paintable rect so the 2x scale contract always 
   const map = { rasters: { landmass: { rect: { w: 2731, h: 977 } } } };
   assert.ok(zoneSizeMFromMap(map) * 2 >= 2731, "derived size must always admit the full rect");
 });
-
-test("the New-document dialog offers exactly the templated kinds", () => {
-  const appJs = readFileSync(join(__dirname, "frontend/app.js"), "utf8");
-  const m = appJs.match(/const kinds=\[([^\]]+)\]/);
-  assert.ok(m, "newDocDialog kinds list not found in frontend/app.js");
-  const uiKinds = m[1].split(",").map((s) => s.trim().replace(/^"|"$/g, ""));
-  assert.deepEqual(uiKinds, [...DOC_KINDS], "frontend kind list and doc-templates DOC_KINDS drifted");
-});

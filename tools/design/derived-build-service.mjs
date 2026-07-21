@@ -26,7 +26,9 @@ import {
 import { EditorBridgeClient, editorClientConfigFromEnvironment } from "../bridge/editor-client.mjs";
 import { loadProjectConfig } from "../project-config.mjs";
 import { ProjectAssetStore } from "../project-asset-store.mjs";
-import { parseTerrainEditLayer } from "../../js/src/terrain/edit-layer.mjs";
+import { parseTerrainEditLayer, rebaseTerrainEditLayersToBase } from "../../js/src/terrain/edit-layer.mjs";
+import { parseTerrainPaintLayer, rebaseTerrainPaintLayersToBase } from "../../js/src/terrain/paint-layer.mjs";
+import { terrainEditBaseTopologyForWorldMap } from "../../js/src/terrain/edit-topology.mjs";
 import { canonicalMapDocText } from "../../js/src/world/mapdoc-canonical.mjs";
 import { persistMapDocSource, validateAuthoringProjectStateCommit } from "./atlas-source-bridge.mjs";
 import { compileWorldTerrainInWorker } from "./world-compiler-worker.mjs";
@@ -1027,22 +1029,68 @@ export class DerivedBuildService {
         `terrain compilation supports at most ${MAX_COMPILED_EDIT_LAYERS} edit layers per revision`,
       );
     }
-    const terrainEditLayers = [];
-    const terrainEditLayerRefs = [];
+    const readLayers = [];
     for (let index = 0; index < authority.projectState.refs.terrainEditLayers.length; index++) {
-      const ref = authority.projectState.refs.terrainEditLayers[index];
-      terrainEditLayers.push(this.#assetStore.readCanonicalJson({ assetId: ref.assetId, hash: ref.hash }, {
-        maximumBytes: MAX_SOURCE_BYTES,
-        contentHashOf: (value) => parseTerrainEditLayer(value).contentHash,
-      }));
-      terrainEditLayerRefs.push({
-        refId: `terrain-edit-layer-${String(index).padStart(3, "0")}`,
-        refType: "terrain-edit-layer/v1",
-        scope: "chunk",
-        assetId: ref.assetId,
-        contentHash: ref.hash,
-      });
+      const read = await this.#readTerrainEditLayer(authority.projectState.refs.terrainEditLayers[index], index);
+      readLayers.push({ ...read, ref: authority.projectState.refs.terrainEditLayers[index] });
     }
+    // D5.3: height and paint layers share refs.terrainEditLayers but compile through
+    // separate stacks; each kind keeps its authority order (composition order).
+    const heightEntries = readLayers.filter((entry) => !entry.paint);
+    const paintEntries = readLayers.filter((entry) => entry.paint);
+    const terrainEditLayers = heightEntries.map((entry) => entry.layer);
+    const terrainPaintLayers = paintEntries.map((entry) => entry.layer);
+    let compiledEditLayers = terrainEditLayers;
+    let compiledPaintLayers = terrainPaintLayers;
+    if (terrainEditLayers.length > 0 || terrainPaintLayers.length > 0) {
+      // TOPOLOGY-CHANGE REBASE (D5.1): a map change that keeps the grid geometry moves
+      // the compile domain; layers bound to the old base rebase exactly onto the new
+      // one. Conflicts are surfaced structured in the build log and FAIL the build —
+      // a layer is never silently dropped. The compiler keeps its own mismatch check,
+      // so an unrebasable layer can never reach composition either way.
+      const expectedBase = terrainEditBaseTopologyForWorldMap(prepared.compiledMap.worldMap, {
+        gridId: prepared.compiler.config.gridId,
+      });
+      const rebased = rebaseTerrainEditLayersToBase(terrainEditLayers, expectedBase, {
+        shouldCancel: () => request.signal.aborted,
+      });
+      const rebasedPaint = rebaseTerrainPaintLayersToBase(terrainPaintLayers, expectedBase, {
+        shouldCancel: () => request.signal.aborted,
+      });
+      if (!rebased.ok || !rebasedPaint.ok) {
+        const failures = [...(rebased.ok ? [] : rebased.failures), ...(rebasedPaint.ok ? [] : rebasedPaint.failures)];
+        const detail = failures.map((failure) =>
+          `${failure.layerId}: ${failure.conflicts.map((conflict) => conflict.code).join(", ")}`
+        ).join("; ");
+        this.#logger.error?.(`[derived-build] terrain edit layer rebase conflicts at revision ${request.revision}: ${detail}`);
+        throw new DerivedBuildServiceError(
+          "TERRAIN_EDIT_REBASE_CONFLICT",
+          `terrain edit layers cannot rebase onto base topology ${expectedBase.topologyHash}: ${detail}`,
+        );
+      }
+      for (const report of [...rebased.reports, ...rebasedPaint.reports]) {
+        this.#logger.info?.(
+          `[derived-build] rebased terrain edit layer '${report.layerId}' onto base topology ${report.report.toTopologyHash} ` +
+          `(${report.report.mappedDeltaCount}/${report.report.deltaCount} deltas)`,
+        );
+      }
+      compiledEditLayers = rebased.layers;
+      compiledPaintLayers = rebasedPaint.layers;
+    }
+    const terrainEditLayerRefs = compiledEditLayers.map((layer, index) => ({
+      refId: `terrain-edit-layer-${String(index).padStart(3, "0")}`,
+      refType: "terrain-edit-layer/v1",
+      scope: "chunk",
+      assetId: heightEntries[index].ref.assetId,
+      contentHash: layer.contentHash,
+    }));
+    const terrainPaintLayerRefs = compiledPaintLayers.map((layer, index) => ({
+      refId: `terrain-paint-layer-${String(index).padStart(3, "0")}`,
+      refType: "terrain-paint-layer/v1",
+      scope: "chunk",
+      assetId: paintEntries[index].ref.assetId,
+      contentHash: layer.contentHash,
+    }));
 
     const previous = this.#previous?.snapshot && this.#previous?.manifest ? this.#previous : undefined;
     const prior = previous !== undefined && sameCompilerIdentity(previous.manifest.compiler, prepared.compiler.identity)
@@ -1066,8 +1114,10 @@ export class DerivedBuildService {
           contentHash: mapRef.hash,
         },
       },
-      terrainEditLayers,
+      terrainEditLayers: compiledEditLayers,
       terrainEditLayerRefs,
+      terrainPaintLayers: compiledPaintLayers,
+      terrainPaintLayerRefs,
       compiler: { version: prepared.compiler.version, config: prepared.compiler.config },
       ...(prepared.biomePublication === undefined ? {} : { biomePublication: prepared.biomePublication.input }),
       previousSnapshot: prior?.snapshot ?? null,
@@ -1096,6 +1146,52 @@ export class DerivedBuildService {
       artifacts: compilerArtifacts(output.artifacts),
       reusedArtifacts: output.reusedArtifacts,
     });
+  }
+
+    /** Resolve one committed edit layer's content: the authority's live store first
+     *  (terrain.deform commits have no fs bytes — the worldlog is their persistence),
+     *  the hash-verifying project asset store as the fallback for externally
+     *  committed layers. `not_found` is the ONLY fallthrough: transport or authority
+     *  failures must never masquerade as a content miss. */
+  async #readTerrainEditLayer(ref, index) {
+    const label = `authority terrain edit layer ${index}`;
+    let content;
+    try {
+      const result = await this.#authoringClient.callTool("authoring.terrainEditLayer", { assetId: ref.assetId, hash: ref.hash }, { retryTransport: true });
+      content = result?.layer;
+    } catch (error) {
+      const code = error?.data?.error?.code ?? error?.code;
+      if (code !== "not_found") throw error;
+    }
+    if (content === undefined) {
+      // D5.3: paint layers ride the SAME refs.terrainEditLayers array, distinguished by
+      // content schema — a paint ref is a not_found in the height store, so try the
+      // paint store before falling back to fs-backed content.
+      try {
+        const result = await this.#authoringClient.callTool("authoring.terrainPaintLayer", { assetId: ref.assetId, hash: ref.hash }, { retryTransport: true });
+        content = result?.layer;
+      } catch (error) {
+        const code = error?.data?.error?.code ?? error?.code;
+        if (code !== "not_found") throw error;
+      }
+    }
+    if (content === undefined) {
+      content = this.#assetStore.readCanonicalJson({ assetId: ref.assetId, hash: ref.hash }, {
+        maximumBytes: MAX_SOURCE_BYTES,
+        contentHashOf: (value) => value?.schema === "limina.terrain-paint-layer/v1"
+          ? parseTerrainPaintLayer(value).contentHash
+          : parseTerrainEditLayer(value).contentHash,
+      });
+    }
+    const paint = content?.schema === "limina.terrain-paint-layer/v1";
+    let layer;
+    try { layer = paint ? parseTerrainPaintLayer(content) : parseTerrainEditLayer(content); } catch (error) {
+      throw new DerivedBuildServiceError("INVALID_AUTHORITY", `${label} content is not a canonical terrain edit layer`, { cause: error });
+    }
+    if (layer.contentHash !== ref.hash || layer.layerId !== ref.layerId || layer.baseTopology.topologyHash !== ref.baseTopologyHash) {
+      throw new DerivedBuildServiceError("INVALID_AUTHORITY", `${label} content does not match its authoritative ref`);
+    }
+    return { paint, layer };
   }
 
   async #ensurePrevious() {

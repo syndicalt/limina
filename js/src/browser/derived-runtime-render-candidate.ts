@@ -18,7 +18,8 @@ import {
 import { TERRAIN_PAINT_ALBEDO_HEX } from "../terrain/material-palette.ts";
 import { tileKey } from "../terrain/stream.ts";
 import type { TerrainTile } from "../terrain/types.ts";
-import { selectDerivedTerrainChunks } from "./derived-terrain-residency.ts";
+import { derivedTerrainResidencyKey, selectDerivedTerrainChunks } from "./derived-terrain-residency.ts";
+import { SURFACE_COMPOSITE_ARTIFACT_TYPE } from "../world/compiler/surface-composite-artifact.mjs";
 export { DerivedLod0TerrainIndex } from "./derived-terrain-index.ts";
 import { searchNavigationIndexPrefix } from "../world/compiler/navigation-index-artifact.mjs";
 import { encodeBiomeFieldArtifact } from "../world/compiler/biome-field-artifact.mjs";
@@ -31,6 +32,7 @@ import {
   MAX_DETACHED_DERIVED_TERRAIN_MESHES,
   assertVerifiedTransferredDerivedSnapshot,
   type DetachedDerivedPopulationPlan,
+  type ParsedDerivedManifest,
   type ParsedTransferredDerivedSnapshot,
   type ParsedTransferredSurfaceComposite,
   type VerifiedBiomeContentBundle,
@@ -443,6 +445,63 @@ type DeferredTerrainStage = Readonly<{
   surfaceFrame: ReturnType<typeof terrainWindowSurfaceFrame>;
 }>;
 
+/** One fully built but UNATTACHED chunk mount (content-delta mount phase output).
+ *  Built detached so a cancelled/failed delta never touches the live window; the
+ *  commit swaps it under terrainRoot in place of the same key's prior mount. */
+interface DetachedChunkBuild {
+  readonly entry: DetachedDerivedTerrainWindowEntry;
+  readonly mesh: THREE.Mesh;
+  readonly surfaceMount: BiomeSurfaceMaterialMount | null;
+}
+
+/** The public view of one in-flight content delta: exactly the chunks whose content
+ *  hash moved between two manifests of one window. `replaced` entries are DETACHED
+ *  until commitContentDelta — the live window keeps presenting untouched. */
+export interface DetachedDerivedContentDelta {
+  readonly replaced: readonly DetachedDerivedTerrainWindowEntry[];
+}
+
+/** Candidate-private prepared content-delta state. Every expensive resource (chunk
+ *  meshes, the overview rebuild) is built UNATTACHED in the mount phase; commit only
+ *  swaps pointers, so render and sim cross to the new revision together. */
+interface PreparedContentDelta {
+  readonly newSnapshot: ParsedTransferredDerivedSnapshot;
+  readonly builds: readonly DetachedChunkBuild[];
+  readonly newWindow: readonly DetachedDerivedTerrainWindowEntry[];
+  readonly overview: Readonly<{ mesh: THREE.Mesh; bounds: Readonly<DetachedWorldOverviewBounds> }> | null;
+}
+
+/** Pure content-delta evaluation result: the changed keys plus everything the mount
+ *  phase needs, or a fail-closed reason string (routing maps any reason to full). */
+type ContentDeltaEvaluation = Readonly<{
+  changedKeys: readonly string[];
+  selection: ParsedDerivedManifest["chunks"];
+  nextKeys: readonly string[];
+  surfaceFrame: ReturnType<typeof terrainWindowSurfaceFrame>;
+}> | string;
+
+const TERRAIN_CHUNK_ARTIFACT_TYPE_V1 = "terrain-chunk/v1";
+
+/** The public view of one in-flight incremental residency swap (2.0-B): exactly the
+ *  chunk-set delta a window move mounts/unmounts. `added` entries are ALREADY live in
+ *  `terrainRoot` (mount-then-unmount ordering never opens a hole in the presented
+ *  window); `removed` keys are still mounted until commitResidencyDelta. */
+export interface DetachedDerivedResidencyDelta {
+  readonly added: readonly DetachedDerivedTerrainWindowEntry[];
+  readonly removed: readonly string[];
+}
+
+/** Candidate-private prepared delta state. The detached overview build is the one
+ *  expensive commit-time resource, so beginResidencyDelta builds it UNATTACHED in its
+ *  own slice; commit only swaps pointers (no per-chunk work outside the delta). */
+interface PreparedResidencyDelta {
+  readonly newSnapshot: ParsedTransferredDerivedSnapshot;
+  readonly added: readonly DetachedDerivedTerrainWindowEntry[];
+  readonly removedKeys: readonly string[];
+  readonly newWindow: readonly DetachedDerivedTerrainWindowEntry[];
+  readonly overview: Readonly<{ mesh: THREE.Mesh; bounds: Readonly<DetachedWorldOverviewBounds> }> | null;
+}
+
 // Module-private constructor mode flag: only createWithFrameBudget sets it, around a
 // synchronous `new`, so the public constructor signature (and its option validation)
 // stays closed while the factory defers chunk mounting into budgeted slices.
@@ -454,7 +513,9 @@ let deferTerrainMountForCreate = false;
  *    - `createWithFrameBudget` mounts it in ~8 ms main-thread slices (C2) — the live
  *      viewport path, so a 225-chunk residency window cannot stall the event loop. */
 export class DetachedDerivedRenderCandidate {
-  readonly snapshot: ParsedTransferredDerivedSnapshot;
+  // Mutable behind a getter: an incremental residency swap (2.0-B) adopts the newer
+  // verified snapshot of the SAME manifest instead of rebuilding the candidate.
+  #snapshot: ParsedTransferredDerivedSnapshot;
   readonly root = new THREE.Group();
   readonly terrainRoot = new THREE.Group();
   readonly waterRoot = new THREE.Group();
@@ -470,6 +531,8 @@ export class DetachedDerivedRenderCandidate {
   #overviewBounds: Readonly<DetachedWorldOverviewBounds> | null = null;
   #terrainWindow: readonly DetachedDerivedTerrainWindowEntry[] = Object.freeze([]);
   #pendingStage: DeferredTerrainStage | null = null;
+  #pendingDelta: PreparedResidencyDelta | null = null;
+  #pendingContentDelta: PreparedContentDelta | null = null;
   #populationMount: DetachedDerivedPopulationMount | null = null;
   #populationStage: "available" | "staging" | "staged" | "failed" = "available";
   #presentationStatus: Readonly<DerivedPresentationStatus> = UNSTAGED_POPULATION_STATUS;
@@ -497,7 +560,7 @@ export class DetachedDerivedRenderCandidate {
     if (quality === undefined) throw new TypeError("derived render quality tier is invalid");
     // Verify-before-construct: only derived-runtime-verify mints this input (branded
     // type + runtime WeakSet), so unverified bytes cannot reach mounting.
-    this.snapshot = assertVerifiedTransferredDerivedSnapshot(snapshotInput);
+    this.#snapshot = assertVerifiedTransferredDerivedSnapshot(snapshotInput);
 
     this.root.name = `limina:derived-revision:${this.snapshot.manifestHash}`;
     this.terrainRoot.name = "limina:derived-terrain";
@@ -533,21 +596,56 @@ export class DetachedDerivedRenderCandidate {
     }
   }
 
-  /** Mount ONE resident chunk: geometry, optional surface material, window entry, scene attach. */
+  get snapshot(): ParsedTransferredDerivedSnapshot { return this.#snapshot; }
+
+  /** Build ONE chunk mount (geometry, optional surface material, window entry) WITHOUT
+   *  touching the live maps or terrainRoot. The surface source is explicit so an
+   *  in-flight delta reads the NEWER verified snapshot while the candidate still
+   *  presents (and names) the prior one. */
+  #buildTerrainChunk(
+    chunk: DeferredTerrainStage["stagedTiles"][number]["chunk"],
+    tile: TerrainTile,
+    surfaceFrame: DeferredTerrainStage["surfaceFrame"],
+    snapshot: ParsedTransferredDerivedSnapshot = this.#snapshot,
+  ): DetachedChunkBuild {
+    const mesh = featureLocalTerrainMesh(tile, surfaceFrame);
+    const key = tileKey(chunk.tx, chunk.tz);
+    const surface = snapshot.surfaceAt(chunk.tx, chunk.tz);
+    const surfaceMount = surface === undefined ? null : installBiomeSurfaceMaterial(mesh, surface);
+    return Object.freeze({
+      entry: Object.freeze({ key, tx: chunk.tx, tz: chunk.tz, tile, ...(surface === undefined ? {} : { surface }) }),
+      mesh,
+      surfaceMount,
+    });
+  }
+
+  /** Attach one built chunk to the live maps and terrainRoot. */
+  #attachTerrainChunk(build: DetachedChunkBuild): void {
+    this.#terrainMeshes.set(build.entry.key, build.mesh);
+    if (build.surfaceMount !== null) this.#surfaceMounts.set(build.entry.key, build.surfaceMount);
+    this.terrainRoot.add(build.mesh);
+  }
+
+  /** Dispose one chunk's GPU resources (mesh + surface mount); no map/root touching. */
+  #disposeChunkResources(mesh: THREE.Mesh, surfaceMount: BiomeSurfaceMaterialMount | null): void {
+    if (surfaceMount === null) disposeTerrainMesh(mesh);
+    else {
+      mesh.geometry.dispose();
+      surfaceMount.dispose();
+    }
+  }
+
+  /** Mount ONE resident chunk: build, record the window entry, attach. */
   #mountTerrainChunk(
     chunk: DeferredTerrainStage["stagedTiles"][number]["chunk"],
     tile: TerrainTile,
     surfaceFrame: DeferredTerrainStage["surfaceFrame"],
     terrainWindow: DetachedDerivedTerrainWindowEntry[],
+    snapshot: ParsedTransferredDerivedSnapshot = this.#snapshot,
   ): void {
-    const mesh = featureLocalTerrainMesh(tile, surfaceFrame);
-    const key = tileKey(chunk.tx, chunk.tz);
-    const surface = this.snapshot.surfaceAt(chunk.tx, chunk.tz);
-    const surfaceMount = surface === undefined ? null : installBiomeSurfaceMaterial(mesh, surface);
-    this.#terrainMeshes.set(key, mesh);
-    if (surfaceMount !== null) this.#surfaceMounts.set(key, surfaceMount);
-    terrainWindow.push(Object.freeze({ key, tx: chunk.tx, tz: chunk.tz, tile, ...(surface === undefined ? {} : { surface }) }));
-    this.terrainRoot.add(mesh);
+    const build = this.#buildTerrainChunk(chunk, tile, surfaceFrame, snapshot);
+    this.#attachTerrainChunk(build);
+    terrainWindow.push(build.entry);
   }
 
   /** Overview mount — its 129x129 grid build is the single largest non-chunk step, so
@@ -627,6 +725,427 @@ export class DetachedDerivedRenderCandidate {
   }
 
   get overviewBounds(): Readonly<DetachedWorldOverviewBounds> | null { return this.#overviewBounds; }
+
+  /** Dispose one mounted chunk's mesh (+ surface mount) and detach it from terrainRoot.
+   *  Mirrors the per-chunk block of dispose(); shared by delta rollback and commit. */
+  #unmountTerrainChunk(key: string): void {
+    const mesh = this.#terrainMeshes.get(key);
+    if (mesh === undefined) throw new Error(`derived terrain chunk '${key}' is not mounted`);
+    this.#terrainMeshes.delete(key);
+    this.terrainRoot.remove(mesh);
+    const surfaceMount = this.#surfaceMounts.get(key);
+    this.#surfaceMounts.delete(key);
+    this.#disposeChunkResources(mesh, surfaceMount ?? null);
+  }
+
+  /** Roll back exactly the chunks a delta mounted (its `added` keys), leaving the
+   *  prior window fully live; plus the detached overview build, if any. */
+  #rollbackDeltaMounts(delta: PreparedResidencyDelta): void {
+    const errors: unknown[] = [];
+    for (const entry of delta.added) {
+      try { this.#unmountTerrainChunk(entry.key); } catch (error) { errors.push(error); }
+    }
+    if (delta.overview !== null) {
+      try { delta.overview.mesh.geometry.dispose(); } catch (error) { errors.push(error); }
+      try { (delta.overview.mesh.material as THREE.Material).dispose(); } catch (error) { errors.push(error); }
+    }
+    if (errors.length > 0) throw new AggregateError(errors, "derived residency delta rollback failed");
+  }
+
+  /** Water re-mount against a newer verified snapshot of the SAME window: the artifact
+   *  is identical, but the render resource's terrain sampler is rebuilt per snapshot,
+   *  so presented water depth must re-read the newer heights. A mount failure rolls
+   *  back to the prior water resource before throwing — the candidate never presents
+   *  without its verified water. Shared by the residency and content delta commits. */
+  #swapWaterMount(newSnapshot: ParsedTransferredDerivedSnapshot): void {
+    const priorWaterMount = this.#waterMount;
+    this.#waterMount = null;
+    if (priorWaterMount !== null) priorWaterMount.dispose();
+    if (newSnapshot.generatedWater !== null) {
+      try {
+        this.#waterMount = mountGeneratedWaterResource(newSnapshot.generatedWater.render, this.#waterManager);
+      } catch (error) {
+        try {
+          this.#waterMount = mountGeneratedWaterResource(this.#snapshot.generatedWater!.render, this.#waterManager);
+        } catch (rollbackError) {
+          throw new AggregateError([error, rollbackError], "derived delta water re-mount and rollback both failed");
+        }
+        throw error;
+      }
+    }
+  }
+
+  /** 2.0-B incremental residency swap, commit phase. Synchronous and non-cancellable:
+   *  the caller runs it only after the simulation realm acknowledged the SAME delta,
+   *  so render and sim cross to the new window together. Water re-mounts against the
+   *  new snapshot, the prebuilt overview swaps in, and only the leaving chunks
+   *  unmount. */
+  commitResidencyDelta(delta: DetachedDerivedResidencyDelta): void {
+    if (this.#disposed) throw new Error("detached derived render candidate is disposed");
+    const prepared = this.#pendingDelta;
+    if (prepared === null || prepared.added !== delta.added || prepared.removedKeys !== delta.removed) {
+      throw new Error("derived residency commit does not name the in-flight delta");
+    }
+    this.#pendingDelta = null;
+    this.#swapWaterMount(prepared.newSnapshot);
+    const priorOverview = this.#overviewMesh;
+    this.#overviewMesh = prepared.overview?.mesh ?? null;
+    this.#overviewBounds = prepared.overview?.bounds ?? null;
+    if (prepared.overview !== null) this.overviewRoot.add(prepared.overview.mesh);
+    if (priorOverview !== null) {
+      this.overviewRoot.remove(priorOverview);
+      priorOverview.geometry.dispose();
+      (priorOverview.material as THREE.Material).dispose();
+    }
+    const errors: unknown[] = [];
+    for (const key of prepared.removedKeys) {
+      try { this.#unmountTerrainChunk(key); } catch (error) { errors.push(error); }
+    }
+    this.#terrainWindow = prepared.newWindow;
+    this.#snapshot = prepared.newSnapshot;
+    if (errors.length > 0) throw new AggregateError(errors, "derived residency delta commit failed");
+  }
+
+  /** Abandon an in-flight residency delta: dispose ONLY what beginResidencyDelta
+   *  mounted/built. The prior window keeps presenting untouched. */
+  abortResidencyDelta(delta: DetachedDerivedResidencyDelta): void {
+    const prepared = this.#pendingDelta;
+    if (prepared === null || prepared.added !== delta.added || prepared.removedKeys !== delta.removed) {
+      throw new Error("derived residency abort does not name the in-flight delta");
+    }
+    this.#pendingDelta = null;
+    this.#rollbackDeltaMounts(prepared);
+  }
+
+  /** 2.0-B incremental residency swap, mount phase. `snapshotInput` must be a verified
+   *  snapshot of the SAME manifest with a DIFFERENT residency — anything else is a
+   *  full-activation job and is rejected here (fail-closed routing). Mounts ONLY the
+   *  entering chunks, in the same ~8 ms slices as createWithFrameBudget, and builds the
+   *  replacement overview mesh unattached. The prior window stays live and authoritative
+   *  until commitResidencyDelta; onSlice may throw to cancel, and any failure rolls back
+   *  exactly what this phase mounted. Population-carrying snapshots are excluded by
+   *  routing (their GLTF/texture decode is the full-path presentation gate's reason to
+   *  exist); this method refuses them defensively. */
+  async beginResidencyDelta(
+    snapshotInput: ParsedTransferredDerivedSnapshot,
+    slicing: Readonly<{ frameBudgetMs?: number; onSlice?: () => void }> = {},
+  ): Promise<DetachedDerivedResidencyDelta> {
+    if (this.#disposed) throw new Error("detached derived render candidate is disposed");
+    if (this.#pendingStage !== null) throw new Error("detached derived render candidate is still mounting its initial window");
+    if (this.#pendingDelta !== null) throw new Error("detached derived render candidate already has a residency delta in flight");
+    if (this.#pendingContentDelta !== null) throw new Error("detached derived render candidate already has a content delta in flight");
+    const budgetMs = slicing.frameBudgetMs ?? DERIVED_MOUNT_FRAME_BUDGET_MS;
+    if (typeof budgetMs !== "number" || !Number.isFinite(budgetMs) || budgetMs <= 0) {
+      throw new RangeError("derived mount frameBudgetMs must be a positive finite number of milliseconds");
+    }
+    if (slicing.onSlice !== undefined && typeof slicing.onSlice !== "function") {
+      throw new TypeError("derived mount onSlice must be a function");
+    }
+    const nextSnapshot = assertVerifiedTransferredDerivedSnapshot(snapshotInput);
+    if (nextSnapshot.manifestHash !== this.#snapshot.manifestHash) {
+      throw new Error("derived residency delta requires the active manifest; route a manifest change through full activation");
+    }
+    if (derivedTerrainResidencyKey(nextSnapshot.residency) === derivedTerrainResidencyKey(this.#snapshot.residency)) {
+      throw new Error("derived residency delta requires a changed residency");
+    }
+    if (nextSnapshot.populationPlan !== null) {
+      throw new Error("derived residency delta does not carry biome population; route it through full activation");
+    }
+    const selection = selectDerivedTerrainChunks(nextSnapshot.manifest, nextSnapshot.residency);
+    const retained = new Map(this.#terrainWindow.map((entry) => [entry.key, entry]));
+    const nextKeys = selection.map((chunk) => tileKey(chunk.tx, chunk.tz));
+    const nextKeySet = new Set(nextKeys);
+    const removedKeys = [...this.#terrainMeshes.keys()].filter((key) => !nextKeySet.has(key));
+    const addedChunks = selection.filter((chunk) => !retained.has(tileKey(chunk.tx, chunk.tz)));
+    const surfaceFrame = terrainWindowSurfaceFrame(
+      selection.map((chunk) => nextSnapshot.terrain.tile(chunk.tx, chunk.tz)!),
+      nextSnapshot.generatedWater?.render.field.seaLevelM,
+    );
+    const mounted: DetachedDerivedTerrainWindowEntry[] = [];
+    let overview: PreparedResidencyDelta["overview"] = null;
+    try {
+      const nextSlice = async (): Promise<void> => {
+        await yieldToEventLoop();
+        slicing.onSlice?.();
+        if (this.#disposed) throw new Error("detached derived render candidate was disposed during a residency delta");
+      };
+      // First yield before any mount: same cold-task rationale as createWithFrameBudget.
+      await nextSlice();
+      let sliceStart = mountNow();
+      for (const chunk of addedChunks) {
+        if (mountNow() - sliceStart >= budgetMs) {
+          await nextSlice();
+          sliceStart = mountNow();
+        }
+        const before = mounted.length;
+        this.#mountTerrainChunk(chunk, nextSnapshot.terrain.tile(chunk.tx, chunk.tz)!, surfaceFrame, mounted, nextSnapshot);
+        if (mounted.length !== before + 1) throw new Error("derived residency delta chunk mount did not append its window entry");
+      }
+      // The overview grid rebuild gets its own slice; it stays UNATTACHED until commit.
+      await nextSlice();
+      const merged = new Map([...this.#terrainWindow.map((entry) => [entry.key, entry] as const),
+        ...mounted.map((entry) => [entry.key, entry] as const)]);
+      const newWindow = nextKeys.map((key) => merged.get(key)!);
+      if (nextSnapshot.worldOverview !== null) overview = buildWorldOverviewMesh(nextSnapshot.worldOverview, newWindow);
+      const prepared: PreparedResidencyDelta = Object.freeze({
+        newSnapshot: nextSnapshot,
+        added: Object.freeze(mounted),
+        removedKeys: Object.freeze(removedKeys),
+        newWindow: Object.freeze(newWindow),
+        overview,
+      });
+      this.#pendingDelta = prepared;
+      return Object.freeze({ added: prepared.added, removed: prepared.removedKeys });
+    } catch (error) {
+      // Roll back exactly what this phase mounted; the prior window stays live.
+      try { this.#rollbackDeltaMounts(Object.freeze({ newSnapshot: nextSnapshot, added: Object.freeze(mounted),
+        removedKeys: Object.freeze(removedKeys), newWindow: Object.freeze([]), overview })); }
+      catch { /* preserve the mounting error */ }
+      throw error;
+    }
+  }
+
+  /** Pure content-delta evaluation (sculpt-on-derived). A content delta is eligible iff
+   *  the newer verified snapshot has a CHANGED manifest but an unchanged residency
+   *  window, grid topology, resident chunk key set, generated-water artifact, biome
+   *  population (none on either side), and terrain surface frame — and at least one
+   *  resident chunk's terrain or surface content hash moved. The surface frame check
+   *  is load-bearing: it feeds every chunk material's elevation/sea uniforms, so a
+   *  frame move would leave retained chunks presenting the PRIOR frame, never
+   *  byte-equal to a full activation. Returns the plan or a fail-closed reason. */
+  #evaluateContentDelta(nextSnapshot: ParsedTransferredDerivedSnapshot): ContentDeltaEvaluation {
+    if (nextSnapshot.manifestHash === this.#snapshot.manifestHash) {
+      return "derived content delta requires a changed manifest";
+    }
+    if (derivedTerrainResidencyKey(nextSnapshot.residency) !== derivedTerrainResidencyKey(this.#snapshot.residency)) {
+      return "derived content delta requires the active residency window";
+    }
+    if (nextSnapshot.populationPlan !== null || this.#snapshot.populationPlan !== null) {
+      return "derived content delta does not carry biome population; route it through full activation";
+    }
+    const waterHash = (snapshot: ParsedTransferredDerivedSnapshot): string | null =>
+      snapshot.generatedWater?.artifact.contentHash ?? null;
+    if (waterHash(nextSnapshot) !== waterHash(this.#snapshot)) {
+      return "derived content delta requires an unchanged generated-water artifact";
+    }
+    const priorGrid = this.#snapshot.manifest.grid;
+    const nextGrid = nextSnapshot.manifest.grid;
+    if (priorGrid.schema !== nextGrid.schema || priorGrid.gridId !== nextGrid.gridId
+        || priorGrid.origin[0] !== nextGrid.origin[0] || priorGrid.origin[1] !== nextGrid.origin[1]
+        || priorGrid.chunkSizeM !== nextGrid.chunkSizeM || priorGrid.defaultSamples !== nextGrid.defaultSamples) {
+      return "derived content delta requires an unchanged grid topology";
+    }
+    const contentOf = (chunk: ParsedDerivedManifest["chunks"][number]): Readonly<{
+      chunkHash: string | undefined;
+      surfaceHash: string | null;
+    }> => {
+      let chunkHash: string | undefined;
+      let surfaceHash: string | null = null;
+      for (const artifact of chunk.artifacts) {
+        if (artifact.artifactType === TERRAIN_CHUNK_ARTIFACT_TYPE_V1) chunkHash = artifact.contentHash;
+        else if (artifact.artifactType === SURFACE_COMPOSITE_ARTIFACT_TYPE) surfaceHash = artifact.contentHash;
+      }
+      return Object.freeze({ chunkHash, surfaceHash });
+    };
+    const selection = selectDerivedTerrainChunks(nextSnapshot.manifest, nextSnapshot.residency);
+    const activeChunks = new Map(
+      selectDerivedTerrainChunks(this.#snapshot.manifest, this.#snapshot.residency)
+        .map((chunk) => [tileKey(chunk.tx, chunk.tz), chunk] as const),
+    );
+    if (selection.length !== activeChunks.size) {
+      return "derived content delta requires an unchanged resident chunk key set";
+    }
+    const changedKeys: string[] = [];
+    for (const chunk of selection) {
+      const key = tileKey(chunk.tx, chunk.tz);
+      const prior = activeChunks.get(key);
+      if (prior === undefined) return "derived content delta requires an unchanged resident chunk key set";
+      if (chunk.topologyHash !== prior.topologyHash) {
+        return "derived content delta requires an unchanged grid topology";
+      }
+      const nextContent = contentOf(chunk);
+      if (nextContent.chunkHash === undefined) {
+        return "derived content delta requires a terrain artifact on every resident chunk";
+      }
+      const priorContent = contentOf(prior);
+      if (nextContent.chunkHash !== priorContent.chunkHash || nextContent.surfaceHash !== priorContent.surfaceHash) {
+        changedKeys.push(key);
+      }
+    }
+    if (changedKeys.length === 0) return "derived content delta requires at least one changed chunk";
+    const surfaceFrame = terrainWindowSurfaceFrame(
+      selection.map((chunk) => nextSnapshot.terrain.tile(chunk.tx, chunk.tz)!),
+      nextSnapshot.generatedWater?.render.field.seaLevelM,
+    );
+    const priorFrame = terrainWindowSurfaceFrame(
+      this.#terrainWindow.map((entry) => entry.tile),
+      this.#snapshot.generatedWater?.render.field.seaLevelM,
+    );
+    if (surfaceFrame.seaLevelM !== priorFrame.seaLevelM || surfaceFrame.minY !== priorFrame.minY
+        || surfaceFrame.maxY !== priorFrame.maxY || surfaceFrame.source !== priorFrame.source) {
+      return "derived content delta requires an unchanged terrain surface frame";
+    }
+    return Object.freeze({
+      changedKeys: Object.freeze(changedKeys),
+      selection,
+      nextKeys: Object.freeze(selection.map((chunk) => tileKey(chunk.tx, chunk.tz))),
+      surfaceFrame,
+    });
+  }
+
+  /** Routing seam (sculpt-on-derived): the changed resident chunk keys, or null when
+   *  ANY content-delta invariant fails — the caller routes full. Pure; no mutation. */
+  planContentDelta(snapshotInput: ParsedTransferredDerivedSnapshot): readonly string[] | null {
+    if (this.#disposed || this.#pendingStage !== null) return null;
+    const nextSnapshot = assertVerifiedTransferredDerivedSnapshot(snapshotInput);
+    const evaluation = this.#evaluateContentDelta(nextSnapshot);
+    return typeof evaluation === "string" ? null : evaluation.changedKeys;
+  }
+
+  /** Dispose the detached content-delta builds (abort/rollback and dispose paths). */
+  #rollbackContentBuilds(
+    builds: readonly DetachedChunkBuild[],
+    overview: PreparedContentDelta["overview"],
+  ): void {
+    const errors: unknown[] = [];
+    for (const build of builds) {
+      try { this.#disposeChunkResources(build.mesh, build.surfaceMount); } catch (error) { errors.push(error); }
+    }
+    if (overview !== null) {
+      try { overview.mesh.geometry.dispose(); } catch (error) { errors.push(error); }
+      try { (overview.mesh.material as THREE.Material).dispose(); } catch (error) { errors.push(error); }
+    }
+    if (errors.length > 0) throw new AggregateError(errors, "derived content delta rollback failed");
+  }
+
+  /** Content-delta mount phase (sculpt-on-derived). `snapshotInput` must be a verified
+   *  snapshot eligible under #evaluateContentDelta and `changedKeys` must name EXACTLY
+   *  the evaluated delta — a disagreement fails closed (the caller falls back to a
+   *  full activation). Builds ONLY the changed chunks' replacements, DETACHED, in the
+   *  same ~8 ms slices as createWithFrameBudget, plus the replacement overview mesh
+   *  (its grid read the newer snapshot). The live window stays authoritative until
+   *  commitContentDelta; onSlice may throw to cancel, and any failure rolls back
+   *  exactly what this phase built. */
+  async beginContentDelta(
+    snapshotInput: ParsedTransferredDerivedSnapshot,
+    changedKeys: readonly string[],
+    slicing: Readonly<{ frameBudgetMs?: number; onSlice?: () => void }> = {},
+  ): Promise<DetachedDerivedContentDelta> {
+    if (this.#disposed) throw new Error("detached derived render candidate is disposed");
+    if (this.#pendingStage !== null) throw new Error("detached derived render candidate is still mounting its initial window");
+    if (this.#pendingDelta !== null) throw new Error("detached derived render candidate already has a residency delta in flight");
+    if (this.#pendingContentDelta !== null) throw new Error("detached derived render candidate already has a content delta in flight");
+    const budgetMs = slicing.frameBudgetMs ?? DERIVED_MOUNT_FRAME_BUDGET_MS;
+    if (typeof budgetMs !== "number" || !Number.isFinite(budgetMs) || budgetMs <= 0) {
+      throw new RangeError("derived mount frameBudgetMs must be a positive finite number of milliseconds");
+    }
+    if (slicing.onSlice !== undefined && typeof slicing.onSlice !== "function") {
+      throw new TypeError("derived mount onSlice must be a function");
+    }
+    if (!Array.isArray(changedKeys) || changedKeys.some((key) => typeof key !== "string")) {
+      throw new TypeError("derived content delta changed keys must be chunk key strings");
+    }
+    const nextSnapshot = assertVerifiedTransferredDerivedSnapshot(snapshotInput);
+    const evaluation = this.#evaluateContentDelta(nextSnapshot);
+    if (typeof evaluation === "string") throw new Error(evaluation);
+    if (changedKeys.length !== evaluation.changedKeys.length
+        || evaluation.changedKeys.some((key, index) => changedKeys[index] !== key)) {
+      throw new Error("derived content delta does not name the evaluated changed chunk set");
+    }
+    const chunksByKey = new Map(evaluation.selection.map((chunk) => [tileKey(chunk.tx, chunk.tz), chunk] as const));
+    const builds: DetachedChunkBuild[] = [];
+    let overview: PreparedContentDelta["overview"] = null;
+    try {
+      const nextSlice = async (): Promise<void> => {
+        await yieldToEventLoop();
+        slicing.onSlice?.();
+        if (this.#disposed) throw new Error("detached derived render candidate was disposed during a content delta");
+      };
+      // First yield before any build: same cold-task rationale as createWithFrameBudget.
+      await nextSlice();
+      let sliceStart = mountNow();
+      for (const key of evaluation.changedKeys) {
+        if (mountNow() - sliceStart >= budgetMs) {
+          await nextSlice();
+          sliceStart = mountNow();
+        }
+        const chunk = chunksByKey.get(key)!;
+        builds.push(this.#buildTerrainChunk(
+          chunk,
+          nextSnapshot.terrain.tile(chunk.tx, chunk.tz)!,
+          evaluation.surfaceFrame,
+          nextSnapshot,
+        ));
+      }
+      // The overview grid rebuild gets its own slice; it stays UNATTACHED until commit.
+      await nextSlice();
+      const merged = new Map([...this.#terrainWindow.map((entry) => [entry.key, entry] as const),
+        ...builds.map((build) => [build.entry.key, build.entry] as const)]);
+      const newWindow = evaluation.nextKeys.map((key) => merged.get(key)!);
+      if (nextSnapshot.worldOverview !== null) overview = buildWorldOverviewMesh(nextSnapshot.worldOverview, newWindow);
+      const prepared: PreparedContentDelta = Object.freeze({
+        newSnapshot: nextSnapshot,
+        builds: Object.freeze(builds),
+        newWindow: Object.freeze(newWindow),
+        overview,
+      });
+      this.#pendingContentDelta = prepared;
+      return Object.freeze({ replaced: Object.freeze(prepared.builds.map((build) => build.entry)) });
+    } catch (error) {
+      // Roll back exactly what this phase built; the live window stays untouched.
+      try { this.#rollbackContentBuilds(builds, overview); } catch { /* preserve the mounting error */ }
+      throw error;
+    }
+  }
+
+  /** Content-delta commit phase. Synchronous and non-cancellable: the caller runs it
+   *  only after the simulation realm acknowledged the SAME replacement, so render and
+   *  sim cross to the new revision together. Water re-mounts against the new snapshot
+   *  (its terrain sampler must read the newer heights; the artifact itself is
+   *  identical), the prebuilt overview swaps in, and each changed chunk's prior mount
+   *  is replaced IN PLACE under terrainRoot — unchanged chunks keep their exact mesh
+   *  objects. */
+  commitContentDelta(delta: DetachedDerivedContentDelta): void {
+    if (this.#disposed) throw new Error("detached derived render candidate is disposed");
+    const prepared = this.#pendingContentDelta;
+    if (prepared === null || prepared.builds.length !== delta.replaced.length
+        || prepared.builds.some((build, index) => build.entry !== delta.replaced[index])) {
+      throw new Error("derived content commit does not name the in-flight delta");
+    }
+    this.#pendingContentDelta = null;
+    this.#swapWaterMount(prepared.newSnapshot);
+    const priorOverview = this.#overviewMesh;
+    this.#overviewMesh = prepared.overview?.mesh ?? null;
+    this.#overviewBounds = prepared.overview?.bounds ?? null;
+    if (prepared.overview !== null) this.overviewRoot.add(prepared.overview.mesh);
+    if (priorOverview !== null) {
+      this.overviewRoot.remove(priorOverview);
+      priorOverview.geometry.dispose();
+      (priorOverview.material as THREE.Material).dispose();
+    }
+    const errors: unknown[] = [];
+    for (const build of prepared.builds) {
+      try {
+        this.#unmountTerrainChunk(build.entry.key);
+        this.#attachTerrainChunk(build);
+      } catch (error) { errors.push(error); }
+    }
+    this.#terrainWindow = prepared.newWindow;
+    this.#snapshot = prepared.newSnapshot;
+    if (errors.length > 0) throw new AggregateError(errors, "derived content delta commit failed");
+  }
+
+  /** Abandon an in-flight content delta: dispose ONLY what beginContentDelta built.
+   *  The live window keeps presenting untouched. */
+  abortContentDelta(delta: DetachedDerivedContentDelta): void {
+    const prepared = this.#pendingContentDelta;
+    if (prepared === null || prepared.builds.length !== delta.replaced.length
+        || prepared.builds.some((build, index) => build.entry !== delta.replaced[index])) {
+      throw new Error("derived content abort does not name the in-flight delta");
+    }
+    this.#pendingContentDelta = null;
+    this.#rollbackContentBuilds(prepared.builds, prepared.overview);
+  }
 
   get disposed(): boolean { return this.#disposed; }
   get terrainMeshCount(): number { return this.#terrainMeshes.size; }
@@ -726,6 +1245,22 @@ export class DetachedDerivedRenderCandidate {
     if (this.#disposed) return;
     this.#disposed = true;
     const errors: unknown[] = [];
+    // An abandoned in-flight delta owns no scene attachments beyond its mounted chunks
+    // (disposed by the terrainMeshes loop below), but its detached overview build does.
+    const pendingDelta = this.#pendingDelta;
+    this.#pendingDelta = null;
+    if (pendingDelta?.overview != null) {
+      try { pendingDelta.overview.mesh.geometry.dispose(); } catch (error) { errors.push(error); }
+      try { (pendingDelta.overview.mesh.material as THREE.Material).dispose(); } catch (error) { errors.push(error); }
+    }
+    // An abandoned in-flight content delta owns its detached chunk builds and
+    // overview (never attached), exactly like the residency delta's overview above.
+    const pendingContentDelta = this.#pendingContentDelta;
+    this.#pendingContentDelta = null;
+    if (pendingContentDelta !== null) {
+      try { this.#rollbackContentBuilds(pendingContentDelta.builds, pendingContentDelta.overview); }
+      catch (error) { errors.push(error); }
+    }
     const populationMount = this.#populationMount;
     this.#populationMount = null;
     if (populationMount !== null) try { populationMount.dispose(); } catch (error) { errors.push(error); }

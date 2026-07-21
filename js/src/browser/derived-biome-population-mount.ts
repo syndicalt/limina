@@ -21,6 +21,11 @@ import {
   DerivedRuntimeTransport,
   type DerivedRuntimeTransportConfig,
 } from "./derived-runtime-transport.ts";
+import { portableAssetContentHash } from "../world/asset-content-hash.mjs";
+import {
+  createIndexedDbDerivedArtifactCache,
+  type DerivedArtifactCache,
+} from "./derived-artifact-cache.ts";
 
 const DERIVED_CONTENT_FETCH_CONCURRENCY = 4;
 type VerifiedBiomeContentEntry = VerifiedBiomeContentBundle["entries"][number];
@@ -68,6 +73,9 @@ export interface DerivedBiomePopulationMountInput {
 export interface DerivedBiomePopulationTransportMountInput extends Omit<DerivedBiomePopulationMountInput, "loadContent"> {
   readonly manifestHash: string;
   readonly contentAccess: DerivedRuntimeTransportConfig;
+  /** Content-addressed content cache. Undefined selects the realm default (IndexedDB where
+   *  available); null disables caching explicitly. */
+  readonly contentCache?: DerivedArtifactCache | null;
 }
 
 export interface DerivedBiomePopulationMountResult {
@@ -296,16 +304,30 @@ export async function mountDerivedBiomePopulation(
   });
 }
 
-/** Production adapter: retains authenticated, manifest-scoped DerivedRuntimeTransport fetches. */
+/** Production adapter: retains authenticated, manifest-scoped DerivedRuntimeTransport fetches.
+ *  Closure content is hashed with portableAssetContentHash (sha256 over the hex encoding), NOT
+ *  derivedArtifactContentHash (raw bytes) — the cache takes its hash scheme at construction,
+ *  so this realm gets its own instance. Content-addressed bytes are immutable, so the
+ *  persistent cache sits in front of the network: only transport-verified bytes are stored,
+ *  and cached reads re-hash before use. */
 export async function mountTransportDerivedBiomePopulation(
   input: Readonly<DerivedBiomePopulationTransportMountInput>,
 ): Promise<Readonly<DerivedBiomePopulationMountResult>> {
   const transport = new DerivedRuntimeTransport(input.contentAccess);
+  const cache = input.contentCache === undefined
+    ? createIndexedDbDerivedArtifactCache(portableAssetContentHash)
+    : input.contentCache;
   return mountDerivedBiomePopulation({
     ...input,
-    loadContent: async (entry, signal) => transport.fetchContent(input.manifestHash, {
-      contentHash: entry.contentHash,
-      byteLength: entry.byteLength,
-    }, { signal }),
+    loadContent: async (entry, signal) => {
+      const cached = await cache?.get(entry.contentHash);
+      if (cached !== undefined && cached.byteLength === entry.byteLength) return { bytes: cached };
+      const result = await transport.fetchContent(input.manifestHash, {
+        contentHash: entry.contentHash,
+        byteLength: entry.byteLength,
+      }, { signal });
+      await cache?.put(entry.contentHash, result.bytes);
+      return result;
+    },
   });
 }

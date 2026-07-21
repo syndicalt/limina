@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>limina</title>
+  <style>
+    :root {
+      --s-bg: #0e1116; --s-panel: #161b22; --s-panel-2: #1c232d; --s-overlay: #232d3a;
+      --s-line: #2a323d; --s-line-soft: #232b35;
+      --s-text: #d7dde5; --s-text-dim: #9aa6b2; --s-text-faint: #6b7885;
+      --s-accent: #4aa3ff; --s-accent-soft: rgba(74, 163, 255, 0.14); --s-accent-edge: #6db4ff;
+      --s-ok: #7bc98a; --s-danger: #e07a7a;
+      --s-r-2: 6px; --s-r-3: 10px;
+      --s-t-fast: 120ms ease-out; --s-t-med: 160ms ease-out;
+      --s-shadow-2: 0 4px 14px rgba(0, 0, 0, 0.38);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--s-bg); color: var(--s-text);
+      font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      min-height: 100vh;
+    }
+    .shell { max-width: 920px; margin: 0 auto; padding: 64px 24px 48px; }
+    .brand { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+    .brand h1 { font-size: 28px; font-weight: 600; letter-spacing: -0.3px; }
+    .brand .mark { color: var(--s-accent); }
+    .tagline { color: var(--s-text-dim); font-size: 14px; margin-bottom: 40px; }
+
+    .section-label {
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px;
+      color: var(--s-text-faint); margin: 28px 0 12px;
+    }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+
+    .card {
+      background: var(--s-panel); border: 1px solid var(--s-line); border-radius: var(--s-r-3);
+      padding: 16px; cursor: pointer; position: relative;
+      transition: border-color var(--s-t-fast), transform var(--s-t-fast), background var(--s-t-fast);
+    }
+    .card:hover { border-color: var(--s-accent); background: var(--s-panel-2); transform: translateY(-1px); }
+    .card:focus-visible { outline: 2px solid var(--s-accent); outline-offset: 2px; }
+    .card .name { font-size: 15px; font-weight: 600; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .card .path { font-size: 11px; color: var(--s-text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; }
+    .card .meta { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 11.5px; color: var(--s-text-dim); }
+    .card .badge { display: inline-flex; align-items: center; gap: 5px; color: var(--s-ok); font-size: 11px; }
+    .card .badge::before { content: "●"; font-size: 8px; }
+    .card .action { margin-left: auto; color: var(--s-accent-edge); font-size: 12px; }
+
+    .card.new {
+      border-style: dashed; border-color: var(--s-line);
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      color: var(--s-text-dim); min-height: 108px; font-size: 14px;
+    }
+    .card.new:hover { color: var(--s-accent-edge); border-color: var(--s-accent); }
+    .card.new .plus { font-size: 22px; }
+
+    .empty { text-align: center; padding: 48px 0 24px; color: var(--s-text-dim); }
+    .empty .big { font-size: 40px; margin-bottom: 12px; opacity: 0.5; }
+
+    /* create dialog */
+    .dialog-backdrop {
+      position: fixed; inset: 0; background: rgba(8, 10, 14, 0.6);
+      display: flex; align-items: flex-start; justify-content: center; padding-top: 18vh;
+    }
+    .dialog-backdrop[hidden] { display: none; }
+    .dialog {
+      background: var(--s-panel); border: 1px solid var(--s-line); border-radius: var(--s-r-3);
+      box-shadow: var(--s-shadow-2); padding: 20px; width: 380px;
+    }
+    .dialog h2 { font-size: 15px; margin-bottom: 12px; }
+    .dialog label { display: block; font-size: 11.5px; color: var(--s-text-dim); margin-bottom: 6px; }
+    .dialog input {
+      width: 100%; background: var(--s-bg); color: var(--s-text);
+      border: 1px solid var(--s-line); border-radius: var(--s-r-2);
+      padding: 8px 10px; font-size: 14px; margin-bottom: 6px;
+    }
+    .dialog input:focus-visible { outline: 2px solid var(--s-accent); outline-offset: 1px; }
+    .dialog .hint { font-size: 11px; color: var(--s-text-faint); margin-bottom: 14px; }
+    .dialog .error { font-size: 11.5px; color: var(--s-danger); margin-bottom: 10px; min-height: 15px; }
+    .dialog .row { display: flex; justify-content: flex-end; gap: 8px; }
+    .btn {
+      background: var(--s-overlay); color: var(--s-text); border: 1px solid var(--s-line);
+      border-radius: var(--s-r-2); padding: 7px 14px; font-size: 12.5px; cursor: pointer;
+      transition: background var(--s-t-fast), border-color var(--s-t-fast);
+    }
+    .btn:hover { border-color: var(--s-accent); }
+    .btn.primary { background: var(--s-accent); color: #06223f; border: none; font-weight: 600; }
+    .btn.primary:hover { background: var(--s-accent-edge); }
+    .btn:disabled { opacity: 0.5; cursor: default; }
+    .btn:focus-visible { outline: 2px solid var(--s-accent); outline-offset: 1px; }
+
+    .busy { display: inline-flex; align-items: center; gap: 8px; color: var(--s-text-dim); font-size: 12px; }
+    .spin {
+      width: 12px; height: 12px; border-radius: 50%;
+      border: 2px solid var(--s-line); border-top-color: var(--s-accent);
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .toast {
+      position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+      background: rgba(30, 32, 38, 0.96); color: var(--s-text);
+      padding: 8px 16px; border-radius: 8px; border: 1px solid var(--s-line);
+      font-size: 12.5px; box-shadow: var(--s-shadow-2);
+      transition: opacity var(--s-t-med);
+    }
+    .toast.err { border-color: var(--s-danger); }
+    .root-line { margin-top: 40px; font-size: 11px; color: var(--s-text-faint); font-family: ui-monospace, Menlo, monospace; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="brand"><h1>limina<span class="mark">.</span></h1></div>
+    <div class="tagline">Create a world, or open one. The studio loads its world log and artifacts.</div>
+
+    <div class="section-label">Start</div>
+    <div class="grid" id="start-grid">
+      <div class="card new" id="new-project" tabindex="0" role="button">
+        <span class="plus">＋</span><span>New project</span>
+      </div>
+    </div>
+
+    <div class="section-label" id="projects-label" hidden>Your worlds</div>
+    <div class="grid" id="projects-grid"></div>
+    <div class="empty" id="empty" hidden>
+      <div class="big">◇</div>
+      <div>No worlds here yet — create your first one.</div>
+    </div>
+
+    <div class="root-line" id="root-line"></div>
+  </div>
+
+  <div class="dialog-backdrop" id="create-dialog" hidden>
+    <div class="dialog">
+      <h2>New project</h2>
+      <label for="create-name">Name</label>
+      <input id="create-name" placeholder="my-world" autocomplete="off" spellcheck="false" />
+      <div class="hint">Lowercase letters, digits, '-', '_' or '.'. Created in the projects folder shown below.</div>
+      <div class="error" id="create-error"></div>
+      <div class="row">
+        <button class="btn" id="create-cancel" type="button">Cancel</button>
+        <button class="btn primary" id="create-submit" type="button">Create &amp; open</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

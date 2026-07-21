@@ -31,6 +31,13 @@ const MIN_CELL_SIZE: f64 = 0.001;
 const MAX_CELL_SIZE: f64 = 1_000_000.0;
 const MAX_QUERY_RADIUS: f64 = 1_000_000.0;
 const MAX_CELLS_PER_QUERY: u128 = 1_000_000;
+/// Aggregate cell budget across ALL queries in one batch. MAX_QUERIES and
+/// MAX_CELLS_PER_QUERY are each enforced per-query, but their PRODUCT
+/// (65_536 * 1_000_000 ≈ 6.5e10) is not — one call could otherwise request tens of
+/// billions of grid probes in the synchronous triple loop below, freezing the V8
+/// thread (no interrupt handler here) for minutes to hours. Bound the sum so total
+/// work per batch is capped regardless of how the budget is split across queries.
+const MAX_TOTAL_CELLS_PER_BATCH: u128 = 4_000_000;
 
 /// Batched native uniform-grid radius query.
 ///
@@ -174,6 +181,7 @@ fn spatial_query_batch(
         }
     }
 
+    let mut total_cells = 0u128;
     for (q, query) in queries.chunks_exact(5).enumerate() {
         let [nx, ny, nz, radius, exclude] = [query[0], query[1], query[2], query[3], query[4]];
         if !nx.is_finite() || !ny.is_finite() || !nz.is_finite() {
@@ -210,6 +218,12 @@ fn spatial_query_batch(
         if cells > MAX_CELLS_PER_QUERY {
             return Err(JsErrorBox::generic(format!(
                 "spatial_query_batch: query {q} spans {cells} cells, cap is {MAX_CELLS_PER_QUERY}"
+            )));
+        }
+        total_cells = total_cells.saturating_add(cells);
+        if total_cells > MAX_TOTAL_CELLS_PER_BATCH {
+            return Err(JsErrorBox::generic(format!(
+                "spatial_query_batch: batch spans {total_cells}+ cells across queries, aggregate cap is {MAX_TOTAL_CELLS_PER_BATCH}"
             )));
         }
     }
@@ -535,5 +549,49 @@ mod tests {
             &mut out
         )
         .is_err());
+    }
+
+    #[test]
+    fn aggregate_cell_budget_is_enforced_across_queries() {
+        // Each query spans ~97^3 ≈ 912k cells — individually UNDER MAX_CELLS_PER_QUERY,
+        // but five of them sum to ~4.56M, over MAX_TOTAL_CELLS_PER_BATCH. Without the
+        // aggregate cap this is the ~6.5e10 DoS in miniature: many legal-looking queries
+        // whose total work is unbounded. Must be rejected before the query loop runs.
+        let mut scratch = SpatialScratch::default();
+        let finite = [0.0f32, 1.0, 2.0];
+        let py = [0.0f32, 0.0, 0.0];
+        let pz = [0.0f32, 0.0, 0.0];
+        let ordered_eids = [0u32, 1, 2];
+        let mut queries = Vec::new();
+        for _ in 0..5 {
+            queries.extend_from_slice(&[0.0f64, 0.0, 0.0, 48.0, -1.0]);
+        }
+        let mut out = vec![0u32; 64];
+        let err = spatial_query_batch(
+            &mut scratch,
+            &finite,
+            &py,
+            &pz,
+            &ordered_eids,
+            1.0,
+            &queries,
+            4,
+            &mut out,
+        );
+        assert!(err.is_err(), "aggregate cell budget must reject the batch");
+        assert!(
+            err.unwrap_err().to_string().contains("aggregate cap"),
+            "error must name the aggregate cap"
+        );
+
+        // A single query of the SAME per-query size stays well under the aggregate cap.
+        let one = [0.0f64, 0.0, 0.0, 48.0, -1.0];
+        assert!(
+            spatial_query_batch(
+                &mut scratch, &finite, &py, &pz, &ordered_eids, 1.0, &one, 4, &mut out
+            )
+            .is_ok(),
+            "a single in-budget query must still succeed"
+        );
     }
 }

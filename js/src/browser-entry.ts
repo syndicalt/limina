@@ -23,13 +23,19 @@ export { parseGltfScene } from "./skills/three.ts";
 import { GltfSceneParseError, type GltfSceneCache } from "./skills/three.ts";
 import { loadVegetationPack, speciesPaletteEntries, speciesPaletteIds, type VegetationPack, type VegetationPackEntry } from "./skills/vegetation.ts";
 export { buildAssetInstancedMeshes } from "./terrain/asset-scatter-render.ts";
+// The terrain brush-kernel math, re-exported as the `terrainBrushKernel` namespace the
+// editor viewport's sculpt preview consumes (editor/src/viewport.js, sculpt-preview.js).
+// brush-kernel.mjs is the sanctioned single copy site — the preview and the recorded
+// terrain.deform must run bit-identical kernel math, so the viewport reads it from HERE
+// rather than forking it.
+export * as terrainBrushKernel from "./terrain/brush-kernel.mjs";
 import { EntityTable, installOps, type CameraLike, type EngineOps, type SceneLike } from "./engine.ts";
 import { createEcsWorld, Position, renderableOwnerEid, renderSyncSystem, Rotation, Scale } from "./ecs/world.ts";
 import { createTransformStorage } from "./ecs/facade.ts";
 import { UniformGridSpatialIndex } from "./spatial/index.ts";
 import { SkillRegistry, type WorldContext } from "./skills/registry.ts";
 import { registerCoreSkills } from "./skills/index.ts";
-import { REALM_DEFAULT_PROFILE, resolveProfile } from "./skills/permissions.ts";
+import { realmDefaultGrants, resolveProfile } from "./skills/permissions.ts";
 import { createDesignArtifactStore } from "./world/design-artifacts.ts";
 import { applyAuthorCommand } from "./kernel/authoring.ts";
 import {
@@ -1584,7 +1590,10 @@ export async function runLive(opts: RunLiveOptions): Promise<RunningLive | null>
   const authoringBinding = new AuthoringProjectBinding((projectId) => {
     registerBrowserAuthoringRuntime(registry, world, projectId);
   }, initialAuthoringProjectId);
-  const permissions = resolveProfile(opts.profile ?? REALM_DEFAULT_PROFILE);
+  // Default grants flow through realmDefaultGrants() — the SAME function the sim
+  // worker's DEFAULT_GRANTS uses — so the two realms cannot drift (p108 pins this).
+  // An explicit opts.profile overrides (a narrower/named profile for a scoped host).
+  const permissions = opts.profile !== undefined ? resolveProfile(opts.profile) : realmDefaultGrants();
   const applyOne = (cmd: AuthorCommand): Promise<Awaited<ReturnType<typeof applyAuthorCommand>>> => {
     return applyAuthorCommand(registry, world, cmd, {
       sessionId: "ses_browser_live",

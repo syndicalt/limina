@@ -35,6 +35,10 @@ import { registerWorldlogSkills } from "../../js/src/skills/worldlog.ts";
 import { registerAssetCatalogSkills } from "../../js/src/skills/asset-catalog.ts";
 import { acquireKernel, type LockIO } from "../../js/src/kernel/daemon-lock.ts";
 import { derivedRuntimeDiscovery, registerDerivedRuntimeDiscoverySkill } from "../../js/src/skills/derived-runtime-discovery.ts";
+import { compileAtlasMapDoc } from "../../js/src/world/design-map-compile.mjs";
+import { terrainEditBaseTopologyForWorldMap } from "../../js/src/terrain/edit-topology.mjs";
+import { parseTerrainEditLayer } from "../../js/src/terrain/edit-layer.mjs";
+import { parseTerrainPaintLayer } from "../../js/src/terrain/paint-layer.mjs";
 import { AnthropicProvider } from "../../js/src/agents/llm.ts";
 import { runChatTurn, type ChatTurnPersistRecord } from "../../js/src/agents/chat-turn.ts";
 import { ChatAdmissionGate } from "../../js/src/agents/chat-admission.ts";
@@ -142,6 +146,14 @@ const editorTransport = {
   close: (id: number) => net.op_net_close(id),
 };
 
+// D5.1: project asset ids are project-root-relative (`<assetRootName>/...`); the
+// sandboxed asset op wants the path beneath the configured asset root.
+function projectAssetRel(assetId: string): string {
+  const slash = assetId.indexOf("/");
+  if (slash <= 0) throw new Error(`editor_host: project asset id '${assetId}' has no asset-root prefix`);
+  return assetId.slice(slash + 1);
+}
+
 const server = new AuthoritativeServer(editorTransport, {
   sessionId: "editor_host",
   seed: 0xed170,
@@ -152,7 +164,58 @@ const server = new AuthoritativeServer(editorTransport, {
   // memory and the viewport would render an empty/partial world. A dev-editor session keeps the whole
   // stream resident (bounded by session length, not a concern here).
   worldLog: { name: WORLDLOG_NAME, compactFlushed: false },
-  authoring: { projectId: PROJECT_ID },
+  authoring: {
+    projectId: PROJECT_ID,
+    // D5.1 derived-terrain sculpting: resolve the edit-layer lattice from the
+    // authoritative MapDoc through the SAME map→topology derivation the derived
+    // compiler uses (edit-topology.mjs), so a stroke binds to the field it sees.
+    derivedTerrainTopology: (() => {
+      // Pure memo keyed by content hash: boot rehydrate replays every recorded stroke
+      // through this resolver, and the map→topology derivation is a pure function of
+      // the pinned MapDoc bytes. Replay itself never calls it (commands pin the
+      // topology via commitFields), so the cache can never diverge from the log.
+      const cache = new Map<string, unknown>();
+      return (mapDocRef: { assetId: string; hash: string }) => {
+        const hit = cache.get(mapDocRef.hash);
+        if (hit !== undefined) return hit;
+        const text = new TextDecoder().decode(ops.op_read_asset(projectAssetRel(mapDocRef.assetId)));
+        if (`sha256:${ops.op_sha256(text)}` !== mapDocRef.hash) {
+          throw new Error(`editor_host: MapDoc '${mapDocRef.assetId}' bytes do not match the authoritative ref hash`);
+        }
+        const compiled = compileAtlasMapDoc({ mapsJsonText: text }) as { worldMap: unknown };
+        const topology = terrainEditBaseTopologyForWorldMap(compiled.worldMap, { gridId: `${PROJECT_ID}.surface` });
+        cache.set(mapDocRef.hash, topology);
+        return topology;
+      };
+    })(),
+    readTerrainEditLayer: (ref) => {
+      const text = new TextDecoder().decode(ops.op_read_asset(projectAssetRel(ref.assetId)));
+      const layer = parseTerrainEditLayer(JSON.parse(text));
+      if (layer.contentHash !== ref.hash) {
+        throw new Error(`editor_host: terrain edit layer '${ref.assetId}' content hash does not match the authoritative ref`);
+      }
+      return layer;
+    },
+    // D5.3: fs fallback for derived paint layers (same contract as the height reader).
+    readTerrainPaintLayer: (ref) => {
+      const text = new TextDecoder().decode(ops.op_read_asset(projectAssetRel(ref.assetId)));
+      const layer = parseTerrainPaintLayer(JSON.parse(text));
+      if (layer.contentHash !== ref.hash) {
+        throw new Error(`editor_host: terrain paint layer '${ref.assetId}' content hash does not match the authoritative ref`);
+      }
+      return layer;
+    },
+    // D5.4: hash-checked MapDoc bytes for the composed-height sampler (mirrors the
+    // read+verify in derivedTerrainTopology above). Arming this plus the topology
+    // resolver switches on derived smooth/flatten and derived vegetation.scatter.
+    readMapDoc: (ref) => {
+      const text = new TextDecoder().decode(ops.op_read_asset(projectAssetRel(ref.assetId)));
+      if (`sha256:${ops.op_sha256(text)}` !== ref.hash) {
+        throw new Error(`editor_host: MapDoc '${ref.assetId}' bytes do not match the authoritative ref hash`);
+      }
+      return text;
+    },
+  },
   initializeAuthToken: EDITOR_AUTH_TOKEN,
   allowedProfiles: EDITOR_ALLOWED_PROFILES,
   onClientMessage: async (method, params, ctx) => {
@@ -203,7 +266,14 @@ const server = new AuthoritativeServer(editorTransport, {
       world: server.world,
       providers: buildProviders(model, key),
       tracer: server.registry.tracer,
-      msg: { turnId: p.turnId, text: p.text, attachments: p.attachments },
+      msg: {
+        turnId: p.turnId,
+        text: p.text,
+        attachments: p.attachments,
+        // The context pack is bounded by the packer's own caps; this is the
+        // outer fence so a broken adapter can never blow up a turn.
+        context: typeof p.context === "string" ? p.context.slice(0, 8192) : undefined,
+      },
       invokeTool: (name, input, base) => {
         const argumentsRecord = asRecord(input);
         if (argumentsRecord === undefined) {

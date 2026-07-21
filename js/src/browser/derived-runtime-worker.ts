@@ -1,7 +1,12 @@
 import {
   derivedArtifactCompilerGraphHash,
+  derivedArtifactContentHash,
   parseDerivedRevisionManifest,
 } from "../world/compiler/manifest.mjs";
+import {
+  createIndexedDbDerivedArtifactCache,
+  type DerivedArtifactCache,
+} from "./derived-artifact-cache.ts";
 import {
   DerivedRuntimeTransport,
   DerivedRuntimeTransportError,
@@ -174,6 +179,9 @@ export interface DerivedRuntimeWorkerDependencies {
   createTransport?: (config: DerivedRuntimeTransportConfig) => RuntimeTransport;
   timers?: TimerApi;
   activationAckTimeoutMs?: number;
+  /** Content-addressed artifact cache. Undefined selects the realm default (IndexedDB where
+   *  available); null disables caching explicitly (headless determinism gates). */
+  artifactCache?: DerivedArtifactCache | null;
 }
 
 interface PendingActivation {
@@ -590,6 +598,12 @@ export class DerivedRuntimeWorkerController {
   #initialized = false;
   #closed = false;
   #closePromise: Promise<void> | null = null;
+  #baseUrl = "";
+  #token = "";
+  #eventSource: EventSource | null = null;
+  // Undefined = the realm default (IndexedDB, lazily opened); null = caching disabled (gates).
+  readonly #injectedCache: DerivedArtifactCache | null | undefined;
+  #defaultCache: DerivedArtifactCache | null | undefined;
 
   constructor(dependencies: DerivedRuntimeWorkerDependencies) {
     if (dependencies === null || typeof dependencies !== "object" || Array.isArray(dependencies)) {
@@ -606,6 +620,17 @@ export class DerivedRuntimeWorkerController {
     if (!Number.isSafeInteger(this.#ackTimeoutMs) || this.#ackTimeoutMs < 100 || this.#ackTimeoutMs > 120_000) {
       throw new RangeError("derived runtime worker activationAckTimeoutMs must be an integer in [100, 120000]");
     }
+    this.#injectedCache = dependencies.artifactCache;
+  }
+
+  #artifactCache(): DerivedArtifactCache | undefined {
+    if (this.#injectedCache !== undefined) return this.#injectedCache ?? undefined;
+    // The default opens lazily (IDB work starts on first use, off the init path) and every
+    // failure inside the cache degrades to "no cache", never to an activation error.
+    if (this.#defaultCache === undefined) {
+      this.#defaultCache = createIndexedDbDerivedArtifactCache(derivedArtifactContentHash);
+    }
+    return this.#defaultCache ?? undefined;
   }
 
   get isInitialized(): boolean { return this.#initialized; }
@@ -644,6 +669,8 @@ export class DerivedRuntimeWorkerController {
     const transport = this.#createTransport(message.config);
     this.#projectId = message.config.projectId;
     this.#branchId = message.config.branchId;
+    this.#baseUrl = message.config.baseUrl;
+    this.#token = message.config.token;
     this.#mode = message.mode;
     this.#pinnedSource = message.pinnedSource ?? null;
     this.#pinnedManifestHash = message.pinnedSource?.manifestHash ?? null;
@@ -678,6 +705,7 @@ export class DerivedRuntimeWorkerController {
       activateRevision: (input: unknown) => this.#activate(input),
       disposeChunk: async () => {},
       disposeGlobal: async () => {},
+      onProgress: (fetched: number, total: number) => this.#postFetchProgress(fetched, total),
     });
     this.#initialized = true;
     this.#postMessage(Object.freeze({
@@ -686,6 +714,7 @@ export class DerivedRuntimeWorkerController {
       requestId: message.requestId,
       mode: message.mode,
     }));
+    this.#startRevisionStream();
     this.#schedulePoll(0, true);
   }
 
@@ -766,9 +795,31 @@ export class DerivedRuntimeWorkerController {
     if (current === null || current.manifestHash !== manifestHash) {
       throw fatal("PUBLICATION_BINDING_MISMATCH", "artifact load is not bound to the submitted publication");
     }
+    // Content-addressed cache: hits skip the network entirely. The cache re-hashes stored
+    // bytes on read (its corruption guard), and the manager re-verifies length+hash against
+    // the manifest descriptor anyway, so a wrong-byte hit is impossible even if the guard regresses.
+    const cache = this.#artifactCache();
+    const cached = await cache?.get(descriptor.contentHash);
+    if (cached !== undefined && cached.byteLength === descriptor.byteLength) {
+      if (signal.aborted) throw signal.reason;
+      return cached;
+    }
+    if (signal.aborted) throw signal.reason;
     const result = await this.#requireTransport().fetchArtifact(current, descriptor, { signal });
     if (result.status !== "artifact") throw fatal("PROTOCOL_ERROR", "derived artifact unexpectedly returned not-modified");
+    // Only transport-verified bytes (SHA-256 checked against the descriptor) enter the cache.
+    await cache?.put(descriptor.contentHash, result.bytes);
     return result.bytes;
+  }
+
+  #postFetchProgress(fetched: number, total: number): void {
+    if (this.#closed) return;
+    this.#postMessage(Object.freeze({
+      schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+      type: "fetch-progress",
+      fetched,
+      total,
+    }));
   }
 
   #stageGlobal(input: {
@@ -939,6 +990,29 @@ export class DerivedRuntimeWorkerController {
     else pending.reject(transient("ACTIVATION_REJECTED", `main thread rejected activation (${message.errorCode})`));
   }
 
+  /** SSE revision push (2.0-B): the derived-runtime server broadcasts each
+   *  publish; a revision event cancels the idle ladder and polls NOW. Polling
+   *  stays the backbone — a stream failure (or no EventSource in the realm)
+   *  just leaves the ladder to its own cadence. */
+  #startRevisionStream(): void {
+    if (this.#mode !== "watch" || this.#eventSource !== null || this.#baseUrl === "" || this.#token === "") return;
+    const Ctor = (globalThis as { EventSource?: typeof EventSource }).EventSource;
+    if (Ctor === undefined) return;
+    const source = new Ctor(`${this.#baseUrl}/v1/derived/events/${this.#token}`);
+    this.#eventSource = source;
+    source.addEventListener("revision", () => {
+      this.#idlePollIndex = 0;
+      this.#schedulePoll(0, true);
+    });
+    // No error handler needed beyond letting EventSource reconnect natively:
+    // the idle ladder covers every failure mode on its own.
+  }
+
+  #stopRevisionStream(): void {
+    this.#eventSource?.close();
+    this.#eventSource = null;
+  }
+
   #schedulePoll(delayMs: number, explicit = false): void {
     if (this.#closed || (this.#mode === "pinned" && !explicit)) return;
     if (this.#pollTimer !== null) {
@@ -1065,6 +1139,7 @@ export class DerivedRuntimeWorkerController {
     if (this.#closePromise !== null) return this.#closePromise;
     this.#closed = true;
     this.#lifecycle.abort(fatal("DERIVED_RUNTIME_CLOSED", "derived runtime worker was closed"));
+    this.#stopRevisionStream();
     if (this.#pollTimer !== null) {
       this.#timers.clearTimeout(this.#pollTimer);
       this.#pollTimer = null;

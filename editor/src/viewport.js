@@ -22,26 +22,12 @@
 // - G: toggle the unobtrusive ground grid helper.
 // - F: frame selection; Shift+F toggles scene wireframe view.
 
-import { createBrowserRenderHost, runLive, partitionQuarantined, TransformControls, THREE } from "../vendor/limina-runtime.js";
+import { createBrowserRenderHost, runLive, partitionQuarantined, TransformControls, THREE, terrainBrushKernel } from "../vendor/limina-runtime.js";
+import { applySculptPreview, collectDerivedTerrainMeshes, rollbackSculptPreview } from "./sculpt-preview.js";
 import { createGraphicsSettings, readGraphicsQuality } from "./graphics-settings.js";
 import { createDerivedRuntimeClient } from "./derived-runtime-client.js";
+import { createBootLoading } from "./boot-loading.js";
 import { createNavigationDestinationCoordinator } from "./navigation-destination.js";
-import { atlasEditorHandoff } from "./atlas-handoff-bootstrap.js";
-import {
-  ATLAS_WORKSPACE_COMPACT_WIDTH_PX,
-  ATLAS_WORKSPACE_DEFAULT_WIDTH_PX,
-  atlasWorkspaceWidthBounds,
-  clampAtlasWorkspaceWidth,
-  readAtlasWorkspaceState,
-  writeAtlasWorkspaceState,
-} from "./atlas-workspace-state.js";
-import {
-  ATLAS_EDITOR_BRIDGE_SCHEMA,
-  ATLAS_FOCUS_REQUEST,
-  EDITOR_REVEAL_REQUEST,
-  parseEditorRevealRequest,
-  parseTrustedAtlasEditorMessageEvent,
-} from "./atlas-editor-protocol.js";
 import {
   DEFAULT_NAVIGATION_SPEED_MPS,
   createNavigationStateController,
@@ -54,6 +40,8 @@ import { sceneTransformOperation } from "./authoring-gateway.js";
 import { assetPlacement, openContentBrowser, requestCatalogRefresh } from "./content-browser.js";
 import { isAttachedToScene } from "./scene-graph.js";
 import { editorSelection } from "./selection-store.js";
+import { studioBus } from "./agents/studio-events.js";
+import { MODE_BY_TOOL, createViewportTooling, toolForBrushTool } from "./tools/viewport-tools.js";
 import { McpClient } from "./mcp-client.js";
 import {
   commitSceneOperations,
@@ -61,6 +49,9 @@ import {
   deformTerrain,
   paintTerrain,
   placeAsset,
+  addRiver,
+  addWaterPlane,
+  scatterVegetation,
   redoSceneAuthoring,
   refreshAuthoringHead,
   resetWriter,
@@ -133,14 +124,6 @@ const viewportUi = {
   navigationBookmarkSave: document.getElementById("viewport-navigation-bookmark-save"),
   navigationBookmarks: document.getElementById("viewport-navigation-bookmarks"),
   navigationRecents: document.getElementById("viewport-navigation-recents"),
-  atlasToggle: document.getElementById("viewport-atlas-toggle"),
-  atlasPanel: document.getElementById("viewport-atlas"),
-  atlasFrame: document.getElementById("viewport-atlas-frame"),
-  atlasStatus: document.getElementById("viewport-atlas-status"),
-  atlasReveal: document.getElementById("viewport-atlas-reveal"),
-  atlasMaximize: document.getElementById("viewport-atlas-maximize"),
-  atlasClose: document.getElementById("viewport-atlas-close"),
-  atlasSplitter: document.getElementById("viewport-atlas-splitter"),
 };
 function setStatus(phase, detail) {
   const bounded = detail === undefined ? "" : String(detail).slice(0, 240);
@@ -153,6 +136,49 @@ function setStatus(phase, detail) {
 function setEditRuntimeStatus(phase, detail) {
   setStatus(phase === "playing" ? "Edit" : phase, detail);
 }
+
+// ── Boot loading overlay (boot-loading.js) ───────────────────────────────────
+// One overlay per page session, mounted over the viewport canvas. Driven ONLY by real
+// boot events: the connect click, reboot()'s command count, runLive's onStatus steps, the
+// derived client's fetch/activation statuses, and the boot error paths.
+function bootOverlayEnsure() {
+  if (state.bootOverlaySettled) return;
+  if (state.bootOverlay && state.bootOverlayFailed) bootOverlayReset(); // a retry gets a fresh overlay
+  if (state.bootOverlay) return;
+  const mount = document.getElementById("viewport-body");
+  if (!mount) return;
+  state.bootRuntimeError = undefined;
+  state.bootOverlay = createBootLoading({ document, mount });
+}
+
+function bootOverlayDone() {
+  const overlay = state.bootOverlay;
+  state.bootOverlay = undefined;
+  state.bootOverlaySettled = true;
+  state.bootOverlayFailed = false;
+  overlay?.done();
+}
+
+function bootOverlayFail(message) {
+  state.bootOverlayFailed = true; // stays up with the error; settled stays false for retry
+  state.bootOverlay?.fail(message);
+}
+
+function bootOverlayReset() {
+  state.bootOverlay?.dispose();
+  state.bootOverlay = undefined;
+  state.bootOverlaySettled = false;
+  state.bootOverlayFailed = false;
+}
+
+// runLive's onStatus during boot: forward loading/ready steps; remember the LAST error
+// detail so the state.running === null path (no throw follows) can fail the overlay.
+function bootOverlayRuntimeStep(phase, detail) {
+  if (phase === "error") state.bootRuntimeError = detail;
+  state.bootOverlay?.runtimeStep(phase, detail);
+}
+
+window.addEventListener("limina:studio-connect", bootOverlayEnsure);
 
 function logConsolePanel(message, kind = "err") {
   const box = document.getElementById("log");
@@ -231,6 +257,15 @@ const state = {
   // and reboot() hands the payload to runLive. Cleared on worldlog reset or a boot failure
   // (fall back to the full-replay path).
   bootPayload: undefined,
+  // Boot loading overlay (boot-loading.js): shown from the connect click until the first
+  // derived activation — or runtime-ready when there is no derived service. Settled =
+  // dismissed; the overlay is a boot-only experience and never re-shows within a session.
+  bootOverlay: undefined,
+  bootOverlaySettled: false,
+  bootOverlayFailed: false,
+  // Last runLive onStatus("error") detail during boot — replayed onto the overlay when
+  // runLive returns null (the environment cannot host the viewport) and no throw follows.
+  bootRuntimeError: undefined,
   // Indices (into toAuthorCommands(state.commands)) of commands that FAILED authoring on a prior
   // reboot. reboot() skips these so ONE historically-bad command (e.g. an out-of-band asset the agent
   // generated once) can't wedge every future reboot. Cleared on a worldlog reset.
@@ -291,8 +326,127 @@ const state = {
   historyTransition: undefined,
   connectionReset: undefined,
   navigationBusy: false,
-  atlasFocusPending: false,
 };
+
+// 2.0-C: the Tool Contract ribbon is the source of truth for edit mode / brush
+// tool / brush options. The adapter writes controller state into the SAME state
+// fields the legacy HUD + key paths use, so every edit still flows through the
+// recorded write-client paths unchanged. Legacy HUD sliders write state
+// directly (ribbon does not reflect them) — accepted drift while the HUD
+// awaits retirement; the reverse direction (ribbon → state) is exact.
+function applyRibbonBrush(brush) {
+  state.brush.radius = brush.radius;
+  state.brush.strength = brush.strength;
+  state.brush.falloff = brush.falloff;
+  state.paintMaterial = brush.material;
+  // The sculpt-mode enum changed while a sculpt tool is armed.
+  if (state.editMode && state.brushTool !== "paint" && state.brushTool !== "catalog") {
+    state.brushTool = brush.sculptMode;
+  }
+  if (brushRing?.visible) brushRing.scale.set(brush.radius, brush.radius, brush.radius);
+}
+function applyRibbonMode(mode, brush) {
+  if (mode === "select") {
+    state.editMode = false;
+  } else {
+    state.editMode = true;
+    // Water/scatter are not brush tools: brushTool keeps its last value and
+    // the pointer dispatch reads the controller's active id for them.
+    if (mode === "sculpt") state.brushTool = brush.sculptMode;
+    else if (mode === "paint" || mode === "catalog") state.brushTool = mode;
+  }
+  applyRibbonBrush(brush);
+  reconcileNavigationEditMode();
+  updateEditModeIndicator();
+  // Brush tools report their brushTool (raise/paint/…); water/scatter report
+  // the ribbon id since they hold no brushTool of their own.
+  const statusTool = mode === "sculpt" || mode === "paint" || mode === "catalog" ? state.brushTool : viewportTooling.controller.activeId();
+  setStatus(mode === "select" ? "terrain edit: off" : "terrain edit",
+    mode === "select" ? "" : `tool: ${statusTool}`);
+}
+const viewportTooling = createViewportTooling({
+  document,
+  mount: document.getElementById("viewport-tool-surface"),
+  storage: {
+    load: (k) => { try { const raw = localStorage.getItem(k); return raw === null ? undefined : JSON.parse(raw); } catch { return undefined; } },
+    save: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage optional */ } },
+  },
+  onModeChange: applyRibbonMode,
+  onBrushChange: applyRibbonBrush,
+  // select.pick's gizmo/space/snap options are not brush state — they drive the
+  // TransformControls + snap settings directly (same setters as W/E/R/X/S).
+  onToolOption(toolId, key, value) {
+    if (toolId !== "select.pick") return;
+    if (key === "gizmo") state.transformControls?.setMode(value);
+    else if (key === "space") setTransformSpace(value);
+    else if (key === "snap") toggleSnapping(value);
+  },
+});
+// Persisted ribbon state survives reload (plan: persistent modes) — apply it to
+// the viewport state on boot instead of resetting the controller. Deferred past
+// module evaluation: the adapter touches late-declared lets (brushRing).
+queueMicrotask(() => {
+  if (viewportTooling.controller.activeId() !== "select.pick") {
+    applyRibbonMode(MODE_BY_TOOL[viewportTooling.controller.activeId()], viewportTooling.brushSnapshot());
+  }
+  // Restored gizmo options apply on boot too (persistence round-trip).
+  const controller = viewportTooling.controller;
+  controller.setOption("select.pick", "gizmo", controller.option("select.pick", "gizmo"));
+  controller.setOption("select.pick", "space", controller.option("select.pick", "space"));
+  controller.setOption("select.pick", "snap", controller.option("select.pick", "snap"));
+});
+// Reverse direction: legacy key paths (F4 / 1-6 / placement arm / play-state
+// restore) mutate state directly, then sync the controller so the ribbon
+// tracks. All adapter writes are idempotent, so the echo is a no-op.
+function syncRibbonFromState() {
+  const controller = viewportTooling.controller;
+  if (!state.editMode) {
+    controller.setActiveTool("select.pick");
+    return;
+  }
+  if (state.brushTool !== "paint" && state.brushTool !== "catalog") {
+    controller.setOption("terrain.sculpt", "mode", state.brushTool);
+  }
+  controller.setActiveTool(toolForBrushTool(state.brushTool));
+}
+// Reverse direction for the gizmo keys/buttons (W/E/R/X/S + bottom bar): the
+// controller is the persisted source of truth, so key-driven changes echo up.
+function syncGizmoOption(key, value) {
+  viewportTooling.controller.setOption("select.pick", key, value);
+}
+window.__viewport = { controller: viewportTooling.controller, state }; // test hook, mirrors window.__atlas
+// Derived residency window pref (navigation-stall lever): the whole 225-chunk
+// window re-mounts per swap today, so weak GPUs shrink radius + raise the
+// swap threshold via localStorage["limina.viewport.residency"] =
+// '{"radius":5,"thresholdChunks":3}' and reload. Invalid values fall back to
+// the engine defaults (7/2); bounds match runLive's own validation.
+function readDerivedResidencyPref() {
+  try {
+    const raw = localStorage.getItem("limina.viewport.residency");
+    if (raw === null) return undefined;
+    const pref = JSON.parse(raw);
+    const radius = Number(pref?.radius);
+    const thresholdChunks = Number(pref?.thresholdChunks);
+    if (!Number.isSafeInteger(radius) || radius < 2 || radius > 7) return undefined;
+    if (!Number.isSafeInteger(thresholdChunks) || thresholdChunks < 1 || thresholdChunks > radius) return undefined;
+    return { radius, thresholdChunks };
+  } catch { return undefined; }
+}
+// Ribbon undo/redo (the retired HUD's one unique capability): same recorded
+// authoring-undo path, rendered as plain ribbon buttons (no data-tool → the
+// ribbon's active-marker ignores them).
+for (const [label, title, fn] of [
+  ["↶", "Undo the latest committed scene edit", () => void undoAuthoringEdit()],
+  ["↷", "Reapply the latest undone scene edit", () => void redoAuthoringEdit()],
+]) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "tool-btn";
+  btn.title = title;
+  btn.textContent = label;
+  btn.addEventListener("click", fn);
+  document.querySelector("#viewport-tool-surface .tool-ribbon")?.appendChild(btn);
+}
 // The discovery response contains the runtime capability. Keep it in this module closure only: it
 // must never enter DOM state, browser storage, console output, trace payloads, or status strings.
 let derivedRuntimeDiscovery;
@@ -342,271 +496,18 @@ const navigationDestination = createNavigationDestinationCoordinator({
         && !playLifecycle.isAuthoringLocked()) requestEditDerivedClient();
   },
 });
-const ATLAS_SOURCE_WAIT_MS = 30_000;
-const atlasWorldPosition = new THREE.Vector3();
-let atlasRevealRequestId = 0;
-let atlasFocusGeneration = 0;
-let atlasFocusRequiresOpen = false;
-let pendingAtlasHandoffFocus = atlasEditorHandoff?.focus;
-let atlasHandoffApplying = false;
-let atlasWorkspaceState = readAtlasWorkspaceState(graphicsStorage);
-let atlasWorkspaceCompact = false;
-let atlasResizePointer;
-
-function atlasWorkspaceContainerWidth() {
-  return viewportUi.atlasPanel?.parentElement?.clientWidth ?? 0;
-}
-
-function persistAtlasWorkspaceState() {
-  writeAtlasWorkspaceState(graphicsStorage, atlasWorkspaceState);
-}
-
-function applyAtlasWorkspaceLayout() {
-  const containerWidth = atlasWorkspaceContainerWidth();
-  const width = clampAtlasWorkspaceWidth(atlasWorkspaceState.widthPx, containerWidth);
-  document.getElementById("viewport")?.style.setProperty("--atlas-dock-width", `${width}px`);
-  if (atlasWorkspaceCompact && viewportUi.atlasPanel) {
-    const stage = document.querySelector(".stage")?.getBoundingClientRect();
-    if (stage) {
-      viewportUi.atlasPanel.style.setProperty("--atlas-compact-left", `${Math.max(0, stage.left)}px`);
-      viewportUi.atlasPanel.style.setProperty("--atlas-compact-top", `${Math.max(0, stage.top)}px`);
-      viewportUi.atlasPanel.style.setProperty("--atlas-compact-right", `${Math.max(0, innerWidth - stage.right)}px`);
-      viewportUi.atlasPanel.style.setProperty("--atlas-compact-bottom", `${Math.max(0, innerHeight - stage.bottom)}px`);
-    }
-  }
-  document.body.classList.toggle("atlas-workspace-maximized", atlasOpen() && atlasWorkspaceState.maximized && !atlasWorkspaceCompact);
-  document.body.classList.toggle("atlas-workspace-compact", atlasOpen() && atlasWorkspaceCompact);
-  if (viewportUi.atlasPanel) {
-    viewportUi.atlasPanel.dataset.workspaceMode = atlasWorkspaceCompact
-      ? "compact" : atlasWorkspaceState.maximized ? "maximized" : "docked";
-  }
-  if (viewportUi.atlasMaximize) {
-    const maximized = atlasWorkspaceState.maximized && !atlasWorkspaceCompact;
-    viewportUi.atlasMaximize.setAttribute("aria-pressed", String(maximized));
-    viewportUi.atlasMaximize.setAttribute("aria-label", maximized ? "Restore Atlas dock" : "Maximize Atlas");
-    viewportUi.atlasMaximize.title = maximized ? "Restore Atlas dock" : "Maximize Atlas";
-    viewportUi.atlasMaximize.textContent = maximized ? "▣" : "□";
-    viewportUi.atlasMaximize.disabled = atlasWorkspaceCompact;
-  }
-  if (viewportUi.atlasSplitter) {
-    const bounds = atlasWorkspaceWidthBounds(containerWidth);
-    viewportUi.atlasSplitter.setAttribute("aria-valuemin", String(bounds.minimum));
-    viewportUi.atlasSplitter.setAttribute("aria-valuemax", String(bounds.maximum));
-    viewportUi.atlasSplitter.setAttribute("aria-valuenow", String(width));
-  }
-}
-
-function updateAtlasWorkspaceCompact() {
-  const compact = atlasWorkspaceContainerWidth() < ATLAS_WORKSPACE_COMPACT_WIDTH_PX;
-  if (compact === atlasWorkspaceCompact) return;
-  atlasWorkspaceCompact = compact;
-  applyAtlasWorkspaceLayout();
-}
-
-function setAtlasStatus(message) {
-  if (viewportUi.atlasStatus) viewportUi.atlasStatus.textContent = String(message ?? "").slice(0, 120);
-}
-
-function atlasOpen() {
-  return viewportUi.atlasPanel?.hidden === false;
-}
-
-function setAtlasOpen(open, { persist = true, returnFocus = false } = {}) {
-  if (!viewportUi.atlasPanel || !viewportUi.atlasFrame) return;
-  viewportUi.atlasPanel.hidden = !open;
-  viewportUi.atlasToggle?.setAttribute("aria-expanded", String(open));
-  viewportUi.atlasToggle?.classList.toggle("active", open);
-  document.body.classList.toggle("atlas-overview-open", open);
-  atlasWorkspaceState = Object.freeze({ ...atlasWorkspaceState, open });
-  applyAtlasWorkspaceLayout();
-  if (persist) persistAtlasWorkspaceState();
-  if (!open && state.atlasFocusPending && atlasFocusRequiresOpen) atlasFocusGeneration++;
-  if (open && viewportUi.atlasFrame.getAttribute("src") === null) {
-    setAtlasStatus("loading");
-    viewportUi.atlasFrame.src = "/atlas/?embed=editor";
-  }
-  scheduleResizeViewport();
-  if (!open && returnFocus) viewportUi.atlasToggle?.focus();
-}
-
-function setAtlasMaximized(maximized) {
-  if (!atlasOpen() || atlasWorkspaceCompact) return;
-  atlasWorkspaceState = Object.freeze({ ...atlasWorkspaceState, maximized: maximized === true });
-  applyAtlasWorkspaceLayout();
-  persistAtlasWorkspaceState();
-  scheduleResizeViewport();
-}
-
-function setAtlasWorkspaceWidth(widthPx, { persist = false } = {}) {
-  const width = clampAtlasWorkspaceWidth(widthPx, atlasWorkspaceContainerWidth());
-  atlasWorkspaceState = Object.freeze({ ...atlasWorkspaceState, widthPx: width });
-  applyAtlasWorkspaceLayout();
-  if (persist) persistAtlasWorkspaceState();
-  scheduleResizeViewport();
-}
-
-function beginAtlasResize(event) {
-  if (event.button !== 0 || atlasWorkspaceCompact || atlasWorkspaceState.maximized || !atlasOpen()) return;
-  event.preventDefault();
-  atlasResizePointer = event.pointerId;
-  viewportUi.atlasSplitter?.setPointerCapture?.(event.pointerId);
-  document.body.classList.add("atlas-workspace-resizing");
-}
-
-function updateAtlasResize(event) {
-  if (atlasResizePointer !== event.pointerId) return;
-  const rect = viewportUi.atlasPanel?.parentElement?.getBoundingClientRect();
-  if (rect) setAtlasWorkspaceWidth(rect.right - event.clientX);
-}
-
-function finishAtlasResize(event) {
-  if (atlasResizePointer !== event.pointerId) return;
-  atlasResizePointer = undefined;
-  document.body.classList.remove("atlas-workspace-resizing");
-  try { viewportUi.atlasSplitter?.releasePointerCapture?.(event.pointerId); } catch { /* already released */ }
-  setAtlasWorkspaceWidth(atlasWorkspaceState.widthPx, { persist: true });
-}
-
-function resizeAtlasWithKeyboard(event) {
-  if (atlasWorkspaceCompact || atlasWorkspaceState.maximized || !atlasOpen()) return;
-  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-  event.preventDefault();
-  event.stopPropagation();
-  const bounds = atlasWorkspaceWidthBounds(atlasWorkspaceContainerWidth());
-  const step = event.shiftKey ? 64 : 16;
-  const next = event.key === "Home" ? bounds.minimum : event.key === "End" ? bounds.maximum
-    : atlasWorkspaceState.widthPx + (event.key === "ArrowRight" ? step : -step);
-  setAtlasWorkspaceWidth(next, { persist: true });
-}
-
-function postAtlasReveal(world, label, designRef) {
-  const target = viewportUi.atlasFrame?.contentWindow;
-  if (!atlasOpen() || !target) return false;
-  atlasRevealRequestId = atlasRevealRequestId >= Number.MAX_SAFE_INTEGER ? 1 : atlasRevealRequestId + 1;
-  let message;
-  try {
-    message = parseEditorRevealRequest({
-      schema: ATLAS_EDITOR_BRIDGE_SCHEMA,
-      type: EDITOR_REVEAL_REQUEST,
-      requestId: atlasRevealRequestId,
-      world,
-      label,
-      ...(designRef === undefined ? {} : { designRef }),
-    });
-  } catch (error) {
-    setAtlasStatus(error instanceof Error ? error.message : "reveal unavailable");
-    return false;
-  }
-  target.postMessage(message, window.location.origin);
-  setAtlasStatus(`revealed ${message.label}`);
-  return true;
-}
-
-function revealSelectionInAtlas() {
-  const selected = state.selected;
-  if (!selected?.mesh) {
-    setAtlasStatus("select an entity to reveal");
-    return false;
-  }
-  selected.mesh.getWorldPosition(atlasWorldPosition);
-  const record = typeof window.liminaEntity === "function" ? window.liminaEntity(selected.id) : undefined;
-  const designRef = record?.origin?.input?.designRef;
-  return postAtlasReveal(
-    [atlasWorldPosition.x, atlasWorldPosition.z],
-    `Selection ${selected.id}`.slice(0, 256),
-    designRef,
-  );
-}
-
-async function waitForAtlasDerivedSource(source, generation, requireAtlasOpen) {
-  const deadline = performance.now() + ATLAS_SOURCE_WAIT_MS;
-  while (performance.now() < deadline) {
-    if (generation !== atlasFocusGeneration) throw Object.assign(new Error("Atlas focus was superseded"), { code: "ATLAS_FOCUS_SUPERSEDED" });
-    if (requireAtlasOpen && !atlasOpen()) throw Object.assign(new Error("Atlas focus was cancelled"), { code: "ATLAS_FOCUS_SUPERSEDED" });
-    if (playLifecycle.isAuthoringLocked() || state.scrubLimit !== undefined || state.rebooting) {
-      throw Object.assign(new Error("Atlas focus is unavailable outside live Edit"), { code: "ATLAS_FOCUS_UNAVAILABLE" });
-    }
-    const active = state.running?.derivedRevision?.();
-    if (active?.revision === source.revision && active?.headHash === source.headHash) return;
-    if (Number.isSafeInteger(active?.revision) && active.revision >= source.revision) {
-      throw Object.assign(new Error("Atlas source was superseded before it became active"), { code: "ATLAS_SOURCE_SUPERSEDED" });
-    }
-    setAtlasStatus(`building Atlas revision ${source.revision}`);
-    await new Promise((resolveWait) => setTimeout(resolveWait, 50));
-  }
-  throw Object.assign(new Error("Atlas revision did not become ready in time"), { code: "ATLAS_SOURCE_TIMEOUT" });
-}
-
-async function focusAtlasRequest(message, { requireAtlasOpen = true } = {}) {
-  if (!navigationDiscreteReady() || state.atlasFocusPending) {
-    setAtlasStatus("3D focus unavailable");
-    return;
-  }
-  const generation = ++atlasFocusGeneration;
-  state.atlasFocusPending = true;
-  leaveWorldOverviewPresentation();
-  atlasFocusRequiresOpen = requireAtlasOpen;
-  syncNavigationUi();
-  try {
-    await waitForAtlasDerivedSource(message.source, generation, requireAtlasOpen);
-    const navigation = state.running?.editorNavigation;
-    if (!navigation) throw Object.assign(new Error("editor navigation is unavailable"), { code: "NAVIGATION_UNAVAILABLE" });
-    const current = navigation.snapshot();
-    const target = [message.world[0], current.target[1], message.world[1]];
-    const provisional = navigation.destinationPose(target, message.radiusM);
-    const committed = await navigateToPose(provisional, {
-      kind: "atlas",
-      label: message.subject.label.slice(0, 64),
-    }, {
-      resolvePose: ({ context }) => {
-        const active = context.runtime.derivedRevision();
-        if (generation !== atlasFocusGeneration || (requireAtlasOpen && !atlasOpen())
-            || active?.revision !== message.source.revision || active?.headHash !== message.source.headHash) {
-          throw Object.assign(new Error("Atlas source changed before camera commit"), { code: "ATLAS_SOURCE_CHANGED" });
-        }
-        const height = context.runtime.derivedTerrainHeightAt(message.world[0], message.world[1]);
-        if (height === null) throw Object.assign(new Error("Atlas destination terrain is unavailable"), { code: "ATLAS_TERRAIN_UNAVAILABLE" });
-        return context.navigation.destinationPose(
-          [message.world[0], height, message.world[1]],
-          message.radiusM,
-        );
-      },
-    });
-    setAtlasStatus(committed ? `focused ${message.subject.label}` : "3D focus failed");
-  } catch (error) {
-    const code = typeof error?.code === "string" ? error.code : "ATLAS_FOCUS_FAILED";
-    setAtlasStatus(code);
-    setStatus("navigation", code);
-  } finally {
-    state.atlasFocusPending = false;
-    atlasFocusRequiresOpen = false;
-    syncNavigationUi();
-  }
-}
-
-function schedulePendingAtlasHandoff() {
-  if (!pendingAtlasHandoffFocus || atlasHandoffApplying || !navigationDiscreteReady()) return;
-  const focus = pendingAtlasHandoffFocus;
-  pendingAtlasHandoffFocus = undefined;
-  atlasHandoffApplying = true;
-  queueMicrotask(() => {
-    void focusAtlasRequest(focus, { requireAtlasOpen: false }).finally(() => { atlasHandoffApplying = false; });
-  });
-}
-
-function onAtlasMessage(event) {
-  const source = viewportUi.atlasFrame?.contentWindow;
-  if (!atlasOpen() || !source) return;
-  let message;
-  try { message = parseTrustedAtlasEditorMessageEvent(event, source, window.location.origin); }
-  catch { return; }
-  if (message.type === ATLAS_FOCUS_REQUEST) void focusAtlasRequest(message);
-}
 const pollTask = new CoalescedTask();
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
 const CLICK_MOVE_TOLERANCE_PX = 5;
 const pointerClick = { id: undefined, x: 0, y: 0 };
+// 2.0-C box select: Shift+drag with the select.pick ribbon tool draws a screen-space
+// marquee; pointerup selects every entity whose mesh projects inside the rect. A drag
+// shorter than BOX_SELECT_MIN_DRAG_PX falls through to the normal single-pick click.
+const BOX_SELECT_MIN_DRAG_PX = 4;
+const boxSelect = { active: false, pointerId: undefined, startX: 0, startY: 0, x: 0, y: 0 };
+// Scratch for the marquee projection loop — no per-entity allocation.
+const marqueeScratch = new THREE.Vector3();
 const SNAP_DEFAULTS = {
   translate: 0.5,
   rotateDegrees: 15,
@@ -762,13 +663,13 @@ function closeNavigationPanels() {
 
 function navigationDiscreteReady() {
   return Boolean(state.running?.editorNavigation && state.derivedEditClient && state.scrubLimit === undefined
-    && !state.rebooting && !state.navigationBusy && !state.atlasFocusPending && !playLifecycle.isAuthoringLocked());
+    && !state.rebooting && !state.navigationBusy && !playLifecycle.isAuthoringLocked());
 }
 
 function syncNavigationUi() {
   const navigation = state.running?.editorNavigation;
   const locked = playLifecycle.isAuthoringLocked();
-  const localReady = Boolean(navigation) && !locked && !state.rebooting && !state.navigationBusy && !state.atlasFocusPending;
+  const localReady = Boolean(navigation) && !locked && !state.rebooting && !state.navigationBusy;
   const mode = navigation?.mode?.() ?? navigationPreferences.mode;
   for (const [button, value] of [[viewportUi.navigationOrbit, "orbit"], [viewportUi.navigationFly, "fly"]]) {
     if (!button) continue;
@@ -788,11 +689,9 @@ function syncNavigationUi() {
   if (viewportUi.navigationSearchToggle) viewportUi.navigationSearchToggle.disabled = !discreteReady;
   if (viewportUi.navigationViewsToggle) viewportUi.navigationViewsToggle.disabled = !localReady || !navigationStateController || state.navigationBusy;
   if (viewportUi.navigationBookmarkSave) viewportUi.navigationBookmarkSave.disabled = !localReady || !navigationStateController || state.navigationBusy;
-  if (viewportUi.atlasReveal) viewportUi.atlasReveal.disabled = locked || !state.selected;
   for (const button of document.querySelectorAll("[data-navigation-entry]")) button.disabled = !discreteReady;
   document.body.classList.toggle("editor-navigation-fly", mode === "fly" && localReady);
   if (locked) closeNavigationPanels();
-  schedulePendingAtlasHandoff();
 }
 
 function setNavigationMode(modeInput, { persist = true } = {}) {
@@ -1070,9 +969,10 @@ function bindViewportUi() {
   viewportUi.play?.addEventListener("click", () => { void startPlay(); });
   viewportUi.pause?.addEventListener("click", () => { void togglePlayPause(); });
   viewportUi.stop?.addEventListener("click", () => { void stopPlay(); });
-  viewportUi.snapToggle?.addEventListener("click", () => toggleSnapping());
+  viewportUi.snapToggle?.addEventListener("click", () => { toggleSnapping(); syncGizmoOption("snap", viewportOptions.snapEnabled); });
   viewportUi.spaceToggle?.addEventListener("click", () => {
     setTransformSpace(viewportOptions.transformSpace === "local" ? "world" : "local");
+    syncGizmoOption("space", viewportOptions.transformSpace);
   });
   viewportUi.gridToggle?.addEventListener("click", () => toggleGrid());
   viewportUi.wireframeToggle?.addEventListener("click", () => toggleWireframe());
@@ -1099,26 +999,6 @@ function bindViewportUi() {
   });
   viewportUi.navigationSearchClose?.addEventListener("click", () => closeNavigationPanel(viewportUi.navigationSearch, viewportUi.navigationSearchToggle));
   viewportUi.navigationSearchInput?.addEventListener("input", renderNavigationSearch);
-  viewportUi.atlasToggle?.addEventListener("click", () => {
-    setAtlasOpen(!atlasOpen());
-    if (atlasOpen()) requestAnimationFrame(revealSelectionInAtlas);
-  });
-  viewportUi.atlasClose?.addEventListener("click", () => setAtlasOpen(false, { returnFocus: true }));
-  viewportUi.atlasMaximize?.addEventListener("click", () => setAtlasMaximized(!atlasWorkspaceState.maximized));
-  viewportUi.atlasSplitter?.addEventListener("pointerdown", beginAtlasResize);
-  viewportUi.atlasSplitter?.addEventListener("pointermove", updateAtlasResize);
-  viewportUi.atlasSplitter?.addEventListener("pointerup", finishAtlasResize);
-  viewportUi.atlasSplitter?.addEventListener("pointercancel", finishAtlasResize);
-  viewportUi.atlasSplitter?.addEventListener("keydown", resizeAtlasWithKeyboard);
-  viewportUi.atlasSplitter?.addEventListener("dblclick", () => {
-    setAtlasWorkspaceWidth(ATLAS_WORKSPACE_DEFAULT_WIDTH_PX, { persist: true });
-  });
-  viewportUi.atlasReveal?.addEventListener("click", revealSelectionInAtlas);
-  viewportUi.atlasFrame?.addEventListener("load", () => {
-    setAtlasStatus("ready");
-    revealSelectionInAtlas();
-  });
-  window.addEventListener("message", onAtlasMessage);
   viewportUi.navigationGotoToggle?.addEventListener("click", () => {
     if (viewportUi.navigationGoto?.hidden === false) closeNavigationPanel(viewportUi.navigationGoto, viewportUi.navigationGotoToggle);
     else openNavigationGoto();
@@ -1234,7 +1114,6 @@ function syncPlayUi(view = playLifecycle.view()) {
   if (locked) {
     hideBrushRing();
     hidePlaceGhost();
-    if (hud) hud.style.display = "none";
   } else {
     updateEditModeIndicator();
   }
@@ -1431,13 +1310,24 @@ function activateEditDerivedRevision(snapshot, { signal } = {}) {
       state.rebooting || playLifecycle.isAuthoringLocked()) {
     throw new Error("Edit derived presentation is not available");
   }
+  // Boot overlay: the manifest's real tx/tz chunk grid replaces the shimmer — the
+  // loading screen now shows THIS world's island shape being carried in.
+  state.bootOverlay?.setManifest(snapshot?.manifest);
   let activation;
   activation = (async () => {
-    await runtime.activateDerivedRevision(snapshot, { signal, contentAccess: derivedMainRealmContentAccess() });
+    try {
+      await runtime.activateDerivedRevision(snapshot, { signal, contentAccess: derivedMainRealmContentAccess() });
     assertRuntimeDerivedRevision(runtime, snapshot);
     if (signal?.aborted || epoch !== state.editRuntimeEpoch || state.running !== runtime ||
         state.scrubLimit !== undefined || state.rebooting || playLifecycle.isAuthoringLocked()) {
       throw new Error("Edit runtime changed during derived activation");
+      }
+    } catch (error) {
+      // The client ack only carries a code; the CAUSE must reach the status line
+      // or an activation loop is undebuggable (a real incident: rejected in a
+      // loop with no visible reason).
+      setStatus("derived", `ACTIVATION_FAILED ${error?.message ?? error}`);
+      throw error;
     }
     state.latestEditDerivedRevision = snapshot;
     bindNavigationIdentity(snapshot);
@@ -1463,6 +1353,20 @@ async function ensureEditDerivedClient() {
     activate: activateEditDerivedRevision,
     onStatus: (status) => {
       if (state.derivedEditClient !== client) return;
+      // Boot overlay: the fetch seam ({ phase:"fetch", fetched, total }) is emitted only
+      // by workers new enough to report download progress — without it the overlay keeps
+      // its indeterminate "carrying" pulse. activation-failed/error before any activation
+      // is NOT a boot failure (e.g. no derived publication yet): reveal the authored world.
+      if (status.phase === "fetch") {
+        state.bootOverlay?.setFetch(status.fetched, status.total, status.manifest);
+        return;
+      }
+      // No fetch seam (older worker): the client reaching ready means the manifest+chunk
+      // download has silently begun — fall back to the indeterminate "carrying" pulse.
+      if (status.phase === "ready") state.bootOverlay?.setFetch(undefined, undefined);
+      if (status.phase === "activating") state.bootOverlay?.setActivating(status.revision);
+      else if (status.phase === "activated") bootOverlayDone();
+      else if ((status.phase === "error" || status.phase === "activation-failed") && state.bootOverlay) bootOverlayDone();
       if (status.phase === "activated" || status.phase === "revision") {
         setStatus("derived", derivedStatusDetail(status));
       } else if (status.phase === "error" || status.phase === "activation-failed") {
@@ -1599,6 +1503,7 @@ function resetViewportConnection() {
     await closeDerivedClients({ forgetDiscovery: true });
     if (playLifecycle.isAuthoringLocked()) await stopPlay("DERIVED_CONNECTION_RESET");
     await state.historyTransition?.catch(() => undefined);
+    bootOverlayReset(); // a reset connection re-boots from scratch — and so does the overlay
     try { await waitForViewportIdle(); } catch { /* the old connection is already closed */ }
     const runtimes = new Set([state.playRuntime, state.running, state.editRuntimeDuringPlay]);
     await Promise.allSettled([...runtimes].filter(Boolean).map((runtime) => stopRuntime(runtime)));
@@ -1648,6 +1553,7 @@ async function tryConnect() {
     handleViewportDisconnect(client);
   };
   try {
+    bootOverlayEnsure(); // the island assembles itself from the first connect attempt
     await client.connect();
     await client.initialize("viewport_follower", "ses_viewport_" + Math.random().toString(36).slice(2, 8), "system.readonly", authToken);
     state.client = client;
@@ -1768,18 +1674,26 @@ async function applyWorldlogBatchInner(res) {
     state.dirty = true;
   }
   if (Array.isArray(res.commands) && res.commands.length > 0) {
-    const invalidatedDerived = invalidateEditDerivedRevision();
     const newCmds = res.commands;
     const authorCmds = toAuthorCommands(newCmds);
     for (const cmd of res.commands) state.commands.push(cmd);
     // While scrubbed into the past, accumulate new commands but don't hot-apply them to the
     // frozen past view (returning to live replays the full stream).
     if (state.scrubLimit !== undefined || playLifecycle.isAuthoringLocked()) {
-      // no-op: the past view stays put; state.commands keeps growing in the background
-    } else if (!invalidatedDerived && state.running && !state.rebooting && !res.reset) {
+      invalidateEditDerivedRevision();
+    } else if (state.running && !state.rebooting && !res.reset) {
+      // Hot-apply FIRST (sculpt-on-derived): commands the live runtime absorbs in place
+      // (terrain.deform is LIVE_IN_PLACE) must NOT invalidate the derived presentation —
+      // the derived watch client delivers the recompiled revision into THIS runtime
+      // (content-delta activation), so a dab no longer reboots the viewport. Only a
+      // command the runtime cannot absorb (structural/worker divergence) invalidates.
       const r = await state.running.applyAuthorCommands(authorCmds);
-      if (r.needsReboot) state.dirty = true;
+      if (r.needsReboot) {
+        invalidateEditDerivedRevision();
+        state.dirty = true;
+      }
     } else {
+      invalidateEditDerivedRevision();
       state.dirty = true;
     }
     showActiveAgentTargets(authorCmds);
@@ -2038,6 +1952,90 @@ function deselectEntity() {
   syncNavigationUi();
 }
 
+// --- Box select marquee (2.0-C) -------------------------------------------------------
+// Overlay div over the canvas, created once and reused. The canvas fills .panel-body
+// (#viewport-body is position:absolute inset:0), so absolute coords anchor correctly.
+let marqueeEl;
+function ensureMarquee() {
+  if (marqueeEl) return marqueeEl;
+  marqueeEl = document.createElement("div");
+  marqueeEl.style.cssText = "position:absolute;display:none;pointer-events:none;z-index:4;"
+    + "border:1px dashed rgba(74,163,255,0.9);background:rgba(74,163,255,0.12);";
+  (document.getElementById("viewport-body") ?? canvas.parentElement)?.appendChild(marqueeEl);
+  return marqueeEl;
+}
+function updateMarqueeOverlay() {
+  const el = ensureMarquee();
+  const parentRect = el.parentElement?.getBoundingClientRect();
+  if (!parentRect) return;
+  el.style.display = "block";
+  el.style.left = `${Math.min(boxSelect.startX, boxSelect.x) - parentRect.left}px`;
+  el.style.top = `${Math.min(boxSelect.startY, boxSelect.y) - parentRect.top}px`;
+  el.style.width = `${Math.abs(boxSelect.x - boxSelect.startX)}px`;
+  el.style.height = `${Math.abs(boxSelect.y - boxSelect.startY)}px`;
+}
+function hideMarquee() { if (marqueeEl) marqueeEl.style.display = "none"; }
+
+function endBoxSelect() {
+  boxSelect.active = false;
+  boxSelect.pointerId = undefined;
+  hideMarquee();
+  state.running?.setCameraControlsEnabled?.(true);
+}
+
+// Every entity whose mesh's projected screen position falls inside the marquee rect.
+function entitiesInMarquee(x0, y0, x1, y1) {
+  const running = state.running;
+  if (!running?.camera || !running?.entities) return [];
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return [];
+  const minX = Math.min(x0, x1), maxX = Math.max(x0, x1);
+  const minY = Math.min(y0, y1), maxY = Math.max(y0, y1);
+  const ids = [];
+  for (const id of running.entities.ids()) {
+    const mesh = running.entities.resolve(id)?.mesh;
+    if (!mesh) continue;
+    mesh.getWorldPosition(marqueeScratch).project(running.camera);
+    if (marqueeScratch.z < -1 || marqueeScratch.z > 1) continue; // behind the camera / outside depth
+    const sx = rect.left + (marqueeScratch.x + 1) * 0.5 * rect.width;
+    const sy = rect.top + (1 - marqueeScratch.y) * 0.5 * rect.height;
+    if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) ids.push(id);
+  }
+  return ids;
+}
+
+// --- Secondary selection cues (2.0-C) --------------------------------------------------
+// One accent BoxHelper per non-primary selected id (the primary keeps the gizmo), in the
+// agentHighlights idiom. Rebuilt on every selection change and after reboot() re-parents
+// the scene (helpers added to the old scene die with it).
+const SECONDARY_SELECTION_COLOR = 0x4aa3ff; // studio accent (CUE_PALETTE[0])
+const secondaryHelpers = new Map(); // entityId -> BoxHelper
+
+function clearSecondaryHelpers() {
+  for (const helper of secondaryHelpers.values()) {
+    try { helper.parent?.remove(helper); } catch { /* ignore */ }
+    try { helper.geometry?.dispose?.(); } catch { /* ignore */ }
+    try { disposeMaterial(helper.material); } catch { /* ignore */ }
+  }
+  secondaryHelpers.clear();
+}
+
+function rebuildSecondaryHelpers() {
+  clearSecondaryHelpers();
+  const running = state.running;
+  if (!running?.scene) return;
+  const primary = editorSelection.get();
+  for (const id of editorSelection.getMany()) {
+    if (id === primary) continue;
+    const mesh = running.entities?.resolve?.(id)?.mesh;
+    if (!mesh) continue;
+    const helper = new THREE.BoxHelper(mesh, SECONDARY_SELECTION_COLOR);
+    helper.raycast = () => {}; // cursor overlays must never intercept picking
+    running.scene.add(helper);
+    secondaryHelpers.set(id, helper);
+  }
+}
+
 function pickEntity(event) {
   if (playLifecycle.isAuthoringLocked()) return;
   const running = state.running;
@@ -2063,9 +2061,25 @@ function pickEntity(event) {
 
 // --- In-game terrain brush (Slice 1) ---------------------------------------------------------------
 // Raycast the ground under the cursor, then stamp a terrain.deform through the recorded command path
-// (write-client -> server -> worldlog broadcast -> live in-place apply). NO optimistic pre-apply:
-// terrain.deform is ADDITIVE, so applying locally AND via the broadcast-back would double every dab.
+// (write-client -> server -> worldlog broadcast -> live in-place apply). NO optimistic pre-apply on
+// EditableTerrain worlds: terrain.deform is ADDITIVE there, so applying locally AND via the
+// broadcast-back would double every dab. DERIVED terrain is the opposite (D5.2): the render realm is
+// inert for the recorded deform, so without a local preview the terrain would only move seconds later
+// when the recompiled revision lands — hence the optimistic sculpt preview below.
 const SCULPT_TOOLS = new Set(["raise", "lower", "smooth", "flatten", "paint"]);
+// D5.2 preview seam: morph the live derived chunk meshes NOW with the engine's own brush kernel
+// (terrainBrushKernel from the vendor bundle == the materializeTerrainBrushOp math). The recompiled
+// revision remounts the touched chunks and replaces the preview — no drift correction. Fire-and-
+// forget with failure rollback (NOT apply-on-success): the morph must land in the dab's own frame,
+// and a failed commit restores the vertices byte-identical from the pre-dab snapshot. Caveat: dabs
+// are not serialized across the await, so a FAILED dab rolls its whole-chunk snapshot back over any
+// later dab's preview on that chunk — failure-only, and the next revision remounts the chunk anyway.
+function sculptPreviewFor(dab) {
+  if (dab.mode !== "raise" && dab.mode !== "lower") return null; // smooth/flatten reject authority-side; noise is ribbon-unreachable
+  const meshes = collectDerivedTerrainMeshes(state.running?.scene);
+  if (meshes.length === 0) return null; // EditableTerrain worlds: the broadcast applies the deform — no preview (additive double-apply)
+  return applySculptPreview(meshes, dab, terrainBrushKernel);
+}
 function raycastGround(event) {
   const running = state.running;
   if (!running?.camera || !running?.scene) return null;
@@ -2092,7 +2106,14 @@ async function brushDab(event) {
       if (event.ctrlKey && mode === "raise") mode = "lower"; // Ctrl inverts raise<->lower
       else if (event.ctrlKey && mode === "lower") mode = "raise";
       const delta = mode === "flatten" ? state.flattenTarget : state.brush.strength; // flatten = target height
-      await deformTerrain([p.x, p.z], state.brush.radius, delta, mode, state.brush.falloff);
+      const dab = { center: [p.x, p.z], radius: state.brush.radius, delta, mode, falloff: state.brush.falloff };
+      const preview = sculptPreviewFor(dab); // morphs synchronously — visible this frame
+      try {
+        await deformTerrain(dab.center, dab.radius, delta, mode, dab.falloff);
+      } catch (dabError) {
+        if (preview !== null) rollbackSculptPreview(preview); // unrecorded dab must not linger visually
+        throw dabError;
+      }
     }
     state.strokeDid = true;
     await poll(); // pull the recorded edit straight back (localhost round-trip) so it renders now
@@ -2188,6 +2209,98 @@ function updatePlaceGhost(event) {
 }
 function hidePlaceGhost() { if (placeGhost) placeGhost.visible = false; }
 
+// Water + scatter tools (2.0-C): the ribbon's active id is the source of truth
+// — these are NOT brush tools, so state.brushTool keeps its last brush value.
+async function applyWaterPlane() {
+  const controller = viewportTooling.controller;
+  try {
+    setStatus("water", "applying plane…");
+    await addWaterPlane(controller.option("water.plane", "level"), controller.option("water.plane", "size"));
+    await poll();
+    setStatus("water", "plane applied");
+  } catch (e) {
+    resetWriter();
+    surfaceViewportWarning("water plane failed", e);
+  }
+}
+
+// River draft: clicked centerline points (world xyz) + a preview line that
+// re-parents after reboot like the brush ring. Double-click commits through
+// the recorded world.addRiver path; Esc cancels.
+const riverDraft = { points: [], line: null };
+function riverDraftClear() {
+  riverDraft.points = [];
+  if (riverDraft.line) {
+    riverDraft.line.parent?.remove(riverDraft.line);
+    riverDraft.line.geometry.dispose();
+    riverDraft.line = null;
+  }
+}
+function riverDraftRender() {
+  const running = state.running;
+  if (!running?.scene || typeof THREE !== "object") return;
+  if (riverDraft.line && riverDraft.line.parent !== running.scene) {
+    riverDraft.line.parent?.remove(riverDraft.line);
+    running.scene.add(riverDraft.line);
+  }
+  if (!riverDraft.line) {
+    riverDraft.line = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x4aa3ff }));
+    riverDraft.line.raycast = () => {}; // previews never intercept the ground raycast
+    riverDraft.line.renderOrder = 999;
+    running.scene.add(riverDraft.line);
+  }
+  riverDraft.line.geometry.dispose();
+  riverDraft.line.geometry = new THREE.BufferGeometry().setFromPoints(
+    riverDraft.points.map(([x, y, z]) => new THREE.Vector3(x, y + 0.15, z)),
+  );
+}
+async function commitRiverDraft() {
+  if (riverDraft.points.length < 2) { riverDraftClear(); return; }
+  const controller = viewportTooling.controller;
+  const points = riverDraft.points.map(([x, , z]) => [Math.round(x * 100) / 100, Math.round(z * 100) / 100]);
+  riverDraftClear();
+  try {
+    setStatus("water", `committing river (${points.length} pts)…`);
+    await addRiver(points, controller.option("water.river", "width"), controller.option("water.river", "class"));
+    await poll();
+    setStatus("water", "river committed");
+  } catch (e) {
+    resetWriter();
+    surfaceViewportWarning("river commit failed", e);
+  }
+}
+
+// Scatter brush: one dab = one recorded vegetation.scatter confined to the
+// brush disc. Dab spacing >= radius so the inclusion discs TOUCH instead of
+// stacking (overlaps would double-plant). Seeds derive from a module counter
+// + dab index — Math.random would break replay determinism.
+let scatterStrokeSeed = 0;
+let scatterStroke = null;
+async function scatterDab(event) {
+  if (scatterStroke === null) return;
+  const controller = viewportTooling.controller;
+  const p = raycastGround(event);
+  if (!p) return;
+  const radius = controller.option("place.scatter", "radius");
+  if (scatterStroke.last !== null && Math.hypot(p.x - scatterStroke.last[0], p.z - scatterStroke.last[1]) < radius) return;
+  scatterStroke.last = [p.x, p.z];
+  const dab = scatterStroke.dab++;
+  try {
+    await scatterVegetation({
+      species: controller.option("place.scatter", "species"),
+      density: controller.option("place.scatter", "density"),
+      seed: (scatterStroke.seed * 4096 + dab) >>> 0,
+      x: p.x,
+      z: p.z,
+      r: radius,
+    });
+    state.strokeDid = true;
+    await poll();
+  } catch (e) {
+    surfaceViewportWarning("scatter failed", e);
+  }
+}
+
 // Asset placement remains a legacy command and is deliberately excluded from transactional undo.
 async function placeCatalogAsset(event) {
   if (state.placing) return;
@@ -2209,168 +2322,18 @@ async function placeCatalogAsset(event) {
   }
 }
 
-// The terrain-edit HUD (Slice 2): a floating panel over the viewport with the tool palette, brush
-// sliders, falloff, and undo/redo. It IS the can't-miss edit indicator (accent dot + outline + cursor).
-let hud = null;
-const HUD_TOOLS = [["raise", "Raise"], ["lower", "Lower"], ["smooth", "Smooth"], ["flatten", "Flatten"], ["paint", "Paint"], ["catalog", "Catalog"]];
-const HUD_MATS = [["sand", "Sand", "#c4b68e"], ["grass", "Grass", "#5f7f3c"], ["rock", "Rock", "#756657"], ["dirt", "Dirt", "#6f5334"]];
-function styleToolBtn(b, active) {
-  b.style.cssText = "padding:6px 4px;border-radius:5px;font:12px system-ui,sans-serif;cursor:pointer;color:#fff;" +
-    "border:1px solid " + (active ? "#e0552b" : "#454550") + ";background:" + (active ? "#e0552b" : "#2a2a32");
-}
-// Drag support: grab `handle` to reposition `el` over the viewport. Buttons inside the handle keep
-// their clicks (a drag never starts on them). Coordinates are relative to the positioned parent.
-function makeDraggable(el, handle) {
-  let dragging = false, dx = 0, dy = 0;
-  handle.addEventListener("pointerdown", (e) => {
-    if (e.target instanceof HTMLElement && e.target.tagName === "BUTTON") return;
-    dragging = true;
-    const r = el.getBoundingClientRect();
-    dx = e.clientX - r.left;
-    dy = e.clientY - r.top;
-    try { handle.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-    e.preventDefault();
-    e.stopPropagation();
-  });
-  handle.addEventListener("pointermove", (e) => {
-    if (!dragging) return;
-    const pr = el.offsetParent ? el.offsetParent.getBoundingClientRect() : { left: 0, top: 0 };
-    el.style.left = Math.max(0, e.clientX - pr.left - dx) + "px";
-    el.style.top = Math.max(0, e.clientY - pr.top - dy) + "px";
-  });
-  const endDrag = (e) => {
-    if (!dragging) return;
-    dragging = false;
-    try { handle.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
-  };
-  handle.addEventListener("pointerup", endDrag);
-  handle.addEventListener("pointercancel", endDrag);
-}
-
-function buildTerrainHud() {
-  if (hud) return;
-  hud = document.createElement("div");
-  hud.className = "terrain-edit-hud";
-  hud.style.cssText = "position:absolute;top:10px;left:10px;z-index:30;width:216px;padding:12px;border-radius:8px;" +
-    "background:rgba(22,22,27,.95);color:#eee;font:13px system-ui,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.5);display:none";
-  const head = document.createElement("div");
-  head.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:10px;cursor:move";
-  head.innerHTML = '<span style="width:9px;height:9px;border-radius:999px;background:#e0552b;box-shadow:0 0 6px #e0552b"></span>' +
-    '<strong style="letter-spacing:.03em;flex:1">TERRAIN EDIT</strong>';
-  const exit = document.createElement("button");
-  exit.textContent = "F4 exit";
-  exit.style.cssText = "padding:3px 8px;border-radius:5px;border:1px solid #454550;background:#2a2a32;color:#bbb;font:11px system-ui;cursor:pointer";
-  exit.onclick = () => { state.editMode = false; reconcileNavigationEditMode(); updateEditModeIndicator(); };
-  head.appendChild(exit);
-  hud.appendChild(head);
-  const tools = document.createElement("div");
-  tools.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px";
-  hud._toolBtns = {};
-  for (const [id, label] of HUD_TOOLS) {
-    const b = document.createElement("button");
-    b.textContent = label;
-    b.onclick = () => { state.brushTool = id; refreshHudTools(); setStatus("terrain edit", "tool: " + id); };
-    tools.appendChild(b);
-    hud._toolBtns[id] = b;
-  }
-  hud.appendChild(tools);
-  // Material picker — only shown while the Paint tool is active.
-  const matRow = document.createElement("div");
-  matRow.style.cssText = "display:none;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px";
-  hud._matBtns = {};
-  for (const [id, label, hex] of HUD_MATS) {
-    const b = document.createElement("button");
-    b.textContent = label;
-    b.dataset.hex = hex;
-    b.onclick = () => { state.paintMaterial = id; refreshHudMats(); };
-    matRow.appendChild(b);
-    hud._matBtns[id] = b;
-  }
-  hud._matRow = matRow;
-  hud.appendChild(matRow);
-  const mkSlider = (label, min, max, step, get, set, fmt) => {
-    const wrap = document.createElement("div");
-    wrap.style.margin = "0 0 8px";
-    const lab = document.createElement("label");
-    lab.style.cssText = "display:flex;justify-content:space-between;font-size:12px;opacity:.85;margin-bottom:2px";
-    const valSpan = document.createElement("span");
-    lab.append(label + " ");
-    lab.appendChild(valSpan);
-    const inp = document.createElement("input");
-    inp.type = "range"; inp.min = min; inp.max = max; inp.step = step; inp.value = get(); inp.style.width = "100%";
-    valSpan.textContent = fmt(get());
-    inp.oninput = () => { const v = parseFloat(inp.value); set(v); valSpan.textContent = fmt(v); };
-    wrap.appendChild(lab); wrap.appendChild(inp); hud.appendChild(wrap);
-  };
-  mkSlider("Radius", 2, 60, 1, () => state.brush.radius, (v) => { state.brush.radius = v; if (brushRing?.visible) brushRing.scale.set(v, v, v); }, (v) => v + " m");
-  mkSlider("Strength", 0.2, 4, 0.1, () => state.brush.strength, (v) => { state.brush.strength = v; }, (v) => v.toFixed(1));
-  const fWrap = document.createElement("div");
-  fWrap.style.margin = "0 0 4px";
-  const fLab = document.createElement("label");
-  fLab.textContent = "Falloff";
-  fLab.style.cssText = "display:block;font-size:12px;opacity:.85;margin-bottom:2px";
-  const fSel = document.createElement("select");
-  fSel.style.cssText = "width:100%;background:#2a2a32;color:#eee;border:1px solid #454550;border-radius:5px;padding:4px";
-  for (const o of ["smooth", "linear", "constant"]) {
-    const opt = document.createElement("option"); opt.value = o; opt.textContent = o; fSel.appendChild(opt);
-  }
-  fSel.value = state.brush.falloff;
-  fSel.onchange = () => { state.brush.falloff = fSel.value; };
-  fWrap.appendChild(fLab); fWrap.appendChild(fSel); hud.appendChild(fWrap);
-  const ur = document.createElement("div");
-  ur.style.cssText = "display:flex;gap:6px;margin-top:10px";
-  const undoB = document.createElement("button");
-  undoB.textContent = "↶ Undo";
-  undoB.title = "Undo the latest committed scene edit";
-  undoB.onclick = () => { void undoAuthoringEdit(); };
-  const redoB = document.createElement("button");
-  redoB.textContent = "↷ Redo";
-  redoB.title = "Reapply the latest undone scene edit";
-  redoB.onclick = () => { void redoAuthoringEdit(); };
-  for (const b of [undoB, redoB]) {
-    b.style.cssText = "flex:1;padding:6px;border-radius:5px;border:1px solid #454550;background:#2a2a32;color:#eee;font:12px system-ui;cursor:pointer";
-    ur.appendChild(b);
-  }
-  hud.appendChild(ur);
-  const par = canvas.parentElement || document.body;
-  if (par !== document.body && getComputedStyle(par).position === "static") par.style.position = "relative";
-  par.appendChild(hud);
-  makeDraggable(hud, head);
-}
-function styleMatBtn(b, active) {
-  const hex = b.dataset.hex || "#888";
-  b.style.cssText = "padding:6px 4px;border-radius:5px;font:12px system-ui,sans-serif;cursor:pointer;color:#fff;" +
-    "text-shadow:0 1px 2px rgba(0,0,0,.6);border:2px solid " + (active ? "#fff" : "#454550") + ";background:" + hex;
-}
-function refreshHudMats() {
-  if (!hud?._matBtns) return;
-  for (const id of Object.keys(hud._matBtns)) styleMatBtn(hud._matBtns[id], id === state.paintMaterial);
-}
-function refreshHudTools() {
-  if (!hud?._toolBtns) return;
-  for (const [id] of HUD_TOOLS) styleToolBtn(hud._toolBtns[id], id === state.brushTool);
-  if (hud._matRow) {
-    const paint = state.brushTool === "paint";
-    hud._matRow.style.display = paint ? "grid" : "none";
-    if (paint) refreshHudMats();
-  }
-  if (state.brushTool === "catalog") {
-    hideBrushRing();
-    if (state.editMode && !window.liminaWindows?.isOpen?.("content-browser")) void openContentBrowser();
-  } else hidePlaceGhost();
-}
 function updateEditModeIndicator() {
-  buildTerrainHud();
   viewportToolsEl?.classList.toggle("terrain-edit-active", state.editMode);
   if (state.editMode) {
-    refreshHudTools();
-    const catalogPlacement = state.brushTool === "catalog" && !!assetPlacement.get().entry;
-    hud.style.display = catalogPlacement ? "none" : "block";
+    // Catalog arming auto-opens the Content Browser (ported from the retired HUD).
+    if (state.brushTool === "catalog") {
+      hideBrushRing();
+      if (!window.liminaWindows?.isOpen?.("content-browser")) void openContentBrowser();
+    }
     canvas.style.outline = "2px solid #e0552b";
     canvas.style.outlineOffset = "-2px";
     canvas.style.cursor = "crosshair";
   } else {
-    hud.style.display = "none";
     canvas.style.outline = "";
     canvas.style.cursor = "";
     hideBrushRing();
@@ -2516,6 +2479,7 @@ function restoreEditState(saved) {
   state.brushTool = saved.brushTool;
   state.brush = { ...saved.brush };
   state.paintMaterial = saved.paintMaterial;
+  syncRibbonFromState();
   if (saved.placement.entry) {
     assetPlacement.arm(saved.placement.entry);
     const currentYaw = assetPlacement.get().yaw;
@@ -2554,7 +2518,7 @@ function createPlayCanvas(width, height) {
   playCanvas.height = height;
   playCanvas.setAttribute("aria-label", "Isolated Play viewport");
   canvas.hidden = true;
-  canvas.parentElement?.insertBefore(playCanvas, viewportUi.atlasPanel ?? null);
+  canvas.parentElement?.insertBefore(playCanvas, canvas.nextSibling);
   state.playCanvas = playCanvas;
   viewportResizeObserver?.observe(playCanvas);
   return playCanvas;
@@ -2665,6 +2629,7 @@ async function startPlay() {
           forceWebGL: true,
           quality: graphicsSettings.tier,
           disposeRendererOnStop: true,
+          ...(readDerivedResidencyPref() === undefined ? {} : { derivedResidency: readDerivedResidencyPref() }),
           ...(initialDerivedRevision === undefined ? {} : {
             initialDerivedRevision,
             initialDerivedContentAccess: derivedMainRealmContentAccess(),
@@ -2816,6 +2781,7 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
         ? `snapshot@seq${bootPayload.snapshotSeq} + ${kept.length} tail commands${past ? " (history)" : ""}`
         : `${kept.length} authoring commands${past ? " (history)" : ""}`,
     );
+    state.bootOverlay?.setReplay(kept.length);
     const initialDerivedRevision = past ? undefined : state.latestEditDerivedRevision;
     try {
       state.running = await runLive({
@@ -2827,12 +2793,15 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
         input: window,
         renderHost: editRenderHost,
         quality: graphicsSettings.tier,
-        onStatus: (phase, detail) => setEditRuntimeStatus(
-          phase,
-          phase === "error" && initialDerivedRevision !== undefined
-            ? "DERIVED_EDIT_INITIAL_ACTIVATION_FAILED"
-            : detail,
-        ),
+        onStatus: (phase, detail) => {
+          bootOverlayRuntimeStep(phase, detail);
+          setEditRuntimeStatus(
+            phase,
+            phase === "error" && initialDerivedRevision !== undefined
+              ? "DERIVED_EDIT_INITIAL_ACTIVATION_FAILED"
+              : detail,
+          );
+        },
         ...(initialDerivedRevision === undefined ? {} : {
           initialDerivedRevision,
           initialDerivedContentAccess: derivedMainRealmContentAccess(),
@@ -2842,6 +2811,7 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
           mode: state.editMode ? "orbit" : navigationPreferences.mode,
           speedMps: navigationPreferences.speedMps,
         },
+        ...(readDerivedResidencyPref() === undefined ? {} : { derivedResidency: readDerivedResidencyPref() }),
         // WebGL2 backend: some drivers lose the WebGPU device mid-render (black canvas); the live
         // /examples site + the old viewport force WebGL2 for the same reason.
         forceWebGL: true,
@@ -2871,6 +2841,7 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
       // startup error). runLive already reported the SPECIFIC reason via onStatus=setStatus — do NOT
       // stomp it with a generic "no COOP/COEP or WebGPU" message (which masked real authoring/worker
       // failures as a fake GPU error). Leave the precise status runLive set.
+      bootOverlayFail(state.bootRuntimeError ?? "the viewport could not start in this browser");
       if (throwOnError) throw new Error("Edit runtime could not be restored in this browser");
       return;
     }
@@ -2886,11 +2857,16 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
     installGizmo(state.running);
     const selectedId = editorSelection.get();
     if (selectedId !== undefined) selectEntity(selectedId, state.running);
+    rebuildSecondaryHelpers(); // helpers parented to the torn-down scene died with it
     installGridHelper(state.running);
     applyWireframeMode(state.running);
     restoreEditState(savedEditState);
     const authored = kept.length - failures.length;
     const bootLabel = bootPayload ? `snapshot@seq${bootPayload.snapshotSeq} + ` : "";
+    // Boot overlay: an inline derived activation (initialDerivedRevision) means the world
+    // is already presented; no derived service means there will never be an activation —
+    // in both cases the runtime-ready moment ends the loading experience.
+    if (!past && (initialDerivedRevision !== undefined || derivedRuntimeDiscovery === undefined)) bootOverlayDone();
     setStatus(
       past ? "past" : "live",
       failures.length > 0
@@ -2900,6 +2876,7 @@ async function reboot({ allowWhilePlay = false, restore, throwOnError = false } 
   } catch (e) {
     const message = e && e.message ? e.message : String(e);
     setStatus("error", message);
+    bootOverlayFail(message);
     if (abandonFastBoot(message)) void poll();
     if (throwOnError) throw e;
   } finally {
@@ -2916,9 +2893,48 @@ canvas.addEventListener("pointerdown", (event) => {
   pointerClick.id = event.pointerId;
   pointerClick.x = event.clientX;
   pointerClick.y = event.clientY;
+  // 2.0-C: Shift+drag with select.pick armed is a marquee box-select — suppress orbit
+  // for the drag and finalize the multi-selection on pointerup.
+  if (event.shiftKey && !playLifecycle.isAuthoringLocked()
+      && viewportTooling.controller.activeId() === "select.pick") {
+    boxSelect.active = true;
+    boxSelect.pointerId = event.pointerId;
+    boxSelect.startX = boxSelect.x = event.clientX;
+    boxSelect.startY = boxSelect.y = event.clientY;
+    try { canvas.setPointerCapture(event.pointerId); } catch { /* ignore */ }
+    state.running?.setCameraControlsEnabled?.(false);
+    event.preventDefault();
+    return;
+  }
+  // water.river: each click adds a centerline vertex (double-click commits).
+  if (viewportTooling.controller.activeId() === "water.river" && !playLifecycle.isAuthoringLocked()) {
+    const p = raycastGround(event);
+    if (p) {
+      const last = riverDraft.points[riverDraft.points.length - 1];
+      if (!last || Math.hypot(p.x - last[0], p.z - last[2]) > 1e-3) {
+        riverDraft.points.push([p.x, p.y, p.z]);
+        riverDraftRender();
+      }
+    }
+    event.preventDefault();
+    return;
+  }
+  // place.scatter: a drag plants forest dabs — same stroke discipline as sculpt.
+  if (viewportTooling.controller.activeId() === "place.scatter" && !playLifecycle.isAuthoringLocked()) {
+    state.brushStroking = true;
+    state.strokeDid = false;
+    scatterStroke = { seed: (scatterStrokeSeed = (scatterStrokeSeed + 1) >>> 0), dab: 0, last: null };
+    try { canvas.setPointerCapture(event.pointerId); } catch { /* ignore */ }
+    state.running?.setCameraControlsEnabled?.(false);
+    event.preventDefault();
+    void scatterDab(event);
+    return;
+  }
   // Terrain edit mode: a drag on the ground sculpts — UNLESS Space is held, which hands the drag to the
-  // camera so you can reframe and keep editing without leaving edit mode.
-  if (!playLifecycle.isAuthoringLocked() && state.editMode && !state.spaceNav && SCULPT_TOOLS.has(state.brushTool)) {
+  // camera so you can reframe and keep editing without leaving edit mode. The ribbon must actually have
+  // a brush tool armed: brushTool alone can be stale (water/scatter leave it untouched).
+  if (!playLifecycle.isAuthoringLocked() && state.editMode && !state.spaceNav && SCULPT_TOOLS.has(state.brushTool)
+      && (viewportTooling.controller.activeId() === "terrain.sculpt" || viewportTooling.controller.activeId() === "paint.material")) {
     state.brushStroking = true;
     state.strokeDid = false;
     if (state.brushTool === "flatten") { const g = raycastGround(event); state.flattenTarget = g ? g.y : 0; }
@@ -2930,25 +2946,72 @@ canvas.addEventListener("pointerdown", (event) => {
 });
 canvas.addEventListener("pointermove", (event) => {
   if (!event.isPrimary) return;
+  if (boxSelect.active && event.pointerId === boxSelect.pointerId) {
+    boxSelect.x = event.clientX;
+    boxSelect.y = event.clientY;
+    updateMarqueeOverlay();
+  }
   if (state.editMode && !playLifecycle.isAuthoringLocked()) {
-    // The cursor overlay tracks the active tool: sculpt/paint → brush ring, catalog → footprint ghost.
-    if (state.brushTool === "catalog") updatePlaceGhost(event);
-    else updateBrushRing(event);
+    // The cursor overlay tracks the ribbon's active tool: catalog → footprint
+    // ghost, brush tools + scatter → brush ring, water tools → no overlay.
+    const activeId = viewportTooling.controller.activeId();
+    if (activeId === "place.catalog" || state.brushTool === "catalog") updatePlaceGhost(event);
+    else if (activeId === "terrain.sculpt" || activeId === "paint.material" || activeId === "place.scatter") updateBrushRing(event);
+    else { hideBrushRing(); hidePlaceGhost(); }
   }
   if (!state.brushStroking) return;
   const now = performance.now();
   if (now - state.brushLast < 55) return; // throttle dabs so a drag doesn't flood the server
   state.brushLast = now;
-  void brushDab(event);
+  void (scatterStroke !== null ? scatterDab(event) : brushDab(event));
 });
 canvas.addEventListener("pointerleave", () => { hideBrushRing(); hidePlaceGhost(); });
+canvas.addEventListener("dblclick", (event) => {
+  if (viewportTooling.controller.activeId() !== "water.river") return;
+  event.preventDefault();
+  void commitRiverDraft();
+});
+// Drag-drop placement (2.0-C): a catalog row drag arms the placement store at
+// dragstart (content-browser.js), so dragover only needs the ghost preview and
+// drop lands exactly where the pointer is — same recorded placeCatalogAsset
+// path as click-to-place.
+canvas.addEventListener("dragover", (event) => {
+  if (playLifecycle.isAuthoringLocked() || viewportIsReadOnly()) return;
+  if (!assetPlacement.get().entry) return;
+  event.preventDefault(); // allow the drop
+  updatePlaceGhost(event);
+});
+canvas.addEventListener("dragleave", () => hidePlaceGhost());
+canvas.addEventListener("drop", (event) => {
+  if (playLifecycle.isAuthoringLocked() || viewportIsReadOnly()) return;
+  if (!assetPlacement.get().entry) return;
+  event.preventDefault();
+  state.editMode = true;
+  state.brushTool = "catalog";
+  updateEditModeIndicator();
+  syncRibbonFromState();
+  void placeCatalogAsset(event);
+});
 canvas.addEventListener("pointerup", (event) => {
   if (!event.isPrimary || pointerClick.id !== event.pointerId) return;
   const dx = event.clientX - pointerClick.x;
   const dy = event.clientY - pointerClick.y;
   pointerClick.id = undefined;
+  if (boxSelect.active && event.pointerId === boxSelect.pointerId) {
+    const dragged = Math.hypot(event.clientX - boxSelect.startX, event.clientY - boxSelect.startY);
+    const { startX, startY } = boxSelect;
+    endBoxSelect();
+    if (dragged >= BOX_SELECT_MIN_DRAG_PX) {
+      const ids = entitiesInMarquee(startX, startY, event.clientX, event.clientY);
+      if (ids.length === 0) editorSelection.clear("viewport");
+      else editorSelection.selectMany(ids, "viewport");
+      return; // a marquee never falls through to single-entity picking
+    }
+    // < 4px: treat as a plain click — fall through to pickEntity below.
+  }
   if (state.brushStroking) {
     state.brushStroking = false;
+    scatterStroke = null;
     try { canvas.releasePointerCapture(event.pointerId); } catch { /* ignore */ }
     state.running?.setCameraControlsEnabled?.(true);
     if (state.strokeDid) void poll();
@@ -2956,9 +3019,16 @@ canvas.addEventListener("pointerup", (event) => {
   }
   if (Math.hypot(dx, dy) <= CLICK_MOVE_TOLERANCE_PX) {
     if (playLifecycle.isAuthoringLocked()) return;
+    // water.plane: a click applies the world water plane at the option level.
+    if (viewportTooling.controller.activeId() === "water.plane") {
+      void applyWaterPlane();
+      return;
+    }
     // Catalog place tool: a click on the ground places the armed asset (a drag still orbits the
-    // camera — "catalog" is not in SCULPT_TOOLS, so no stroke ever starts).
-    if (state.editMode && !state.spaceNav && state.brushTool === "catalog" && assetPlacement.get().entry) {
+    // camera — "catalog" is not in SCULPT_TOOLS, so no stroke ever starts). The ribbon must have
+    // the Place tool armed: brushTool "catalog" alone can be stale (water/scatter keep it).
+    if (state.editMode && !state.spaceNav && state.brushTool === "catalog"
+        && viewportTooling.controller.activeId() === "place.catalog" && assetPlacement.get().entry) {
       void placeCatalogAsset(event);
       return;
     }
@@ -2966,17 +3036,48 @@ canvas.addEventListener("pointerup", (event) => {
   }
 });
 canvas.addEventListener("pointercancel", (event) => {
+  if (boxSelect.active && event.pointerId === boxSelect.pointerId) endBoxSelect();
   if (state.brushStroking) {
     state.brushStroking = false;
     state.running?.setCameraControlsEnabled?.(true);
   }
   if (pointerClick.id === event.pointerId) pointerClick.id = undefined;
 });
-editorSelection.subscribe(({ selectedId }) => {
+const revealScratch = new THREE.Vector3();
+editorSelection.subscribe(({ selectedId, source }) => {
   if (selectedId === undefined) deselectEntity();
   else selectEntity(selectedId, state.running);
-  if (atlasOpen() && selectedId !== undefined) revealSelectionInAtlas();
+  rebuildSecondaryHelpers();
+  // 2.0-D 3D → Atlas reveal: a selection made in the viewport/outliner pans
+  // the native atlas map to the entity (app.js consumes nav.reveal when the
+  // atlas workspace is visible). Selections SOURCED from the atlas itself are
+  // excluded to keep the channel one-directional per surface.
+  if (selectedId !== undefined && source !== "atlas" && state.selected?.mesh) {
+    const p = state.selected.mesh.getWorldPosition(revealScratch);
+    studioBus.emit("nav.reveal", { x: p.x, z: p.z, entityId: selectedId, source: "viewport-selection" });
+  }
 }, { emitCurrent: true });
+// 2.0-D Atlas → 3D reveal (native replacement for the deleted iframe focus
+// bridge): double-click on the atlas map travels the camera there, with the
+// same terrain-height resolution a POI search result gets. places.reveal
+// shares the path.
+studioBus.subscribe((event) => {
+  if (event.type !== "atlas.focus" && event.type !== "places.reveal") return;
+  const navigation = state.running?.editorNavigation;
+  if (!navigation || !navigationDiscreteReady()) return;
+  const x = Number(event.x);
+  const z = Number(event.z);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+  leaveWorldOverviewPresentation();
+  const provisional = navigation.destinationPose([x, navigation.snapshot().target[1], z], 64);
+  void navigateToPose(provisional, { kind: "poi", label: event.type === "places.reveal" ? "Place reveal" : "Atlas reveal" }, {
+    resolvePose: ({ context }) => {
+      const height = context.runtime.derivedTerrainHeightAt(x, z);
+      if (height === null) throw Object.assign(new Error("reveal terrain is unavailable"), { code: "POI_TERRAIN_UNAVAILABLE" });
+      return context.navigation.destinationPose([x, height, z], 64);
+    },
+  });
+});
 let lastArmedAssetId;
 assetPlacement.subscribe(({ entry }) => {
   if (playLifecycle.isAuthoringLocked()) { hidePlaceGhost(); return; }
@@ -2987,6 +3088,7 @@ assetPlacement.subscribe(({ entry }) => {
       state.brushTool = "raise";
       updateEditModeIndicator();
       setStatus("terrain edit", "tool: raise");
+      syncRibbonFromState();
     }
     return;
   }
@@ -2996,6 +3098,7 @@ assetPlacement.subscribe(({ entry }) => {
   state.brushTool = "catalog";
   reconcileNavigationEditMode();
   updateEditModeIndicator();
+  syncRibbonFromState();
   setStatus(`place: ${entry.title}`, "click ground to place · R rotates · Esc deselects");
 });
 async function transitionHistoryPresentation(next) {
@@ -3035,6 +3138,11 @@ window.addEventListener("limina:scrub-to", (event) => {
 });
 window.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (riverDraft.points.length > 0) {
+    riverDraftClear();
+    event.preventDefault();
+    return;
+  }
   const gotoOpen = viewportUi.navigationGoto?.hidden === false;
   const viewsOpen = viewportUi.navigationViews?.hidden === false;
   const searchOpen = viewportUi.navigationSearch?.hidden === false;
@@ -3098,6 +3206,7 @@ window.addEventListener("keydown", (event) => {
     state.editMode = !state.editMode;
     reconcileNavigationEditMode();
     updateEditModeIndicator();
+    syncRibbonFromState();
     setStatus(state.editMode ? "terrain edit: ON" : "terrain edit: off",
       state.editMode ? `${state.brushTool} · drag to sculpt · Ctrl inverts · 1-6 tool` : "");
     return;
@@ -3107,6 +3216,7 @@ window.addEventListener("keydown", (event) => {
     state.brushTool = key === "1" ? "raise" : key === "2" ? "lower" : key === "3" ? "smooth"
       : key === "4" ? "flatten" : key === "5" ? "paint" : "catalog";
     updateEditModeIndicator();
+    syncRibbonFromState();
     setStatus("terrain edit", `tool: ${state.brushTool}`);
     return;
   }
@@ -3129,11 +3239,13 @@ window.addEventListener("keydown", (event) => {
   if (key === "s") {
     event.preventDefault();
     toggleSnapping();
+    syncGizmoOption("snap", viewportOptions.snapEnabled);
     return;
   }
   if (key === "x") {
     event.preventDefault();
     setTransformSpace(viewportOptions.transformSpace === "local" ? "world" : "local");
+    syncGizmoOption("space", viewportOptions.transformSpace);
     return;
   }
   if (key === "g") {
@@ -3153,9 +3265,9 @@ window.addEventListener("keydown", (event) => {
     return;
   }
   if (!controls) return;
-  if (key === "w") controls.setMode("translate");
-  else if (key === "e") controls.setMode("rotate");
-  else if (key === "r") controls.setMode("scale");
+  if (key === "w") { controls.setMode("translate"); syncGizmoOption("gizmo", "translate"); }
+  else if (key === "e") { controls.setMode("rotate"); syncGizmoOption("gizmo", "rotate"); }
+  else if (key === "r") { controls.setMode("scale"); syncGizmoOption("gizmo", "scale"); }
 });
 // Delete / Backspace destroys the selected entity (immediate — the world log records the destroy,
 // which is the recovery path). Guarded by isTextInputTarget so it never fires while typing in chat
@@ -3171,15 +3283,34 @@ window.addEventListener("keydown", (event) => {
   const selected = state.selected;
   if (!selected) return;
   event.preventDefault();
-  const id = selected.id;
+  // 2.0-C: destroy EVERY selected id (multi-select). Each destroy is the same recorded
+  // scene.destroyEntity through write-client as the single-select path, awaited in turn.
+  const targets = editorSelection.getMany();
+  const ids = targets.length > 0 ? [...targets] : [selected.id];
   deselectEntity();
-  destroyEntity(id)
-    .then(() => { if (editorSelection.get() === id) editorSelection.clear("delete"); })
-    .catch((e) => {
-      resetWriter();
-      surfaceViewportWarning("destroy failed", e);
-      if (editorSelection.get() === id) selectEntity(id, state.running);
-    });
+  void (async () => {
+    const survivors = [];
+    for (const id of ids) {
+      try {
+        await destroyEntity(id);
+      } catch (e) {
+        resetWriter();
+        surfaceViewportWarning("destroy failed", e);
+        survivors.push(id);
+      }
+    }
+    // Only touch the store if it still points at a target (the user may have picked
+    // something else while the destroy round-trip was in flight).
+    if (survivors.length > 0 && ids.includes(editorSelection.get())) {
+      // Re-select only what failed to destroy (selectMany may be a store no-op when the
+      // set is unchanged, so re-attach the gizmo explicitly — the single-select behavior).
+      editorSelection.selectMany(survivors, "delete");
+      const primary = editorSelection.get();
+      if (primary !== undefined) selectEntity(primary, state.running);
+    } else if (survivors.length === 0 && ids.includes(editorSelection.get())) {
+      editorSelection.clear("delete");
+    }
+  })();
 });
 window.addEventListener("keyup", (event) => {
   if ((event.key === " " || event.code === "Space") && state.spaceNav) {
@@ -3271,30 +3402,21 @@ function scheduleResizeViewport() {
 }
 if (typeof ResizeObserver === "function") {
   viewportResizeObserver = new ResizeObserver(() => {
-    updateAtlasWorkspaceCompact();
     scheduleResizeViewport();
   });
   viewportResizeObserver.observe(canvas);
-  if (viewportUi.atlasPanel?.parentElement) viewportResizeObserver.observe(viewportUi.atlasPanel.parentElement);
 }
 window.addEventListener("resize", () => {
-  updateAtlasWorkspaceCompact();
   scheduleResizeViewport();
 });
-window.addEventListener("scroll", () => {
-  if (atlasWorkspaceCompact) applyAtlasWorkspaceLayout();
-}, { passive: true });
 // Sidebar collapse animates over ~160ms (CSS); re-fit once the transition has settled.
 window.addEventListener("limina:layout-changed", () => {
   setTimeout(() => {
-    updateAtlasWorkspaceCompact();
     scheduleResizeViewport();
   }, 200);
 });
 
 bindViewportUi();
-updateAtlasWorkspaceCompact();
-setAtlasOpen(atlasWorkspaceState.open, { persist: false });
 // Reconnecting with a different URL/token must not leave the independent readonly follower (or its
 // derived capability) attached to the old host. The panel owns these buttons; additive listeners
 // preserve its connect/disconnect handlers while resetting the viewport-side connection.
@@ -3327,6 +3449,7 @@ void viewportTick();
 
 window.addEventListener("beforeunload", () => {
   viewportLoopStopped = true;
+  bootOverlayReset();
   state.scrubLimit = undefined;
   releaseNavigationState();
   window.dispatchEvent(new CustomEvent("limina:history-return-live"));

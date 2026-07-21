@@ -419,6 +419,295 @@ const clipRoofBoundary = (
   return deduplicated;
 };
 
+/** Compile a single fireplace spec into its resolved masonry assembly (base, cavity,
+ *  fireback/throat surround, fuel, flames, and either a chimney or an enclosed-breast flue
+ *  transition when a roof penetration is present). Extracted from compileArchitecture as a
+ *  standalone phase — behavior is pinned byte-for-byte by p_architecture_compile_golden. */
+type FireplaceSpec = NonNullable<ArchitectureSpec["fireplaces"]>[number];
+type RoofPenetrationSpec = NonNullable<ArchitectureSpec["roofPenetrations"]>[number];
+interface FireplaceCompileDeps {
+  readonly input: ArchitectureSpec;
+  readonly planeById: ReadonlyMap<string, unknown>;
+  readonly roofPenetrations: readonly CompiledRoofPenetration[];
+  readonly penetrationSpecs: readonly RoofPenetrationSpec[];
+  readonly closureSlab: (id: string, surfaceRole: "roof" | "wall", boundary: readonly V3[], thickness: number, derivedFrom: readonly string[]) => ArchitecturePrimitive;
+}
+function compileFireplaceItem(f: FireplaceSpec, deps: FireplaceCompileDeps): CompiledFireplace {
+  const { input, planeById, roofPenetrations, penetrationSpecs, closureSlab } = deps;
+    if (
+      !planeById.has(f.roofPlaneId) ||
+      f.chimneyTopY <= f.center[1] + f.apertureHalfExtents[1]
+    )
+      throw new Error(`architecture: invalid fireplace ${f.id}`);
+    const [x, y, z] = f.center,
+      [hx, hy, hz] = f.apertureHalfExtents,
+      legacyBaseBottom = y - hy - 0.08,
+      baseBottom = f.supportY ?? legacyBaseBottom,
+      baseTop = y - hy + 0.08;
+    if (
+      f.supportY !== undefined &&
+      (!input.functional ||
+        Math.abs(f.supportY - input.functional.site.finishedFloorY) > 0.001 ||
+        baseTop - baseBottom < 0.1)
+    )
+      throw new Error(
+        `architecture: fireplace ${f.id} support must bear on the finished floor`,
+      );
+    const base = box(
+        `fireplace/${f.id}/base`,
+        [x, (baseBottom + baseTop) / 2, z - 0.12],
+        [hx + 0.18, (baseTop - baseBottom) / 2, hz + 0.28],
+        [f.id],
+      ),
+      cavityDepth = 0.025,
+      cavity = box(
+        `fireplace/${f.id}/cavity`,
+        [x, y + 0.12, f.fireboxPolicy === "rear-soot-lining" ? z + hz - cavityDepth / 2 : z + hz - 0.22],
+        [hx * 0.78, hy * 0.72, cavityDepth / 2],
+        [f.id],
+      );
+    const firebackBottom: V3 = [x - hx * 0.88, y - hy + 0.08, z + hz - 0.2],
+      firebackTop: V3 = [x - hx * 0.88, y + hy - 0.08, z + hz - 0.34],
+      fireback: PlaneSlab = Object.freeze({
+        kind: "plane-slab",
+        id: `fireplace/${f.id}/fireback`,
+        surfaceRole: "wall",
+        origin: firebackBottom,
+        normal: planeNormal([
+          firebackBottom,
+          [x + hx * 0.88, firebackBottom[1], firebackBottom[2]],
+          [x + hx * 0.88, firebackTop[1], firebackTop[2]],
+        ]),
+        boundary: Object.freeze([
+          firebackBottom,
+          [x + hx * 0.88, firebackBottom[1], firebackBottom[2]] as V3,
+          [x + hx * 0.88, firebackTop[1], firebackTop[2]] as V3,
+          firebackTop,
+        ]),
+        thickness: 0.1,
+        derivedFrom: Object.freeze([f.id]),
+      }),
+      throatFrontY = y + hy + 0.02,
+      throatBackY = Math.min(y + hy + 0.42, 2.28),
+      throat: PlaneSlab = Object.freeze({
+        kind: "plane-slab",
+        id: `fireplace/${f.id}/throat`,
+        surfaceRole: "wall",
+        origin: [x - hx * 0.72, throatFrontY, z - hz * 0.32] as V3,
+        normal: planeNormal([
+          [x - hx * 0.72, throatFrontY, z - hz * 0.32] as V3,
+          [x + hx * 0.72, throatFrontY, z - hz * 0.32] as V3,
+          [x + hx * 0.48, throatBackY, z + hz * 0.12] as V3,
+        ]),
+        boundary: Object.freeze([
+          [x - hx * 0.72, throatFrontY, z - hz * 0.32] as V3,
+          [x + hx * 0.72, throatFrontY, z - hz * 0.32] as V3,
+          [x + hx * 0.48, throatBackY, z + hz * 0.12] as V3,
+          [x - hx * 0.48, throatBackY, z + hz * 0.12] as V3,
+        ]),
+        thickness: 0.1,
+        derivedFrom: Object.freeze([f.id]),
+      }),
+      surround: ArchitecturePrimitive[] = [
+      fireback,
+      throat,
+      box(
+        `fireplace/${f.id}/lining-left`,
+        [x - hx + 0.055, y, z + 0.05],
+        [0.055, hy, hz * 0.82],
+        [f.id],
+      ),
+      box(
+        `fireplace/${f.id}/lining-right`,
+        [x + hx - 0.055, y, z + 0.05],
+        [0.055, hy, hz * 0.82],
+        [f.id],
+      ),
+      box(
+        `fireplace/${f.id}/smoke-shelf`,
+        [x, throatBackY + 0.055, z + hz * 0.2],
+        [hx * 0.5, 0.055, hz * 0.48],
+        [f.id],
+      ),
+      box(
+        `fireplace/${f.id}/smoke-chamber-west`,
+        [x - hx * 0.37, 2.32, z - 0.02],
+        [hx * 0.12, 0.32, hz * 0.48],
+        [f.id],
+      ),
+      box(
+        `fireplace/${f.id}/smoke-chamber-east`,
+        [x + hx * 0.37, 2.32, z - 0.02],
+        [hx * 0.12, 0.32, hz * 0.48],
+        [f.id],
+      ),
+      box(
+        `fireplace/${f.id}/jamb-left`,
+        [x - hx - 0.15, y, z],
+        [0.15, hy + 0.15, hz],
+        [f.id],
+      ),
+      box(
+        `fireplace/${f.id}/jamb-right`,
+        [x + hx + 0.15, y, z],
+        [0.15, hy + 0.15, hz],
+        [f.id],
+      ),
+      box(
+        `fireplace/${f.id}/lintel`,
+        [x, y + hy + 0.15, z],
+        [hx + 0.3, 0.15, hz],
+        [f.id],
+      ),
+      box(
+        `fireplace/${f.id}/hood`,
+        [x, y + hy + 0.38, z],
+        [hx + 0.16, 0.18, hz * 0.72],
+        [f.id],
+      ),
+    ];
+    const fuel = [
+        cylinder(
+          `fireplace/${f.id}/log-x-a`,
+          [x - hx * 0.65, y - hy + 0.19, z - hz * 0.18],
+          [x + hx * 0.65, y - hy + 0.19, z - hz * 0.18],
+          0.11,
+          12,
+          [f.id],
+        ),
+        cylinder(
+          `fireplace/${f.id}/log-x-b`,
+          [x - hx * 0.65, y - hy + 0.19, z + hz * 0.18],
+          [x + hx * 0.65, y - hy + 0.19, z + hz * 0.18],
+          0.11,
+          12,
+          [f.id],
+        ),
+        cylinder(
+          `fireplace/${f.id}/log-z`,
+          [x, y - hy + 0.23, z - hz * 0.65],
+          [x, y - hy + 0.23, z + hz * 0.65],
+          0.11,
+          12,
+          [f.id],
+        ),
+      ],
+      emberBed = box(
+        `fireplace/${f.id}/embers`,
+        [x, y - hy + 0.06, z],
+        [hx * 0.7, 0.04, hz * 0.7],
+        [f.id],
+      ),
+      flames = [
+        taperedFlame(
+          `fireplace/${f.id}/flame-outer`,
+          [x - 0.08, y - hy + 0.1, z - 0.15],
+          hy * 0.94,
+          hx * 0.24,
+          [0.08, 0, -0.04],
+          14,
+          [f.id],
+        ),
+        taperedFlame(
+          `fireplace/${f.id}/flame-inner`,
+          [x + 0.02, y - hy + 0.1, z - 0.18],
+          hy * 0.72,
+          hx * 0.16,
+          [-0.06, 0, 0.03],
+          12,
+          [f.id],
+        ),
+        taperedFlame(
+          `fireplace/${f.id}/flame-outer-right`,
+          [x + 0.22, y - hy + 0.1, z - 0.10],
+          hy * 0.72,
+          hx * 0.17,
+          [-0.07, 0, -0.02],
+          12,
+          [f.id],
+        ),
+        taperedFlame(
+          `fireplace/${f.id}/flame-inner-left`,
+          [x - 0.25, y - hy + 0.1, z - 0.08],
+          hy * 0.55,
+          hx * 0.12,
+          [0.05, 0, 0.02],
+          12,
+          [f.id],
+        ),
+      ],
+      penetration = roofPenetrations.find((item) => item.fireplaceId === f.id);
+    if (penetration) {
+      const penetrationSpec = penetrationSpecs.find((item) => item.id === penetration.id);
+      let flueTransition: readonly PlaneSlab[] | undefined;
+      if (penetrationSpec?.flueConnectionPolicy === "enclosed-masonry-breast-v1") {
+        const bottomY = y + hy + .55,
+          topY = penetrationSpec.shaftBottomY + .01,
+          bottomX = hx + .16,
+          bottomZ = hz * .72,
+          topX = penetrationSpec.shaftSize[0] / 2,
+          topZ = penetrationSpec.shaftSize[1] / 2;
+        if (topY - bottomY < .2 || Math.min(bottomX, bottomZ, topX, topZ) <= .18)
+          throw new Error(`architecture: fireplace ${f.id} lacks space for an enclosed masonry breast`);
+        const panel = (suffix: string, boundary: readonly V3[]) => closureSlab(
+          `fireplace/${f.id}/flue-transition-${suffix}`,
+          "wall",
+          boundary,
+          .14,
+          [f.id, penetration.id],
+        ) as PlaneSlab;
+        flueTransition = Object.freeze([
+          panel("west", [
+            [x - bottomX, bottomY, z - bottomZ], [x - bottomX, bottomY, z + bottomZ],
+            [x - topX, topY, z + topZ], [x - topX, topY, z - topZ],
+          ]),
+          panel("east", [
+            [x + bottomX, bottomY, z + bottomZ], [x + bottomX, bottomY, z - bottomZ],
+            [x + topX, topY, z - topZ], [x + topX, topY, z + topZ],
+          ]),
+          panel("north", [
+            [x - bottomX, bottomY, z + bottomZ], [x + bottomX, bottomY, z + bottomZ],
+            [x + topX, topY, z + topZ], [x - topX, topY, z + topZ],
+          ]),
+          panel("south", [
+            [x + bottomX, bottomY, z - bottomZ], [x - bottomX, bottomY, z - bottomZ],
+            [x - topX, topY, z - topZ], [x + topX, topY, z - topZ],
+          ]),
+        ]);
+        surround.push(...flueTransition);
+      }
+      return Object.freeze({
+        id: f.id,
+        base,
+        cavity,
+        surround: Object.freeze(surround),
+        fuel: Object.freeze(fuel),
+        emberBed,
+        flames: Object.freeze(flames),
+        lightPosition: Object.freeze([x, y - hy + 0.38, z]) as V3,
+        ...(flueTransition ? { flueTransition } : {}),
+        penetrationId: penetration.id,
+      });
+    }
+    const chimney = box(
+      `fireplace/${f.id}/chimney`,
+      [x, (y + hy + f.chimneyTopY) / 2, z],
+      [hx * 0.42, (f.chimneyTopY - y - hy) / 2, hz * 0.42],
+      [f.id, f.roofPlaneId],
+    );
+    return Object.freeze({
+      id: f.id,
+      base,
+      cavity,
+      surround: Object.freeze(surround),
+      fuel: Object.freeze(fuel),
+      emberBed,
+      flames: Object.freeze(flames),
+      lightPosition: Object.freeze([x, y - hy + 0.38, z]) as V3,
+      chimney,
+    });
+}
+
 export function compileArchitecture(
   input: ArchitectureSpec,
 ): CompiledArchitecture {
@@ -2850,280 +3139,9 @@ export function compileArchitecture(
     for(const point of seamSamples(abutment.from,abutment.to))if(pointPlaneDistance(point,plane.origin,plane.normal)>.003||!insideBoundary(point,plane.boundary,plane.normal,.01)||wallDistance(point)>wall.thickness/2+.16||point[1]<wall.bottomY-.01||point[1]>wall.topY+.01)throw new Error(`architecture: roof-wall abutment ${abutment.id} leaves its roof or wall substrate`);
     return Object.freeze({kind:"linear-member" as const,id:`roof-wall-flashing/${abutment.id}`,from:Object.freeze([...abutment.from]) as V3,to:Object.freeze([...abutment.to]) as V3,width:abutment.flashingWidth,depth:abutment.upstandDepth,derivedFrom:Object.freeze([abutment.id,abutment.roofPlaneId,abutment.wallId])});
   });
-  const fireplaces: CompiledFireplace[] = (input.fireplaces ?? []).map((f) => {
-    if (
-      !planeById.has(f.roofPlaneId) ||
-      f.chimneyTopY <= f.center[1] + f.apertureHalfExtents[1]
-    )
-      throw new Error(`architecture: invalid fireplace ${f.id}`);
-    const [x, y, z] = f.center,
-      [hx, hy, hz] = f.apertureHalfExtents,
-      legacyBaseBottom = y - hy - 0.08,
-      baseBottom = f.supportY ?? legacyBaseBottom,
-      baseTop = y - hy + 0.08;
-    if (
-      f.supportY !== undefined &&
-      (!input.functional ||
-        Math.abs(f.supportY - input.functional.site.finishedFloorY) > 0.001 ||
-        baseTop - baseBottom < 0.1)
-    )
-      throw new Error(
-        `architecture: fireplace ${f.id} support must bear on the finished floor`,
-      );
-    const base = box(
-        `fireplace/${f.id}/base`,
-        [x, (baseBottom + baseTop) / 2, z - 0.12],
-        [hx + 0.18, (baseTop - baseBottom) / 2, hz + 0.28],
-        [f.id],
-      ),
-      cavityDepth = 0.025,
-      cavity = box(
-        `fireplace/${f.id}/cavity`,
-        [x, y + 0.12, f.fireboxPolicy === "rear-soot-lining" ? z + hz - cavityDepth / 2 : z + hz - 0.22],
-        [hx * 0.78, hy * 0.72, cavityDepth / 2],
-        [f.id],
-      );
-    const firebackBottom: V3 = [x - hx * 0.88, y - hy + 0.08, z + hz - 0.2],
-      firebackTop: V3 = [x - hx * 0.88, y + hy - 0.08, z + hz - 0.34],
-      fireback: PlaneSlab = Object.freeze({
-        kind: "plane-slab",
-        id: `fireplace/${f.id}/fireback`,
-        surfaceRole: "wall",
-        origin: firebackBottom,
-        normal: planeNormal([
-          firebackBottom,
-          [x + hx * 0.88, firebackBottom[1], firebackBottom[2]],
-          [x + hx * 0.88, firebackTop[1], firebackTop[2]],
-        ]),
-        boundary: Object.freeze([
-          firebackBottom,
-          [x + hx * 0.88, firebackBottom[1], firebackBottom[2]] as V3,
-          [x + hx * 0.88, firebackTop[1], firebackTop[2]] as V3,
-          firebackTop,
-        ]),
-        thickness: 0.1,
-        derivedFrom: Object.freeze([f.id]),
-      }),
-      throatFrontY = y + hy + 0.02,
-      throatBackY = Math.min(y + hy + 0.42, 2.28),
-      throat: PlaneSlab = Object.freeze({
-        kind: "plane-slab",
-        id: `fireplace/${f.id}/throat`,
-        surfaceRole: "wall",
-        origin: [x - hx * 0.72, throatFrontY, z - hz * 0.32] as V3,
-        normal: planeNormal([
-          [x - hx * 0.72, throatFrontY, z - hz * 0.32] as V3,
-          [x + hx * 0.72, throatFrontY, z - hz * 0.32] as V3,
-          [x + hx * 0.48, throatBackY, z + hz * 0.12] as V3,
-        ]),
-        boundary: Object.freeze([
-          [x - hx * 0.72, throatFrontY, z - hz * 0.32] as V3,
-          [x + hx * 0.72, throatFrontY, z - hz * 0.32] as V3,
-          [x + hx * 0.48, throatBackY, z + hz * 0.12] as V3,
-          [x - hx * 0.48, throatBackY, z + hz * 0.12] as V3,
-        ]),
-        thickness: 0.1,
-        derivedFrom: Object.freeze([f.id]),
-      }),
-      surround: ArchitecturePrimitive[] = [
-      fireback,
-      throat,
-      box(
-        `fireplace/${f.id}/lining-left`,
-        [x - hx + 0.055, y, z + 0.05],
-        [0.055, hy, hz * 0.82],
-        [f.id],
-      ),
-      box(
-        `fireplace/${f.id}/lining-right`,
-        [x + hx - 0.055, y, z + 0.05],
-        [0.055, hy, hz * 0.82],
-        [f.id],
-      ),
-      box(
-        `fireplace/${f.id}/smoke-shelf`,
-        [x, throatBackY + 0.055, z + hz * 0.2],
-        [hx * 0.5, 0.055, hz * 0.48],
-        [f.id],
-      ),
-      box(
-        `fireplace/${f.id}/smoke-chamber-west`,
-        [x - hx * 0.37, 2.32, z - 0.02],
-        [hx * 0.12, 0.32, hz * 0.48],
-        [f.id],
-      ),
-      box(
-        `fireplace/${f.id}/smoke-chamber-east`,
-        [x + hx * 0.37, 2.32, z - 0.02],
-        [hx * 0.12, 0.32, hz * 0.48],
-        [f.id],
-      ),
-      box(
-        `fireplace/${f.id}/jamb-left`,
-        [x - hx - 0.15, y, z],
-        [0.15, hy + 0.15, hz],
-        [f.id],
-      ),
-      box(
-        `fireplace/${f.id}/jamb-right`,
-        [x + hx + 0.15, y, z],
-        [0.15, hy + 0.15, hz],
-        [f.id],
-      ),
-      box(
-        `fireplace/${f.id}/lintel`,
-        [x, y + hy + 0.15, z],
-        [hx + 0.3, 0.15, hz],
-        [f.id],
-      ),
-      box(
-        `fireplace/${f.id}/hood`,
-        [x, y + hy + 0.38, z],
-        [hx + 0.16, 0.18, hz * 0.72],
-        [f.id],
-      ),
-    ];
-    const fuel = [
-        cylinder(
-          `fireplace/${f.id}/log-x-a`,
-          [x - hx * 0.65, y - hy + 0.19, z - hz * 0.18],
-          [x + hx * 0.65, y - hy + 0.19, z - hz * 0.18],
-          0.11,
-          12,
-          [f.id],
-        ),
-        cylinder(
-          `fireplace/${f.id}/log-x-b`,
-          [x - hx * 0.65, y - hy + 0.19, z + hz * 0.18],
-          [x + hx * 0.65, y - hy + 0.19, z + hz * 0.18],
-          0.11,
-          12,
-          [f.id],
-        ),
-        cylinder(
-          `fireplace/${f.id}/log-z`,
-          [x, y - hy + 0.23, z - hz * 0.65],
-          [x, y - hy + 0.23, z + hz * 0.65],
-          0.11,
-          12,
-          [f.id],
-        ),
-      ],
-      emberBed = box(
-        `fireplace/${f.id}/embers`,
-        [x, y - hy + 0.06, z],
-        [hx * 0.7, 0.04, hz * 0.7],
-        [f.id],
-      ),
-      flames = [
-        taperedFlame(
-          `fireplace/${f.id}/flame-outer`,
-          [x - 0.08, y - hy + 0.1, z - 0.15],
-          hy * 0.94,
-          hx * 0.24,
-          [0.08, 0, -0.04],
-          14,
-          [f.id],
-        ),
-        taperedFlame(
-          `fireplace/${f.id}/flame-inner`,
-          [x + 0.02, y - hy + 0.1, z - 0.18],
-          hy * 0.72,
-          hx * 0.16,
-          [-0.06, 0, 0.03],
-          12,
-          [f.id],
-        ),
-        taperedFlame(
-          `fireplace/${f.id}/flame-outer-right`,
-          [x + 0.22, y - hy + 0.1, z - 0.10],
-          hy * 0.72,
-          hx * 0.17,
-          [-0.07, 0, -0.02],
-          12,
-          [f.id],
-        ),
-        taperedFlame(
-          `fireplace/${f.id}/flame-inner-left`,
-          [x - 0.25, y - hy + 0.1, z - 0.08],
-          hy * 0.55,
-          hx * 0.12,
-          [0.05, 0, 0.02],
-          12,
-          [f.id],
-        ),
-      ],
-      penetration = roofPenetrations.find((item) => item.fireplaceId === f.id);
-    if (penetration) {
-      const penetrationSpec = penetrationSpecs.find((item) => item.id === penetration.id);
-      let flueTransition: readonly PlaneSlab[] | undefined;
-      if (penetrationSpec?.flueConnectionPolicy === "enclosed-masonry-breast-v1") {
-        const bottomY = y + hy + .55,
-          topY = penetrationSpec.shaftBottomY + .01,
-          bottomX = hx + .16,
-          bottomZ = hz * .72,
-          topX = penetrationSpec.shaftSize[0] / 2,
-          topZ = penetrationSpec.shaftSize[1] / 2;
-        if (topY - bottomY < .2 || Math.min(bottomX, bottomZ, topX, topZ) <= .18)
-          throw new Error(`architecture: fireplace ${f.id} lacks space for an enclosed masonry breast`);
-        const panel = (suffix: string, boundary: readonly V3[]) => closureSlab(
-          `fireplace/${f.id}/flue-transition-${suffix}`,
-          "wall",
-          boundary,
-          .14,
-          [f.id, penetration.id],
-        ) as PlaneSlab;
-        flueTransition = Object.freeze([
-          panel("west", [
-            [x - bottomX, bottomY, z - bottomZ], [x - bottomX, bottomY, z + bottomZ],
-            [x - topX, topY, z + topZ], [x - topX, topY, z - topZ],
-          ]),
-          panel("east", [
-            [x + bottomX, bottomY, z + bottomZ], [x + bottomX, bottomY, z - bottomZ],
-            [x + topX, topY, z - topZ], [x + topX, topY, z + topZ],
-          ]),
-          panel("north", [
-            [x - bottomX, bottomY, z + bottomZ], [x + bottomX, bottomY, z + bottomZ],
-            [x + topX, topY, z + topZ], [x - topX, topY, z + topZ],
-          ]),
-          panel("south", [
-            [x + bottomX, bottomY, z - bottomZ], [x - bottomX, bottomY, z - bottomZ],
-            [x - topX, topY, z - topZ], [x + topX, topY, z - topZ],
-          ]),
-        ]);
-        surround.push(...flueTransition);
-      }
-      return Object.freeze({
-        id: f.id,
-        base,
-        cavity,
-        surround: Object.freeze(surround),
-        fuel: Object.freeze(fuel),
-        emberBed,
-        flames: Object.freeze(flames),
-        lightPosition: Object.freeze([x, y - hy + 0.38, z]) as V3,
-        ...(flueTransition ? { flueTransition } : {}),
-        penetrationId: penetration.id,
-      });
-    }
-    const chimney = box(
-      `fireplace/${f.id}/chimney`,
-      [x, (y + hy + f.chimneyTopY) / 2, z],
-      [hx * 0.42, (f.chimneyTopY - y - hy) / 2, hz * 0.42],
-      [f.id, f.roofPlaneId],
-    );
-    return Object.freeze({
-      id: f.id,
-      base,
-      cavity,
-      surround: Object.freeze(surround),
-      fuel: Object.freeze(fuel),
-      emberBed,
-      flames: Object.freeze(flames),
-      lightPosition: Object.freeze([x, y - hy + 0.38, z]) as V3,
-      chimney,
-    });
-  });
+  const fireplaces: CompiledFireplace[] = (input.fireplaces ?? []).map((f) =>
+    compileFireplaceItem(f, { input, planeById, roofPenetrations, penetrationSpecs, closureSlab }),
+  );
   const practicalLights: CompiledPracticalLight[] = (
     input.practicalLights ?? []
   ).map((light) => {

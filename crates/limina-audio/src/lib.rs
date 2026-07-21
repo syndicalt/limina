@@ -48,6 +48,10 @@ const BUS_VOICE: usize = 3;
 const AUDIO_CMD_CAPACITY: usize = 256;
 const MAX_SFX_SECONDS: f32 = 60.0;
 const MAX_PCM_SAMPLES: usize = SAMPLE_RATE as usize * 2 * 120;
+/// Max concurrently-retained voices on the audio thread. One-shots self-reap when
+/// they finish, but looping voices never empty, so this caps how many can accumulate
+/// before the oldest is evicted — bounding audio-thread memory (see the reap loop).
+const MAX_ACTIVE_SOUNDS: usize = 256;
 const MAX_TTS_TEXT_BYTES: usize = 1_000;
 const MAX_TTS_WORKERS: usize = 4;
 const MAX_TTS_DECODED_SAMPLES: usize = SAMPLE_RATE as usize * 2 * 30;
@@ -876,6 +880,18 @@ fn run_audio(
         }
         // Reap finished one-shots (looping ambience never empties).
         sounds.retain(|_, s| !s.empty());
+        // Bound retained voices. One-shots self-reap above, but a LOOPING voice
+        // (repeat_infinite) never empties, so a stream of looping plays with fresh
+        // monotonic ids would grow this map — and each buffer it holds (up to
+        // MAX_PCM_SAMPLES ≈ 42 MB) — without bound. Evict the OLDEST (lowest id ≈
+        // earliest played) down to the cap: bounded memory at the cost of silencing
+        // the stalest loop, which a well-behaved caller never reaches.
+        while sounds.len() > MAX_ACTIVE_SOUNDS {
+            let Some(oldest) = sounds.keys().copied().min() else { break };
+            if let Some(s) = sounds.remove(&oldest) {
+                s.stop();
+            }
+        }
     }
 }
 

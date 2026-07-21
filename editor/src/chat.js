@@ -41,7 +41,20 @@ const state = {
   activeDrag: 0,
   model: storedChatModel(),
   chatTransport: undefined,
+  /** Surface-awareness hook: setChatContextProvider installs the studio's
+   *  context packer; every chat turn carries the CURRENT pack block. */
+  contextProvider: undefined,
+  /** Suggestion apply hook: app.js installs the reviewer-profiled tool caller. */
+  applySuggestion: undefined,
 };
+
+export function setChatContextProvider(fn) {
+  state.contextProvider = typeof fn === "function" ? fn : undefined;
+}
+
+export function setChatApplySuggestion(fn) {
+  state.applySuggestion = typeof fn === "function" ? fn : undefined;
+}
 
 function inputTarget(target) {
   return !!target?.closest?.("input, textarea, select, [contenteditable=''], [contenteditable='true']");
@@ -380,6 +393,11 @@ function broadcastChatModel(model) {
 async function sendChat({ text, attachments }) {
   const turnId = uid("turn");
   const message = { turnId, text, attachments, model: state.model };
+  if (typeof state.contextProvider === "function") {
+    try {
+      message.context = state.contextProvider();
+    } catch { /* a broken pack must never block a turn */ }
+  }
   makeTurn("user", `${turnId}_user`, text, attachments);
   makeTurn("agent", turnId, "", []);
   await state.chatTransport.send(message);
@@ -391,6 +409,61 @@ function submitComposer() {
   const attachments = state.attachments.map((item) => ({ ...item }));
   clearComposer();
   sendChat({ text, attachments });
+}
+
+// ── Ambient notes + agent suggestion cards (fluid agents) ────────────────────
+// Ambient: quiet timeline dividers for studio events (saves, switches) so the
+// conversation reflects the shared process without an LLM call.
+export function noteAmbient(text) {
+  const log = $("chat-log");
+  if (!log) return;
+  $("chat-log")?.querySelector(".chat-empty")?.remove();
+  const row = el("div", "chat-ambient", text);
+  log.appendChild(row);
+  scrollToEnd();
+}
+
+// Suggestion cards: traced studio.suggestion events rendered inline with the
+// conversation. Apply routes the action through the host-installed caller
+// (recorded, policy-gated); Dismiss drops the card.
+import { studioBus, STUDIO_EVENTS } from "./agents/studio-events.js";
+
+export function renderSuggestionCard(suggestion) {
+  const log = $("chat-log");
+  if (!log || suggestion === null || typeof suggestion !== "object") return;
+  $("chat-log")?.querySelector(".chat-empty")?.remove();
+  const card = el("div", "suggestion-card");
+  const head = el("div", "suggestion-title", `◈ ${suggestion.title ?? "suggestion"}`);
+  card.appendChild(head);
+  if (suggestion.detail) card.appendChild(el("div", "suggestion-detail", suggestion.detail));
+  if (suggestion.region) {
+    card.appendChild(el("div", "suggestion-meta", "highlighted on the Atlas"));
+    studioBus.emit(STUDIO_EVENTS.AGENT_SUGGESTION, { payload: suggestion });
+  }
+  const actions = el("div", "suggestion-actions");
+  if (suggestion.action && typeof state.applySuggestion === "function") {
+    const apply = el("button", "btn btn-small suggestion-apply", suggestion.action.label ?? "Apply");
+    apply.type = "button";
+    apply.onclick = () => {
+      apply.disabled = true;
+      apply.textContent = "Applying…";
+      Promise.resolve(state.applySuggestion(suggestion.action))
+        .then(() => { apply.textContent = "Applied ✓"; })
+        .catch((error) => {
+          apply.disabled = false;
+          apply.textContent = suggestion.action.label ?? "Apply";
+          noteAmbient(`apply failed: ${error instanceof Error ? error.message : error}`);
+        });
+    };
+    actions.appendChild(apply);
+  }
+  const dismiss = el("button", "btn btn-small btn-ghost", "Dismiss");
+  dismiss.type = "button";
+  dismiss.onclick = () => card.remove();
+  actions.appendChild(dismiss);
+  card.appendChild(actions);
+  log.appendChild(card);
+  scrollToEnd();
 }
 
 function onChatMessage(msg) {
@@ -414,6 +487,11 @@ function onChatMessage(msg) {
       const pending = [...turn.steps].reverse().find((s) => s.tool === step.tool && !s.status);
       if (pending) Object.assign(pending, { status: step.status, detail: step.detail, result: step.result });
       else turn.steps.push(step);
+      // A completed studio.suggest renders its card inline (the suggestion IS
+      // the result payload; no extra polling needed).
+      if (step.tool === "studio.suggest" && step.status === "ok" && step.result?.suggestion !== undefined) {
+        renderSuggestionCard(step.result.suggestion);
+      }
     } else {
       turn.steps.push(step);
     }
@@ -510,6 +588,7 @@ function createLiveChatTransport(offlineTransport) {
           text: msg.text,
           attachments: msg.attachments,
           model: msg.model,
+          ...(msg.context !== undefined ? { context: msg.context } : {}),
         });
       } catch (e) {
         chatError(msg.turnId, `chat/send failed: ${e?.message || e}`);

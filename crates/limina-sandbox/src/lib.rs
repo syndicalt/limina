@@ -8,6 +8,11 @@
 //! only reaches this empty global. (Resolved by the P4.0b spike;
 //! `spikes/isolation/REPORT.md`.)
 //!
+//! DETERMINISM: the context is built from explicit intrinsics that EXCLUDE `Date`
+//! and `Performance` (see `op_sandbox_create`), so untrusted decision code has no
+//! wall-clock to branch on — replay of the same `(code, perception)` is stable at
+//! the source, not merely because the drained intents are recorded downstream.
+//!
 //! Re-entry into the engine is split by capability kind, because the
 //! V8 <-> QuickJS boundary is synchronous Rust while the engine's
 //! `SkillRegistry.invoke` is async JS in the *other* isolate:
@@ -249,8 +254,28 @@ fn sandbox_create_impl(
     let rt = Runtime::new().map_err(|e| JsErrorBox::generic(format!("quickjs runtime: {e}")))?;
     rt.set_memory_limit(mem_limit_bytes);
     rt.set_max_stack_size(max_stack_bytes);
-    let ctx =
-        Context::full(&rt).map_err(|e| JsErrorBox::generic(format!("quickjs context: {e}")))?;
+    // DETERMINISM (CLAUDE.md §2 rule 6): build the context from explicit intrinsics
+    // that EXCLUDE Date and Performance. Context::full = intrinsic::All would add both
+    // (JS_AddIntrinsicDate, JS_AddPerformance), giving untrusted decision code a
+    // wall-clock it could branch on — a nondeterminism hole in the very isolate meant
+    // to run replayable agent logic. Everything a decision function legitimately needs
+    // (Eval for the loaded module, RegExp, JSON, Map/Set, TypedArrays, Promise, Proxy,
+    // WeakRef) is kept.
+    use rquickjs::context::intrinsic::{
+        Eval, Json, MapSet, Promise, Proxy, RegExp, RegExpCompiler, TypedArrays, WeakRef,
+    };
+    let ctx = Context::custom::<(
+        Eval,
+        RegExpCompiler,
+        RegExp,
+        Json,
+        Proxy,
+        MapSet,
+        TypedArrays,
+        Promise,
+        WeakRef,
+    )>(&rt)
+    .map_err(|e| JsErrorBox::generic(format!("quickjs context: {e}")))?;
     let shared = Rc::new(RefCell::new(SandboxShared {
         read_caps,
         ..Default::default()

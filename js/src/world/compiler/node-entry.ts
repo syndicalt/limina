@@ -1,5 +1,10 @@
 import { compileAtlasMapDoc } from "../design-map-compile.mjs";
 import { DEFAULT_MAP_EROSION_RECIPE } from "../pipeline/erosion.mjs";
+import {
+  WORLD_TERRAIN_COMPILER_BASE_AMPLITUDE,
+  WORLD_TERRAIN_COMPILER_SEED,
+  WORLD_TERRAIN_COMPILER_VERTICAL_RANGE,
+} from "./config.mjs";
 import { compilerContentHash } from "./canonical.mjs";
 import { createBiomeWorldCompilerGraph, createHydrologyWorldCompilerGraph, createInitialWorldCompilerGraph, createPublishedBiomeWorldCompilerGraph } from "./graph.mjs";
 import {
@@ -25,11 +30,13 @@ function createWorldTerrainCompilerConfig(projectId: string) {
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(projectId)) throw new Error("world compiler projectId is invalid");
   return Object.freeze({
     schema: WORLD_TERRAIN_COMPILER_CONFIG_SCHEMA,
-    seed: 11,
-    baseAmplitude: 12,
+    // The field constants live in config.mjs — the runtime composed-height sampler
+    // (D5.4) reads the same source, so a drift here can never fork the two.
+    seed: WORLD_TERRAIN_COMPILER_SEED,
+    baseAmplitude: WORLD_TERRAIN_COMPILER_BASE_AMPLITUDE,
     erosionRecipe: DEFAULT_MAP_EROSION_RECIPE,
     gridId: `${projectId}.surface`,
-    verticalRange: Object.freeze({ minM: -500, maxM: 9000 }),
+    verticalRange: WORLD_TERRAIN_COMPILER_VERTICAL_RANGE,
     limits: Object.freeze({
       maxChunks: MAX_WORLD_TERRAIN_COMPILE_CHUNKS,
       maxMasterSamples: MAX_WORLD_TERRAIN_COMPILE_MASTER_SAMPLES,

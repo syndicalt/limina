@@ -8,6 +8,23 @@
 // deterministic). Heights are meters relative to origin.y (scaleY === 1), so a deform delta is
 // a real-world height change and the render mesh matches 1:1 (terrain/mesh.ts: y = origin.y +
 // heights[i]*scaleY).
+//
+// DERIVED-TERRAIN PATH (D5.1): when no EditableTerrain layer resolves AND the authority has a
+// derived MapDoc mounted, terrain.deform materializes the SAME brush weights as sparse metre
+// deltas on the derived grid's LOD0 lattice (edit-layer.mjs), appends them to the project's
+// derived edit layer, and commits the layer ref through a NESTED authoring.commit (folded into
+// this recorded command). The derived compiler composes the layer, so strokes land on the
+// terrain the user sees. The recorded command pins the base topology + resulting layer ref via
+// commitFields, so replay never re-resolves the map and a drifted recompute throws.
+//
+// DERIVED PAINT (D5.3): terrain.paint takes the same path — the brush stamp materializes as
+// sparse SIGNED weight deltas + material ids (paint-layer.mjs, overlap = ordered additive
+// clamp, exactly the EditableTerrain blend), commits through a nested authoring.commit into
+// refs.terrainEditLayers (shared array; paint refs are distinguished by their content schema
+// so no project-state migration is needed), and the compiler recolors the chunk paint channels
+// AFTER biome rasterization + height composition. Paint-driven grass blades do NOT regrow on
+// derived terrain here: derived grass comes from the compiler's biome/grass stages, not the
+// live EditableTerrain grass refresh — a separate concern.
 
 import { z } from "../../build/zod.bundle.mjs";
 import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
@@ -28,7 +45,29 @@ import {
   type WaterContactBindingSpec,
 } from "../world/water-contact.ts";
 import type { AssetRegistry } from "../asset-registry.ts";
-import type { SkillDefinition, SkillRegistry, WorldContext } from "./registry.ts";
+import { SkillInvocationError, type SkillDefinition, type SkillRegistry, type WorldContext } from "./registry.ts";
+import type { MCPErrorCode } from "../mcp/protocol.ts";
+import { DurableAuthoringRecordSchema } from "../authoring/durability.ts";
+import {
+  brushWeightAt,
+  falloffWeight,
+  hashNoise,
+  materializeLatticeBrushDeltas,
+} from "../terrain/brush-kernel.mjs";
+import {
+  appendTerrainEditStroke,
+  parseTerrainEditBaseTopology,
+  parseTerrainEditLayer,
+  rebaseTerrainEditLayer,
+  terrainEditLatticeGeometry,
+} from "../terrain/edit-layer.mjs";
+import {
+  TERRAIN_PAINT_MATERIAL_IDS,
+  appendTerrainPaintStroke,
+  parseTerrainPaintLayer,
+  rebaseTerrainPaintLayer,
+} from "../terrain/paint-layer.mjs";
+import type { WorldProjectState, WorldProjectStateReader } from "../authoring/project-state.ts";
 
 /** An inert transform for the terrain entity's ECS slot (the mesh is world-fixed at its origin). */
 const inertTransform = (): Transformable => ({ position: { set() {} }, quaternion: { set() {} }, scale: { set() {} } });
@@ -119,6 +158,31 @@ const createInput = z.object({
 
 const DEFORM_MODES = ["raise", "lower", "smooth", "flatten", "noise"] as const;
 const FALLOFFS = ["smooth", "linear", "constant"] as const;
+/** The edit-layer base-topology wire shape (terrain/edit-layer.mjs is the truth; this
+ *  zod mirrors it so a recorded pin validates on replay). */
+const baseTopologyInput = z.object({
+  schema: z.literal("limina.terrain-edit-base-topology/v1"),
+  grid: z.object({
+    schema: z.literal("limina.terrain-grid/v1"),
+    gridId: z.string(),
+    origin: z.tuple([z.number(), z.number()]),
+    chunkSizeM: z.number(),
+    defaultSamples: z.number().int(),
+  }).strict(),
+  domain: z.object({
+    minTx: z.number().int(),
+    minTz: z.number().int(),
+    maxTx: z.number().int(),
+    maxTz: z.number().int(),
+  }).strict(),
+  topologyHash: z.string(),
+}).strict();
+const layerRefInput = z.object({
+  assetId: z.string(),
+  hash: z.string(),
+  layerId: z.string(),
+  baseTopologyHash: z.string(),
+}).strict();
 const deformInput = z.object({
   /** Which terrain layer to reshape. Defaults to the most recently created one. */
   entity: z.string().optional(),
@@ -131,25 +195,55 @@ const deformInput = z.object({
   mode: z.enum(DEFORM_MODES).default("raise"),
   /** Brush weight profile from center (1) to edge (0). */
   falloff: z.enum(FALLOFFS).default("smooth"),
+  /** Replay pin (commitFields): the derived-terrain base topology the stroke
+   *  materialized against. Absent live (resolved from the authoritative MapDoc);
+   *  present on replay, so a replayed stroke never re-reads the map. */
+  baseTopology: baseTopologyInput.optional(),
+  /** Replay pin (commitFields): the layer identity the stroke committed. A recomputed
+   *  layer that disagrees throws — replay divergence is loud, never silent. */
+  layerRef: layerRefInput.optional(),
+  /** Replay pin (commitFields): the nested authoring.commit's durable record. The
+   *  authoring record chain is ONE contiguous sequence across top-level and nested
+   *  commits, so replay must re-commit with the pinned record (commitRecorded) —
+   *  exactly like a top-level authoring.commit — or a later top-level commit's pinned
+   *  record no longer chains. */
+  commitRecord: DurableAuthoringRecordSchema.optional(),
+});
+const deformOutput = z.object({
+  ok: z.boolean(),
+  baseTopology: baseTopologyInput.optional(),
+  layerRef: layerRefInput.optional(),
+  commitRecord: DurableAuthoringRecordSchema.optional(),
+  derived: z.object({
+    layerId: z.string(),
+    deltaCount: z.number().int(),
+    folded: z.boolean(),
+    contentHash: z.string(),
+  }).strict().optional(),
 });
 
-function falloffWeight(kind: (typeof FALLOFFS)[number], t: number): number {
-  // t is 1 at the brush center, 0 at the rim.
-  if (kind === "constant") return 1;
-  if (kind === "linear") return t;
-  return t * t * (3 - 2 * t); // smoothstep
-}
+/** The terrain-edit-layer wire shape for authoring.terrainEditLayer output (zod mirror
+ *  of terrain/edit-layer.mjs; the service re-validates with parseTerrainEditLayer). */
+const editLayerOutput = z.object({
+  schema: z.literal("limina.terrain-edit-layer/v1"),
+  layerId: z.string(),
+  gridId: z.string(),
+  baseTopology: baseTopologyInput,
+  operations: z.array(z.object({
+    operationId: z.string(),
+    kind: z.literal("add"),
+    deltas: z.array(z.object({ gx: z.number().int(), gz: z.number().int(), deltaM: z.number() }).strict()),
+  }).strict()),
+  contentHash: z.string(),
+}).strict();
 
-/** Deterministic value noise from integer grid coords — no Math.random/transcendentals, so
- *  a noise deform replays byte-identically across runs and platforms. */
-function hashNoise(col: number, row: number): number {
-  let h = (Math.imul(col, 374761393) + Math.imul(row, 668265263)) | 0;
-  h = Math.imul(h ^ (h >>> 13), 1274126177) | 0;
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}
+// The falloff/hash/lattice math lives in terrain/brush-kernel.mjs — THE single copy,
+// shared with the editor's optimistic sculpt preview (D5.2) so the preview and the
+// recompiled revision compute byte-identical weights. Do NOT re-inline it here.
 
-// Material ids for terrain.paint — MUST match PAINT_ALBEDO in terrain/render.ts.
-const PAINT_MATERIALS = { sand: 1, grass: 2, rock: 3, dirt: 4, snow: 5, murk: 6, tundra: 7 } as const;
+// Material ids for terrain.paint live in terrain/paint-layer.mjs — they MUST match
+// TERRAIN_PAINT_ALBEDO_HEX in terrain/material-palette.ts (id 0 = unpainted).
+const PAINT_MATERIALS = TERRAIN_PAINT_MATERIAL_IDS;
 const paintInput = z.object({
   entity: z.string().optional(),
   center: z.tuple([z.number(), z.number()]),
@@ -158,10 +252,28 @@ const paintInput = z.object({
   falloff: z.enum(FALLOFFS).default("smooth"),
   material: z.enum(["sand", "grass", "rock", "dirt", "snow", "murk", "tundra"]).default("grass"),
   erase: z.boolean().default(false),
+  /** Replay pins (commitFields), derived path only — identical contract to terrain.deform's. */
+  baseTopology: baseTopologyInput.optional(),
+  layerRef: layerRefInput.optional(),
+  commitRecord: DurableAuthoringRecordSchema.optional(),
+});
+const paintOutput = z.object({
+  ok: z.boolean(),
+  baseTopology: baseTopologyInput.optional(),
+  layerRef: layerRefInput.optional(),
+  commitRecord: DurableAuthoringRecordSchema.optional(),
+  derived: z.object({
+    layerId: z.string(),
+    deltaCount: z.number().int(),
+    folded: z.boolean(),
+    contentHash: z.string(),
+  }).strict().optional(),
 });
 /** Apply one paint stamp to a tile's material-weight channel, in place (mirrors applyBrush; pure +
- *  deterministic so replay reconstructs identical paint from the recorded terrain.paint commands). */
-function applyBrushPaint(tile: TerrainTile, input: z.infer<typeof paintInput>): void {
+ *  deterministic so replay reconstructs identical paint from the recorded terrain.paint commands).
+ *  Exported so the derived-lattice port (materializeTerrainPaintOp) can be differentially gated
+ *  against the original byte-for-byte. */
+export function applyBrushPaint(tile: TerrainTile, input: z.infer<typeof paintInput>): void {
   const { nrows, ncols, origin, scale } = tile;
   if (tile.paintMat === undefined) tile.paintMat = new Uint8Array(nrows * ncols);
   if (tile.paintW === undefined) tile.paintW = new Float32Array(nrows * ncols);
@@ -254,8 +366,10 @@ function reprojectLayerHeights(world: WorldContext, layer: EditableTerrain, cx: 
   layer.grass?.refreshCircle(cx, cz, radius + 3);
 }
 
-/** Apply one deterministic brush stamp to a tile's heights, in place. */
-function applyBrush(tile: TerrainTile, input: z.infer<typeof deformInput>): void {
+/** Apply one deterministic brush stamp to a tile's heights, in place. Exported so the
+ *  derived-lattice port (materializeTerrainBrushOp) can be differentially gated against
+ *  the original byte-for-byte. */
+export function applyBrush(tile: TerrainTile, input: z.infer<typeof deformInput>): void {
   const { nrows, ncols, origin, scale, heights } = tile;
   const x0 = origin[0] - scale[0] / 2;
   const z0 = origin[2] - scale[2] / 2;
@@ -299,6 +413,94 @@ function applyBrush(tile: TerrainTile, input: z.infer<typeof deformInput>): void
   }
 }
 
+/** Live-state + host seams the derived-terrain deform/paint paths need. Created per registry by
+ *  registerTerrainEditSkills; the HOST binds authority capabilities after the authoring
+ *  runtime exists (net/server.ts, browser/authoring-runtime.ts call sites). */
+export interface DerivedTerrainEditDeps {
+  /** Authority project-state reader; absent → the derived path is inert (legacy ok:false). */
+  projectState?: WorldProjectStateReader;
+  /** LIVE base-topology resolver over the authoritative MapDoc ref. Replay never calls
+   *  it — the recorded command pins baseTopology via commitFields. */
+  resolveBaseTopology?: (mapDocRef: { assetId: string; hash: string }) => unknown;
+  /** Current composed-height sampler for smooth/flatten on the derived lattice. Absent
+   *  → those modes are rejected on the derived path (raise/lower/noise need no heights). */
+  sampleHeightM?: (gx: number, gz: number) => number;
+  /** Optional content reader for layer refs not in the live store (e.g. layers committed
+   *  by an external tool with fs-backed content). */
+  readLayer?: (ref: { assetId: string; hash: string }) => unknown;
+  /** Paint-layer sibling of readLayer (D5.3). */
+  readPaintLayer?: (ref: { assetId: string; hash: string }) => unknown;
+  /** Live layer-content store, contentHash → canonical layer. Rebuilt by replaying the
+   *  recorded deform ops — the same live-state contract as the EditableTerrain map. */
+  readonly layers: Map<string, unknown>;
+  /** Live paint-layer store (D5.3), rebuilt by replaying the recorded paint ops. Separate
+   *  from `layers` so the two read tools stay unambiguous about the content they serve. */
+  readonly paintLayers: Map<string, unknown>;
+}
+
+/** Port of applyBrush onto the global LOD0 sample lattice of a derived-terrain base
+ *  topology: same weights, same arithmetic, expressed as sparse additive metre deltas
+ *  (the durable edit-layer artifact — brush params are never replayed). The loop itself
+ *  lives in terrain/brush-kernel.mjs (materializeLatticeBrushDeltas) so the editor's
+ *  D5.2 sculpt preview shares the EXACT math; this shell resolves the lattice from the
+ *  base topology and maps the missing-sampler case onto the skill's coded error. */
+export function materializeTerrainBrushOp(
+  baseTopologyInput: unknown,
+  input: { center: [number, number]; radius: number; delta: number; mode: (typeof DEFORM_MODES)[number]; falloff: (typeof FALLOFFS)[number] },
+  sampleHeightM?: (gx: number, gz: number) => number,
+): { gx: number; gz: number; deltaM: number }[] {
+  const lattice = terrainEditLatticeGeometry(baseTopologyInput);
+  if ((input.mode === "smooth" || input.mode === "flatten") && sampleHeightM === undefined) {
+    throw new SkillInvocationError("invalid_input", `terrain.deform: ${input.mode} on derived terrain requires a composed-height sampler (host must wire authoring.readMapDoc + derivedTerrainTopology)`);
+  }
+  return materializeLatticeBrushDeltas(lattice, input, sampleHeightM);
+}
+
+/** Port of applyBrushPaint onto the global LOD0 sample lattice of a derived-terrain base
+ *  topology: same falloff weights, same arithmetic, expressed as sparse SIGNED blend deltas
+ *  (the durable paint-layer artifact — brush params are never replayed). Every in-circle
+ *  sample is emitted, including zero-weight ones: a zero-weight paint still sets the material
+ *  id and a zero-weight erase still clears it where the weight is already 0, exactly like
+ *  applyBrushPaint, so the composed channels stay byte-identical to the EditableTerrain path. */
+export function materializeTerrainPaintOp(
+  baseTopologyInput: unknown,
+  input: { center: [number, number]; radius: number; strength: number; falloff: (typeof FALLOFFS)[number]; material: keyof typeof TERRAIN_PAINT_MATERIAL_IDS; erase: boolean },
+): { gx: number; gz: number; material: string; weight: number }[] {
+  const lattice = terrainEditLatticeGeometry(baseTopologyInput);
+  const cols = lattice.maxGx - lattice.minGx; // last domain-relative column index
+  const rows = lattice.maxGz - lattice.minGz;
+  const x0 = lattice.minX, z0 = lattice.minZ;
+  const step = lattice.stepM;
+  const [cx, cz] = input.center;
+  const r = input.radius, r2 = r * r;
+  // Enclosing-cell clamp, mirroring materializeTerrainBrushOp, so the iteration rect covers
+  // exactly the samples the tile path can touch.
+  const col0 = Math.min(cols, Math.max(0, Math.floor((cx - r - x0) / step)));
+  const col1 = Math.max(0, Math.min(cols, Math.ceil((cx + r - x0) / step)));
+  const row0 = Math.min(rows, Math.max(0, Math.floor((cz - r - z0) / step)));
+  const row1 = Math.max(0, Math.min(rows, Math.ceil((cz + r - z0) / step)));
+  const deltas: { gx: number; gz: number; material: string; weight: number }[] = [];
+  for (let row = row0; row <= row1; row++) {
+    const wz = z0 + row * step;
+    for (let col = col0; col <= col1; col++) {
+      const wx = x0 + col * step;
+      // brushWeightAt (brush-kernel.mjs — THE single copy of the falloff math) is 0 both
+      // out-of-radius and at the exact rim; only the rim counts as a touch, because a
+      // zero-weight stamp still carries applyBrushPaint's material side effects.
+      const f = brushWeightAt(input.falloff, wx, wz, cx, cz, r);
+      const dx = wx - cx, dz = wz - cz;
+      if (f === 0 && dx * dx + dz * dz > r2) continue;
+      deltas.push({
+        gx: lattice.minGx + col,
+        gz: lattice.minGz + row,
+        material: input.erase ? "none" : input.material,
+        weight: input.erase ? -(input.strength * f) : input.strength * f,
+      });
+    }
+  }
+  return deltas;
+}
+
 /** Register terrain.create + terrain.deform. `layers` is the per-registry live state (each
  *  context — headless authoritative, browser render — keeps its own; both reconstruct identically
  *  from the recorded ops). */
@@ -315,7 +517,255 @@ export function registerTerrainEditSkills(
   vegetationClears: Map<string, Array<() => void | Promise<void>>> = new Map(),
   waterContact?: EditableTerrainWaterContactHooks,
   grassVisualPackage?: GrassFieldVisualPackage,
+  /** Derived-terrain seams (D5.1). Hosts share ONE box so authority capabilities bound
+   *  after registration (the authoring runtime is created after core skills) are visible
+   *  to the handler at invoke time. */
+  derivedDeps?: DerivedTerrainEditDeps,
 ): { layers: Map<string, EditableTerrain> } {
+  const derived: DerivedTerrainEditDeps = derivedDeps ?? { layers: new Map(), paintLayers: new Map() };
+
+  /** The D5.1 derived path: materialize the stroke as sparse lattice deltas and commit
+   *  the updated edit layer through a nested authoring.commit (folded into this recorded
+   *  command — the commit is atomic, and nothing after it can throw, so no compensation
+   *  is registered). Returns the legacy ok:false when no derived authority is wired or
+   *  no MapDoc is mounted. */
+  const derivedDeform = async (input: z.infer<typeof deformInput>, ctx: Parameters<SkillDefinition<z.infer<typeof deformInput>, z.infer<typeof deformOutput>>["handler"]>[1]): Promise<z.infer<typeof deformOutput>> => {
+    const projectState = derived.projectState;
+    if (projectState === undefined) return { ok: false };
+    // Legacy replay: a deform recorded BEFORE the derived path existed carries
+    // no baseTopology pin. Reproducing it through the derived path would mint a
+    // nested commit the record never had and break the durable authoring-record
+    // chain — replay it as the no-op it was. Pinned (new-style) replays and all
+    // live invokes take the derived path.
+    if (ctx.replay === true && input.baseTopology === undefined) return { ok: false };
+    const nested = {
+      agentId: ctx.agentId,
+      sessionId: ctx.sessionId,
+      permissions: ctx.permissions,
+      tick: ctx.tick,
+      world: ctx.world,
+      chainId: ctx.chainId,
+      chainToken: ctx.chainToken,
+      ...(ctx.profile !== undefined ? { profile: ctx.profile } : {}),
+    };
+    const snapshotRes = await registry.invoke("authoring.sourceSnapshot", {}, nested);
+    if (!snapshotRes.success) {
+      throw new SkillInvocationError(
+        (snapshotRes.error?.code ?? "handler_error") as MCPErrorCode,
+        `terrain.deform could not read the authoritative source snapshot: ${snapshotRes.error?.message ?? "unknown error"}`,
+      );
+    }
+    const snapshot = snapshotRes.result as { head: { revision: number; headHash: string }; projectState: WorldProjectState };
+    const mapDocRef = snapshot.projectState.refs.mapDoc;
+    if (mapDocRef === null) return { ok: false };
+    let baseTopology;
+    if (input.baseTopology !== undefined) {
+      baseTopology = parseTerrainEditBaseTopology(input.baseTopology);
+    } else {
+      if (derived.resolveBaseTopology === undefined) return { ok: false };
+      baseTopology = parseTerrainEditBaseTopology(derived.resolveBaseTopology(mapDocRef));
+    }
+    const layerId = `derived-${baseTopology.grid.gridId}`;
+    const refs = snapshot.projectState.refs.terrainEditLayers;
+    const existingRef = refs.find((ref) => ref.layerId === layerId);
+    let existingLayer;
+    if (existingRef !== undefined) {
+      const content = derived.layers.get(existingRef.hash) ?? derived.readLayer?.(existingRef);
+      if (content === undefined) {
+        throw new Error(`terrain.deform: derived edit layer '${layerId}' content (${existingRef.hash}) is unavailable to this host`);
+      }
+      existingLayer = parseTerrainEditLayer(content);
+      if (existingLayer.baseTopology.topologyHash !== baseTopology.topologyHash) {
+        const rebase = rebaseTerrainEditLayer(existingLayer, baseTopology);
+        if (!rebase.ok) {
+          throw new SkillInvocationError(
+            "conflict",
+            `terrain.deform: derived edit layer '${layerId}' cannot rebase onto the mounted topology: ${rebase.conflicts.map((conflict) => conflict.code).join(", ")}`,
+          );
+        }
+        existingLayer = rebase.layer;
+      }
+    }
+    const deltas = materializeTerrainBrushOp(baseTopology, input, derived.sampleHeightM);
+    if (deltas.length === 0) return { ok: false }; // the brush covered no lattice sample
+    const stroke = appendTerrainEditStroke(existingLayer, { layerId, baseTopology, deltas });
+    const layerRef = {
+      assetId: `assets/sources/terrain-edit-layer/${stroke.layer.contentHash.slice("sha256:".length)}.layer.json`,
+      hash: stroke.layer.contentHash,
+      layerId,
+      baseTopologyHash: baseTopology.topologyHash,
+    };
+    if (input.layerRef !== undefined
+      && (input.layerRef.assetId !== layerRef.assetId || input.layerRef.hash !== layerRef.hash
+        || input.layerRef.layerId !== layerRef.layerId || input.layerRef.baseTopologyHash !== layerRef.baseTopologyHash)) {
+      throw new Error(`terrain.deform replay diverged: the recorded layer pin ${input.layerRef.hash} recomputed to ${layerRef.hash}`);
+    }
+    const nextRefs = existingRef === undefined
+      ? [...refs, layerRef]
+      : refs.map((ref) => (ref.layerId === layerId ? layerRef : ref));
+    const transaction = {
+      schema: "limina.authoring-transaction/v1",
+      transactionId: `terrain-edit-${stroke.layer.contentHash.slice(7, 39)}-${snapshot.head.headHash.slice(7, 39)}`,
+      projectId: projectState.projectId,
+      baseRevision: snapshot.head.revision,
+      baseHeadHash: snapshot.head.headHash,
+      operations: [{
+        adapter: "project-state",
+        adapterVersion: "1.0.0",
+        action: "refs.patch",
+        input: { projectId: projectState.projectId, patch: { terrainEditLayers: nextRefs } },
+        guard: { beforeHash: snapshot.projectState.stateHash },
+      }],
+    };
+    const commitRes = await registry.invoke("authoring.commit", {
+      transaction,
+      // Replay forwards the pinned durable record so the authoring record chain stays
+      // contiguous across nested + top-level commits (see the input commitRecord pin).
+      ...(input.commitRecord !== undefined ? { commitRecord: input.commitRecord } : {}),
+    }, nested);
+    if (!commitRes.success) {
+      throw new SkillInvocationError(
+        (commitRes.error?.code ?? "handler_error") as MCPErrorCode,
+        `terrain.deform could not commit the derived edit layer: ${commitRes.error?.message ?? "unknown error"}`,
+      );
+    }
+    const commitRecord = (commitRes.result as { commitRecord: z.infer<typeof DurableAuthoringRecordSchema> }).commitRecord;
+    derived.layers.set(stroke.layer.contentHash, stroke.layer);
+    ctx.emit("terrain.deformed", {
+      derived: true,
+      layerId,
+      contentHash: stroke.layer.contentHash,
+      deltaCount: deltas.length,
+      folded: stroke.folded,
+      mode: input.mode,
+    });
+    return {
+      ok: true,
+      baseTopology,
+      layerRef,
+      commitRecord,
+      derived: { layerId, deltaCount: deltas.length, folded: stroke.folded, contentHash: stroke.layer.contentHash },
+    };
+  };
+
+  /** The D5.3 derived paint path: materialize the stamp as sparse signed lattice deltas and
+   *  commit the updated paint layer through a nested authoring.commit — the mirror of
+   *  derivedDeform. Returns the legacy ok:false when no derived authority is wired, no
+   *  MapDoc is mounted, or a pin-less record replays (a paint recorded BEFORE this path
+   *  existed never committed; replay must not mint one). */
+  const derivedPaint = async (input: z.infer<typeof paintInput>, ctx: Parameters<SkillDefinition<z.infer<typeof paintInput>, z.infer<typeof paintOutput>>["handler"]>[1]): Promise<z.infer<typeof paintOutput>> => {
+    const projectState = derived.projectState;
+    if (projectState === undefined) return { ok: false };
+    if (ctx.replay === true && input.baseTopology === undefined) return { ok: false };
+    const nested = {
+      agentId: ctx.agentId,
+      sessionId: ctx.sessionId,
+      permissions: ctx.permissions,
+      tick: ctx.tick,
+      world: ctx.world,
+      chainId: ctx.chainId,
+      chainToken: ctx.chainToken,
+      ...(ctx.profile !== undefined ? { profile: ctx.profile } : {}),
+    };
+    const snapshotRes = await registry.invoke("authoring.sourceSnapshot", {}, nested);
+    if (!snapshotRes.success) {
+      throw new SkillInvocationError(
+        (snapshotRes.error?.code ?? "handler_error") as MCPErrorCode,
+        `terrain.paint could not read the authoritative source snapshot: ${snapshotRes.error?.message ?? "unknown error"}`,
+      );
+    }
+    const snapshot = snapshotRes.result as { head: { revision: number; headHash: string }; projectState: WorldProjectState };
+    const mapDocRef = snapshot.projectState.refs.mapDoc;
+    if (mapDocRef === null) return { ok: false };
+    let baseTopology;
+    if (input.baseTopology !== undefined) {
+      baseTopology = parseTerrainEditBaseTopology(input.baseTopology);
+    } else {
+      if (derived.resolveBaseTopology === undefined) return { ok: false };
+      baseTopology = parseTerrainEditBaseTopology(derived.resolveBaseTopology(mapDocRef));
+    }
+    const layerId = `derived-paint-${baseTopology.grid.gridId}`;
+    const refs = snapshot.projectState.refs.terrainEditLayers;
+    const existingRef = refs.find((ref) => ref.layerId === layerId);
+    let existingLayer;
+    if (existingRef !== undefined) {
+      const content = derived.paintLayers.get(existingRef.hash) ?? derived.readPaintLayer?.(existingRef);
+      if (content === undefined) {
+        throw new Error(`terrain.paint: derived paint layer '${layerId}' content (${existingRef.hash}) is unavailable to this host`);
+      }
+      existingLayer = parseTerrainPaintLayer(content);
+      if (existingLayer.baseTopology.topologyHash !== baseTopology.topologyHash) {
+        const rebase = rebaseTerrainPaintLayer(existingLayer, baseTopology);
+        if (!rebase.ok) {
+          throw new SkillInvocationError(
+            "conflict",
+            `terrain.paint: derived paint layer '${layerId}' cannot rebase onto the mounted topology: ${rebase.conflicts.map((conflict) => conflict.code).join(", ")}`,
+          );
+        }
+        existingLayer = rebase.layer;
+      }
+    }
+    const deltas = materializeTerrainPaintOp(baseTopology, input);
+    if (deltas.length === 0) return { ok: false }; // the brush covered no lattice sample
+    const stroke = appendTerrainPaintStroke(existingLayer, { layerId, baseTopology, deltas });
+    const layerRef = {
+      assetId: `assets/sources/terrain-paint-layer/${stroke.layer.contentHash.slice("sha256:".length)}.layer.json`,
+      hash: stroke.layer.contentHash,
+      layerId,
+      baseTopologyHash: baseTopology.topologyHash,
+    };
+    if (input.layerRef !== undefined
+      && (input.layerRef.assetId !== layerRef.assetId || input.layerRef.hash !== layerRef.hash
+        || input.layerRef.layerId !== layerRef.layerId || input.layerRef.baseTopologyHash !== layerRef.baseTopologyHash)) {
+      throw new Error(`terrain.paint replay diverged: the recorded layer pin ${input.layerRef.hash} recomputed to ${layerRef.hash}`);
+    }
+    const nextRefs = existingRef === undefined
+      ? [...refs, layerRef]
+      : refs.map((ref) => (ref.layerId === layerId ? layerRef : ref));
+    const transaction = {
+      schema: "limina.authoring-transaction/v1",
+      transactionId: `terrain-paint-${stroke.layer.contentHash.slice(7, 39)}-${snapshot.head.headHash.slice(7, 39)}`,
+      projectId: projectState.projectId,
+      baseRevision: snapshot.head.revision,
+      baseHeadHash: snapshot.head.headHash,
+      operations: [{
+        adapter: "project-state",
+        adapterVersion: "1.0.0",
+        action: "refs.patch",
+        input: { projectId: projectState.projectId, patch: { terrainEditLayers: nextRefs } },
+        guard: { beforeHash: snapshot.projectState.stateHash },
+      }],
+    };
+    const commitRes = await registry.invoke("authoring.commit", {
+      transaction,
+      ...(input.commitRecord !== undefined ? { commitRecord: input.commitRecord } : {}),
+    }, nested);
+    if (!commitRes.success) {
+      throw new SkillInvocationError(
+        (commitRes.error?.code ?? "handler_error") as MCPErrorCode,
+        `terrain.paint could not commit the derived paint layer: ${commitRes.error?.message ?? "unknown error"}`,
+      );
+    }
+    const commitRecord = (commitRes.result as { commitRecord: z.infer<typeof DurableAuthoringRecordSchema> }).commitRecord;
+    derived.paintLayers.set(stroke.layer.contentHash, stroke.layer);
+    ctx.emit("terrain.painted", {
+      derived: true,
+      layerId,
+      contentHash: stroke.layer.contentHash,
+      deltaCount: deltas.length,
+      folded: stroke.folded,
+      material: input.material,
+      erase: input.erase,
+    });
+    return {
+      ok: true,
+      baseTopology,
+      layerRef,
+      commitRecord,
+      derived: { layerId, deltaCount: deltas.length, folded: stroke.folded, contentHash: stroke.layer.contentHash },
+    };
+  };
+
   const create: SkillDefinition<z.infer<typeof createInput>, { entity: string; mapHash?: string }> = {
     name: "terrain.create",
     version: "1.0.0",
@@ -523,14 +973,18 @@ export function registerTerrainEditSkills(
     },
   };
 
-  const deform: SkillDefinition<z.infer<typeof deformInput>, { ok: boolean }> = {
+  const deform: SkillDefinition<z.infer<typeof deformInput>, z.infer<typeof deformOutput>> = {
     name: "terrain.deform",
-    version: "1.0.0",
-    description: "Reshape an editable terrain layer with a brush stamp (raise/lower/smooth/flatten/noise) in a world-space radius. Deterministic + recorded, so hand-sculpted terrain replays and is editable.",
+    version: "1.1.0",
+    description: "Reshape terrain with a brush stamp (raise/lower/smooth/flatten/noise) in a world-space radius. Targets the most recent editable layer; with no editable layer and a derived MapDoc mounted, the stroke materializes into the project's derived-terrain edit layer (sparse lattice deltas) and commits it to the authority, recompiling the terrain you see. Deterministic + recorded, so hand-sculpted terrain replays and is editable.",
     category: "terrain",
     permissions: ["scene.write"],
+    // Pins the resolved lattice + committed layer identity + the nested commit's
+    // durable record into the replay log (derived path only) — mirrors terrain.create's
+    // mapHash and authoring.commit's own commitRecord pin. Absent on EditableTerrain.
+    commitFields: ["baseTopology", "layerRef", "commitRecord"],
     input: deformInput,
-    output: z.object({ ok: z.boolean() }),
+    output: deformOutput,
     handler: (input, ctx) => {
       let id = input.entity;
       if (id === undefined) {
@@ -539,7 +993,7 @@ export function registerTerrainEditSkills(
         id = last;
       }
       const layer = id !== undefined ? layers.get(id) : undefined;
-      if (layer === undefined) return { ok: false };
+      if (layer === undefined) return derivedDeform(input, ctx);
 
       // H1 compensation: capture the brush-affected height patch BEFORE mutating;
       // on chain unwind, restore it and re-run the exact downstream rebuild the
@@ -563,19 +1017,23 @@ export function registerTerrainEditSkills(
     },
   };
 
-  const paint: SkillDefinition<z.infer<typeof paintInput>, { ok: boolean }> = {
+  const paint: SkillDefinition<z.infer<typeof paintInput>, z.infer<typeof paintOutput>> = {
     name: "terrain.paint",
-    version: "1.0.0",
-    description: "Paint a surface material (sand/grass/rock/dirt) onto an editable terrain layer with a brush in a world-space radius. Blends a per-vertex material weight into the ground shading; deterministic + recorded so painted ground replays. Does NOT change height (pair with terrain.deform).",
+    version: "1.1.0",
+    description: "Paint a surface material (sand/grass/rock/dirt) onto terrain with a brush in a world-space radius. Targets the most recent editable layer; with no editable layer and a derived MapDoc mounted, the stamp materializes into the project's derived-terrain paint layer (sparse signed weight deltas) and commits it to the authority, recoloring the compiled terrain you see. Blends a per-vertex material weight into the ground shading; deterministic + recorded so painted ground replays. "
+      + "Does NOT change height (pair with terrain.deform). Paint-driven grass regrows only on EditableTerrain; derived grass comes from the compiler's biome stages.",
     category: "terrain",
     permissions: ["scene.write"],
+    // Pins the resolved lattice + committed layer identity + the nested commit's durable
+    // record into the replay log (derived path only) — mirrors terrain.deform's pins.
+    commitFields: ["baseTopology", "layerRef", "commitRecord"],
     input: paintInput,
-    output: z.object({ ok: z.boolean() }),
+    output: paintOutput,
     handler: (input, ctx) => {
       let id = input.entity;
       if (id === undefined) { let last: string | undefined; for (const k of layers.keys()) last = k; id = last; }
       const layer = id !== undefined ? layers.get(id) : undefined;
-      if (layer === undefined) return { ok: false };
+      if (layer === undefined) return derivedPaint(input, ctx);
       applyBrushPaint(layer.tile, input);
       // Re-color the EXISTING geometry (render context only): rebuild the elevation base color, then
       // blend the paint overlay. No collider/geometry rebuild — paint never changes height.
@@ -593,8 +1051,68 @@ export function registerTerrainEditSkills(
     },
   };
 
+  // Read seam for the derived-build sidecar: resolve a committed derived edit layer by
+  // content hash from the authority's LIVE store (rebuilt by worldlog replay — the log
+  // is the persistence path, so the sidecar never needs the layer bytes on disk).
+  const editLayer: SkillDefinition<{ assetId: string; hash: string }, { layer: unknown }> = {
+    name: "authoring.terrainEditLayer",
+    version: "1.0.0",
+    description: "Read one content-addressed derived-terrain edit layer (the materialized sparse height deltas terrain.deform commits via refs.terrainEditLayers) from the authority's live store.",
+    category: "world",
+    permissions: ["authoring.read"],
+    effect: "read",
+    priority: "standard",
+    input: z.object({ assetId: z.string(), hash: z.string() }).strict(),
+    output: z.object({ layer: editLayerOutput }),
+    handler: (input) => {
+      const layer = derived.layers.get(input.hash);
+      if (layer === undefined) {
+        throw new SkillInvocationError("not_found", `no live derived terrain edit layer with content hash ${input.hash}`);
+      }
+      return { layer };
+    },
+  };
+
+  /** The terrain-paint-layer wire shape for authoring.terrainPaintLayer output (zod mirror
+   *  of terrain/paint-layer.mjs; the service re-validates with parseTerrainPaintLayer). */
+  const paintLayerOutput = z.object({
+    schema: z.literal("limina.terrain-paint-layer/v1"),
+    layerId: z.string(),
+    gridId: z.string(),
+    baseTopology: baseTopologyInput,
+    operations: z.array(z.object({
+      operationId: z.string(),
+      deltas: z.array(z.object({ gx: z.number().int(), gz: z.number().int(), material: z.string(), weight: z.number() }).strict()),
+    }).strict()),
+    contentHash: z.string(),
+  }).strict();
+
+  // Read seam for the derived-build sidecar: resolve a committed derived paint layer by
+  // content hash from the authority's LIVE store (rebuilt by worldlog replay — the log
+  // is the persistence path, so the sidecar never needs the layer bytes on disk).
+  const paintLayer: SkillDefinition<{ assetId: string; hash: string }, { layer: unknown }> = {
+    name: "authoring.terrainPaintLayer",
+    version: "1.0.0",
+    description: "Read one content-addressed derived-terrain paint layer (the materialized sparse paint stamps terrain.paint commits into refs.terrainEditLayers) from the authority's live store.",
+    category: "world",
+    permissions: ["authoring.read"],
+    effect: "read",
+    priority: "standard",
+    input: z.object({ assetId: z.string(), hash: z.string() }).strict(),
+    output: z.object({ layer: paintLayerOutput }),
+    handler: (input) => {
+      const layer = derived.paintLayers.get(input.hash);
+      if (layer === undefined) {
+        throw new SkillInvocationError("not_found", `no live derived terrain paint layer with content hash ${input.hash}`);
+      }
+      return { layer };
+    },
+  };
+
   registry.register(create as unknown as Parameters<SkillRegistry["register"]>[0]);
   registry.register(deform as unknown as Parameters<SkillRegistry["register"]>[0]);
   registry.register(paint as unknown as Parameters<SkillRegistry["register"]>[0]);
+  registry.register(editLayer as unknown as Parameters<SkillRegistry["register"]>[0]);
+  registry.register(paintLayer as unknown as Parameters<SkillRegistry["register"]>[0]);
   return { layers };
 }

@@ -93,9 +93,16 @@ test("Edit activation is runtime-specific, epoch guarded, retained, and reboot-s
   assert.match(invalidation, /state\.editRuntimeEpoch\+\+/);
   const batch = functionBody("applyWorldlogBatchInner");
   assert.ok(batch.match(/invalidateEditDerivedRevision\(\)/g)?.length >= 2);
-  assert.match(batch, /const invalidatedDerived = invalidateEditDerivedRevision\(\)/);
-  assert.match(batch, /!invalidatedDerived && state\.running/,
-    "new authoring commands can still hot-apply over an invalidated derived presentation");
+  // Sculpt-on-derived: the hot in-place apply runs FIRST; only a command the runtime
+  // cannot absorb (needsReboot) invalidates the derived presentation, so a
+  // terrain.deform dab reaches the recompiled revision's content-delta activation in
+  // the SAME runtime instead of rebooting the viewport.
+  ordered(batch, [
+    "state.running && !state.rebooting && !res.reset",
+    "await state.running.applyAuthorCommands(authorCmds)",
+    "if (r.needsReboot) {",
+    "invalidateEditDerivedRevision();",
+  ], "in-place apply before derived invalidation");
 });
 
 test("History removes current derived presentation before replaying a past prefix", () => {

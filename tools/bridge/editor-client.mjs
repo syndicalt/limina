@@ -1,8 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 const DEFAULT_URL = "ws://127.0.0.1:8787/";
+const CAPABILITY_SCHEMA = "limina.editor-capability/v1";
 const DEFAULT_TIMEOUT_MS = 10_000;
-const MAX_RPC_MESSAGE_CHARS = 1_048_576;
+// 8 MiB: must cover the largest legitimate tool response — a committed terrain
+// edit layer (limina.terrain-edit-layer/v1 caps at 4 MiB of canonical JSON)
+// plus its envelope. The former 1 MiB cap stalled derived builds once a busy
+// sculpt session's layer crossed it (rev-130 incident).
+const MAX_RPC_MESSAGE_CHARS = 8 * 1_048_576;
 
 export class EditorClientError extends Error {
   constructor(message, { code, data, cause } = {}) {
@@ -67,8 +74,49 @@ function asText(data) {
   return String(data);
 }
 
+/** The launcher's private capability handoff lives at <projectRoot>/.limina/editor-runtime/. */
+export function defaultEditorCapabilityPath(projectRoot = process.cwd()) {
+  return join(projectRoot, ".limina", "editor-runtime", "editor-capability.json");
+}
+
+/** Read + strictly validate the launcher-written capability. The file IS the
+ *  token: refuse it when group/other carries any permission bits — a
+ *  world-readable capability is a leaked token, not a configuration. */
+export function readEditorCapability(path) {
+  if (typeof path !== "string" || path.length === 0) throw new EditorClientError("editor capability path must be a non-empty string");
+  let stat;
+  try { stat = statSync(path); }
+  catch (error) {
+    throw new EditorClientError(
+      `no editor capability at ${path} — set LIMINA_EDITOR_TOKEN or start the limina editor launcher (it writes one)`,
+      { cause: error },
+    );
+  }
+  if (!stat.isFile()) throw new EditorClientError(`editor capability path is not a file: ${path}`);
+  if ((stat.mode & 0o077) !== 0) throw new EditorClientError(`editor capability file must be private (mode 0600): ${path}`);
+  let parsed;
+  try { parsed = JSON.parse(readFileSync(path, "utf8")); }
+  catch (error) { throw new EditorClientError(`editor capability file is not valid JSON: ${path}`, { cause: error }); }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed) || parsed.schema !== CAPABILITY_SCHEMA) {
+    throw new EditorClientError(`editor capability file has an unrecognized schema: ${path}`);
+  }
+  if (typeof parsed.token !== "string" || !/^[A-Za-z0-9_-]{32,128}$/.test(parsed.token)) {
+    throw new EditorClientError(`editor capability file carries an invalid token: ${path}`);
+  }
+  return Object.freeze({ url: assertEditorUrl(parsed.editorUrl), token: parsed.token });
+}
+
 export function editorClientConfigFromEnvironment(environment = process.env, overrides = {}) {
-  const token = environment.LIMINA_EDITOR_TOKEN;
+  // Explicit env token wins; otherwise fall back to the launcher's private
+  // capability file (LIMINA_EDITOR_CAPABILITY overrides its default path).
+  // An explicitly-set but malformed token is rejected below, never displaced.
+  let token = environment.LIMINA_EDITOR_TOKEN;
+  let url = environment.LIMINA_EDITOR_URL;
+  if (token === undefined) {
+    const capability = readEditorCapability(environment.LIMINA_EDITOR_CAPABILITY ?? defaultEditorCapabilityPath());
+    token = capability.token;
+    url = url ?? capability.url;
+  }
   if (typeof token !== "string" || !/^[A-Za-z0-9_-]{32,128}$/.test(token)) {
     throw new EditorClientError(
       "LIMINA_EDITOR_TOKEN must be the 32-128 character token from the project's private editor capability file",
@@ -79,7 +127,7 @@ export function editorClientConfigFromEnvironment(environment = process.env, ove
     throw new EditorClientError("LIMINA_CALL_TIMEOUT_MS must be an integer from 100 to 120000");
   }
   return Object.freeze({
-    url: assertEditorUrl(environment.LIMINA_EDITOR_URL ?? DEFAULT_URL),
+    url: assertEditorUrl(url ?? DEFAULT_URL),
     authToken: token,
     timeoutMs,
     agentId: overrides.agentId ?? "limina-coordinator",
@@ -222,7 +270,7 @@ export class EditorBridgeClient {
   #onMessage(data) {
     const text = asText(data);
     if (text.length > MAX_RPC_MESSAGE_CHARS) {
-      this.#protocolFailure("editor_host response exceeds the 1048576-character limit");
+      this.#protocolFailure("editor_host response exceeds the 8388608-character limit");
       return;
     }
     let message;

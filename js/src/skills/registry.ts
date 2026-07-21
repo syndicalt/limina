@@ -11,7 +11,7 @@ import type { Tracer } from "../observability/event.ts";
 import type { MCPErrorCode, MCPResponse, MCPTool } from "../mcp/protocol.ts";
 import type { UniformGridSpatialIndex } from "../spatial/index.ts";
 import type { SeededRng } from "../worldlog/log.ts";
-import { cloneReplayValue } from "../worldlog/replay-value.ts";
+import { canonicalizeNegativeZero, cloneReplayValue } from "../worldlog/replay-value.ts";
 import { captureEntityIndex, hasEntityIndex, restoreEntityIndex, type EntityIndexSnapshot } from "../worldlog/snapshot.ts";
 import { armEntityIndexMutationHook } from "../ecs/world.ts";
 import { teardownEntity } from "./entity-teardown.ts";
@@ -116,6 +116,9 @@ export interface ExecutionContext {
   /** Recorder-minted object-identity capability paired with chainId. A nested
    * invoke forwards both; the string id alone never proves chain membership. */
   chainToken?: object;
+  /** Rehydration replay marker (see InvokeContext.replay): replaying a recorded
+   *  command must reproduce its RECORDED outcome, not compute new effects. */
+  replay?: true;
   /** Register a COMPENSATION for a world mutation this handler just applied (H1
    *  failure atomicity). Undos accumulate on ONE LIFO ledger per HEAD chain —
    *  nested invokes append to their head's ledger — and run only when the head
@@ -166,6 +169,12 @@ export interface InvokeBase {
    *  re-enters invoke() to apply an already-approved parked action; callers must
    *  not use it as a general policy or validation bypass. */
   approvalGateBypassed?: true;
+  /** Rehydration replay marker (set by AuthoritativeServer.rehydrate). Handlers
+   *  use it to reproduce a recorded command's RECORDED outcome instead of
+   *  computing new effects — e.g. a deform recorded before the derived edit
+   *  layer existed (no replay pins) must replay as the no-op it was, or the
+   *  nested commits it would now mint break the durable authoring-record chain. */
+  replay?: true;
   /** Module-private proof that resolveApproval already committed policy usage at
    *  proposal time. The symbol key prevents callers from forging this bypass. */
   [policyAlreadyCommitted]?: true;
@@ -450,12 +459,15 @@ export class SkillRegistry {
     if (skill === undefined) return { ok: false };
     const parsed = skill.input.safeParse(input);
     if (!parsed.success) return { ok: false };
+    // Canonicalize -0 -> +0 once, here, so the value the handler applies and the value
+    // the recorder clones into the command are the SAME +0 the on-disk JSON replays.
+    const normalized = canonicalizeNegativeZero(parsed.data);
     const state: PreparedInvocationState = {
-      registry: this, name, skill, rawInput: input, input: parsed.data, used: false,
+      registry: this, name, skill, rawInput: input, input: normalized, used: false,
     };
     return {
       ok: true,
-      input: parsed.data,
+      input: normalized,
       apply(base: InvokeBase): InvokeBase {
         if (state.used) throw new Error(`prepared invocation '${name}' was already consumed`);
         return { ...base, [preparedInvocation]: state };
@@ -701,6 +713,7 @@ export class SkillRegistry {
       world: base.world,
       chainId,
       chainToken: base.chainToken,
+      replay: base.replay,
       undo: (label, fn) => {
         if (!this.chainUndoLedgerEnabled) return;
         const frame = this.chainFrames.get(chainId);
@@ -835,7 +848,9 @@ export class SkillRegistry {
       if (!parsed.success) {
         return { success: false, error: { code: "invalid_input", message: parsed.error.message }, metadata: meta() };
       }
-      normalizedInput = parsed.data;
+      // Same -0 -> +0 canonicalization as prepareInvocation (this is the direct-invoke
+      // path where no authority wrapper prepared the input) so replay stays bit-stable.
+      normalizedInput = canonicalizeNegativeZero(parsed.data);
     }
     // 3. Policy decision (M7). With an engine attached it SUBSUMES the static
     //    profile check and adds quota/revocation/budget; every crossing is audited

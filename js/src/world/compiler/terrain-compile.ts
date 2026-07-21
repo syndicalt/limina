@@ -1,14 +1,23 @@
 import { WorldMapSchema, migrateWorldMap, verifyWorldMap, type WorldMap } from "../worldmap.ts";
-import { createMapTerrainField, sliceMapFieldChunk, MapFieldCancelledError, MAP_FIELD_MARGIN_M, MAX_MAP_FIELD_MASTER_RES } from "../../terrain/map-field.mjs";
+import { createMapTerrainField, sliceMapFieldChunk, nearestMapFieldCell, MapFieldCancelledError, MAX_MAP_FIELD_MASTER_RES } from "../../terrain/map-field.mjs";
 import {
-  createTerrainEditBaseTopology,
+  MAX_TERRAIN_EDIT_LAYER_BYTES,
   parseTerrainEditLayer,
   prepareTerrainEditLayers,
   composePreparedTerrainEditLayers,
   preparedTerrainEditLayerChunkSlices,
   TerrainEditCancelledError,
 } from "../../terrain/edit-layer.mjs";
-import { terrainChunkRangeForBounds, terrainChunkTopology } from "../../terrain/grid.mjs";
+import {
+  TERRAIN_PAINT_ERASE_MATERIAL,
+  TERRAIN_PAINT_MATERIAL_IDS,
+  parseTerrainPaintLayer,
+  prepareTerrainPaintLayers,
+  composePreparedTerrainPaintLayers,
+  preparedTerrainPaintLayerChunkSlices,
+} from "../../terrain/paint-layer.mjs";
+import { terrainEditBaseTopologyForWorldMap } from "../../terrain/edit-topology.mjs";
+import { terrainChunkTopology } from "../../terrain/grid.mjs";
 import { validateErosionRecipe } from "../pipeline/erosion.mjs";
 import { HYDROLOGY_TOPOLOGY_VERSION, HydrologyTopologyCancelledError, createHydrologyTopology } from "../hydrology-topology.mjs";
 import {
@@ -80,6 +89,19 @@ export const MAX_WORLD_TERRAIN_COMPILE_CHUNKS = 16_384;
 // at ~9.8k chunks — below the advertised chunk cap.
 export const MAX_WORLD_TERRAIN_COMPILE_ARTIFACT_BYTES = 512 * 1024 * 1024;
 export const MAX_WORLD_TERRAIN_COMPILE_MASTER_SAMPLES = MAX_MAP_FIELD_MASTER_RES * MAX_MAP_FIELD_MASTER_RES;
+
+// A chunk slice is a SUBSET of one layer's operations, so its canonical JSON is bounded by the
+// layer format's own 4 MiB cap (MAX_TERRAIN_*_LAYER_BYTES). The DEFAULT 1 MiB canonical budget
+// rejected a legal paint pattern — stamps concentrated in ONE chunk (rev-356 incident: 121 grass
+// dabs at one spot = 17,368 deltas in one slice = 1,074,394 bytes) — and stalled every derived
+// build with paint refs present. Limits only relax REJECTION: every previously-hashable slice
+// canonicalizes to the same bytes, so stage keys and artifact reuse are bit-stable across the fix.
+const SLICE_HASH_CANONICAL_LIMITS = Object.freeze({
+  maxBytes: MAX_TERRAIN_EDIT_LAYER_BYTES,
+  // 65,536 deltas x ~6 canonical nodes each, plus operation wrappers; headroom over the worst
+  // legal single-chunk concentration without opening an unbounded allocation surface.
+  maxNodes: 1_000_000,
+});
 
 const RAW_HASH = /^[0-9a-f]{64}$/;
 const REF_ID = /^[a-z][a-z0-9._-]{0,95}$/;
@@ -240,7 +262,7 @@ function parseConfig(input: unknown) {
   });
 }
 
-function normalizeEditedTile(base: any, heightsM: Float32Array, verticalRange: { minM: number; maxM: number }, shouldCancel: () => boolean) {
+function normalizeEditedTile(base: any, heightsM: Float32Array, verticalRange: { minM: number; maxM: number }, shouldCancel: () => boolean, paint?: { paintMat: Uint8Array; paintW: Float32Array }) {
   const span = verticalRange.maxM - verticalRange.minM;
   const heights = new Float32Array(heightsM.length);
   for (let index = 0; index < heights.length; index++) {
@@ -257,12 +279,48 @@ function normalizeEditedTile(base: any, heightsM: Float32Array, verticalRange: {
     origin: [base.topology.bounds.minX + 24, verticalRange.minM, base.topology.bounds.minZ + 24],
     scale: [48, span, 48],
     heights,
-    paintMat: base.paintMat,
-    paintW: base.paintW,
+    paintMat: paint?.paintMat ?? base.paintMat,
+    paintW: paint?.paintW ?? base.paintW,
     climate: base.climate,
     climateChannels: 3,
     blight: base.blight,
   };
+}
+
+/** Compose the paint stack onto a master-resolution copy of the field's paint channels so the
+ *  bird's-eye overview agrees with the eye-level paint texture for the same painted cell (both
+ *  blend TERRAIN_PAINT_ALBEDO by weight). Applies the SAME ordered additive clamp arithmetic as
+ *  composePreparedTerrainPaintLayers (Float32Array store rounds every application; erase clears
+ *  the material at zero weight), iterating layers/operations/deltas in canonical authority order.
+ *  Called ONLY when a paint layer exists — paint-less compiles keep the shared field reference,
+ *  so their overview artifact and its reuse stay byte-identical. */
+function composeMasterPaintForOverview(field: any, baseTopology: any, paintLayers: any[], shouldCancel: () => boolean) {
+  const paintMat = new Uint8Array(field.paintMat);
+  const paintW = new Float32Array(field.paintW);
+  const stepM = baseTopology.grid.chunkSizeM / (baseTopology.grid.defaultSamples - 1);
+  const originX = baseTopology.grid.origin[0], originZ = baseTopology.grid.origin[1];
+  let work = 0;
+  for (const layer of paintLayers) {
+    for (const operation of layer.operations) {
+      for (const delta of operation.deltas) {
+        checkpoint(shouldCancel, work++);
+        // Domain lattice (gx, gz) -> world metres (grid.origin + g * step), then the nearest
+        // master raster cell — the same sampling discipline sliceMapFieldChunk uses per chunk.
+        const masterCell = nearestMapFieldCell(field, originX + delta.gx * stepM, originZ + delta.gz * stepM);
+        if (masterCell === undefined) continue; // outside the master square: no raster to recolor
+        if (delta.material === TERRAIN_PAINT_ERASE_MATERIAL) {
+          const weight = Math.max(0, paintW[masterCell] + delta.weight);
+          paintW[masterCell] = weight;
+          if (weight <= 0) paintMat[masterCell] = 0;
+        } else {
+          paintMat[masterCell] = TERRAIN_PAINT_MATERIAL_IDS[delta.material as keyof typeof TERRAIN_PAINT_MATERIAL_IDS];
+          paintW[masterCell] = Math.min(1, paintW[masterCell] + delta.weight);
+        }
+      }
+    }
+  }
+  checkpoint(shouldCancel);
+  return Object.freeze({ ...field, paintMat, paintW });
 }
 
 function createWorldOverviewGrid(field: any, shouldCancel: () => boolean) {
@@ -424,7 +482,9 @@ export function compileWorldTerrain(input: unknown) {
   const root = recordWithOptional(
     input,
     ["request", "worldMap", "sourceRefs", "terrainEditLayers", "terrainEditLayerRefs", "compiler", "previousSnapshot", "cancellation"],
-    ["previousManifest", "availableArtifactHashes"],
+    // D5.3: paint layers are OPTIONAL inputs so paint-less compiles keep byte-identical
+    // slice hashes, stage keys, and reuse behaviour across the upgrade.
+    ["previousManifest", "availableArtifactHashes", "terrainPaintLayers", "terrainPaintLayerRefs"],
     "world terrain compile input",
   );
   const request = parseSourceRequest(root.request);
@@ -479,7 +539,20 @@ export function compileWorldTerrain(input: unknown) {
     if (parsed.contentHash !== layers[index].contentHash) throw new Error(`terrain edit layer ref ${index} is not bound to its parsed layer content hash`);
     return parsed;
   });
-  const allRefIds = [mapDocumentRef.refId, ...(designSourceRef === undefined ? [] : [designSourceRef.refId, worldMapRef!.refId]), ...layerRefs.map((ref) => ref.refId)];
+  const hasPaintLayers = Object.hasOwn(root, "terrainPaintLayers") || Object.hasOwn(root, "terrainPaintLayerRefs");
+  if (hasPaintLayers !== (Object.hasOwn(root, "terrainPaintLayers") && Object.hasOwn(root, "terrainPaintLayerRefs"))) {
+    throw new Error("terrain paint layers and refs must be supplied together");
+  }
+  const paintLayerInputs = hasPaintLayers ? denseArray(root.terrainPaintLayers, 64, "terrain paint layers") : [];
+  const paintLayerRefInputs = hasPaintLayers ? denseArray(root.terrainPaintLayerRefs, 64, "terrain paint layer refs") : [];
+  if (paintLayerInputs.length !== paintLayerRefInputs.length) throw new Error("terrain paint layers and refs must have identical lengths");
+  const paintLayers = paintLayerInputs.map((layer) => parseTerrainPaintLayer(layer));
+  const paintLayerRefs = paintLayerRefInputs.map((ref, index) => {
+    const parsed = parseContentRef(ref, `terrain paint layer ref ${index}`, "terrain-paint-layer/v1", "chunk");
+    if (parsed.contentHash !== paintLayers[index].contentHash) throw new Error(`terrain paint layer ref ${index} is not bound to its parsed layer content hash`);
+    return parsed;
+  });
+  const allRefIds = [mapDocumentRef.refId, ...(designSourceRef === undefined ? [] : [designSourceRef.refId, worldMapRef!.refId]), ...layerRefs.map((ref) => ref.refId), ...paintLayerRefs.map((ref) => ref.refId)];
   if (new Set(allRefIds).size !== allRefIds.length) throw new Error("terrain compile source refs must have unique refId values");
 
   let field;
@@ -570,22 +643,24 @@ export function compileWorldTerrain(input: unknown) {
   // the 23.7k bounding square that blew the cap. Clamped to the master square so every
   // chunk slices real raster data; master framing (raster, erosion, hydrology origin,
   // overview grid, topology hash) is unchanged. Beyond the rect is unauthored deep sea,
-  // still rendered by the square overview.
-  const territory = Object.freeze({
-    minX: Math.max(field.bounds.minX, field.featureBounds.minX - MAP_FIELD_MARGIN_M),
-    minZ: Math.max(field.bounds.minZ, field.featureBounds.minZ - MAP_FIELD_MARGIN_M),
-    maxX: Math.min(field.bounds.maxX, field.featureBounds.maxX + MAP_FIELD_MARGIN_M),
-    maxZ: Math.min(field.bounds.maxZ, field.featureBounds.maxZ + MAP_FIELD_MARGIN_M),
-  });
-  const domain = terrainChunkRangeForBounds(field.grid, territory);
+  // still rendered by the square overview. The domain + base topology come from the ONE
+  // shared derivation (terrain/edit-topology.mjs) so runtime sculpt strokes and the
+  // derived-build rebase bind to the lattice this compiler composes.
+  const baseTopology = terrainEditBaseTopologyForWorldMap(map, { gridId: field.grid.gridId });
+  const domain = baseTopology.domain;
   const width = domain.maxTx - domain.minTx + 1, height = domain.maxTz - domain.minTz + 1;
   const chunkCount = width * height;
   if (!Number.isSafeInteger(chunkCount) || chunkCount > config.limits.maxChunks) throw new Error(`terrain compile domain has ${chunkCount} chunks, exceeding cap ${config.limits.maxChunks}`);
-  const baseTopology = createTerrainEditBaseTopology({ grid: field.grid, domain });
   for (const layer of layers) if (layer.baseTopology.topologyHash !== baseTopology.topologyHash) throw new Error(`terrain edit layer '${layer.layerId}' base topology does not match compiler domain`);
+  for (const layer of paintLayers) if (layer.baseTopology.topologyHash !== baseTopology.topologyHash) throw new Error(`terrain paint layer '${layer.layerId}' base topology does not match compiler domain`);
   let prepared;
   try { prepared = prepareTerrainEditLayers({ baseTopology, layers }, { shouldCancel }); }
   catch (error) { if (error instanceof TerrainEditCancelledError) throw new WorldTerrainCompileCancelledError(); throw error; }
+  let preparedPaint;
+  if (paintLayers.length > 0) {
+    try { preparedPaint = prepareTerrainPaintLayers({ baseTopology, layers: paintLayers }, { shouldCancel }); }
+    catch (error) { if (error instanceof TerrainEditCancelledError) throw new WorldTerrainCompileCancelledError(); throw error; }
+  }
 
   // Pass 1 computes dependency identity only. No chunk artifact is materialized before the
   // compiler-owned invalidation plan decides whether a verified prior artifact is reusable.
@@ -606,10 +681,33 @@ export function compileWorldTerrain(input: unknown) {
           schema: "limina.terrain-edit-layer-slice/v1",
           chunkId: topology.chunkId,
           operations: chunkSlices.slices[index].operations,
-        }),
+        }, SLICE_HASH_CANONICAL_LIMITS),
       }));
-      const sourceSlices = orderedSlices.map(({ order: _order, ...slice }) => slice).sort((a, b) => a.refId < b.refId ? -1 : a.refId > b.refId ? 1 : 0);
-      const editSliceHash = compilerContentHash({ schema: "limina.terrain-edit-stack-slice/v1", slices: orderedSlices });
+      // D5.3: paint slices join the SAME edit-layers source hash. The v1 payload is
+      // preserved exactly for paint-less compiles, so their stage keys (and artifact
+      // reuse) are bit-stable across the upgrade; v2 only ever appears once a paint
+      // layer exists. Composition order is documented on the edit-layers stage config:
+      // biome base -> height deltas reshape the field -> paint deltas recolor it.
+      let orderedPaintSlices: { order: number; refId: string; contentHash: string }[] = [];
+      if (preparedPaint !== undefined) {
+        let paintSlices;
+        try { paintSlices = preparedTerrainPaintLayerChunkSlices({ baseTopology, chunkTopology: topology, preparedLayers: preparedPaint }, { shouldCancel }); }
+        catch (error) { if (error instanceof TerrainEditCancelledError) throw new WorldTerrainCompileCancelledError(); throw error; }
+        editSliceDeltaVisits += paintSlices.inspectedDeltaCount;
+        orderedPaintSlices = paintLayerRefs.map((ref, index) => ({
+          order: index,
+          refId: ref.refId,
+          contentHash: compilerContentHash({
+            schema: "limina.terrain-paint-layer-slice/v1",
+            chunkId: topology.chunkId,
+            operations: paintSlices.slices[index].operations,
+          }, SLICE_HASH_CANONICAL_LIMITS),
+        }));
+      }
+      const sourceSlices = [...orderedSlices, ...orderedPaintSlices].map(({ order: _order, ...slice }) => slice).sort((a, b) => a.refId < b.refId ? -1 : a.refId > b.refId ? 1 : 0);
+      const editSliceHash = preparedPaint === undefined
+        ? compilerContentHash({ schema: "limina.terrain-edit-stack-slice/v1", slices: orderedSlices })
+        : compilerContentHash({ schema: "limina.terrain-edit-stack-slice/v2", slices: orderedSlices, paintSlices: orderedPaintSlices });
       compiledChunks.push({
         chunkId: topology.chunkId,
         gridId: topology.gridId,
@@ -638,6 +736,10 @@ export function compileWorldTerrain(input: unknown) {
       worldmap: { schema: "limina.worldmap-stage-config/v1" },
       "base-height": { seed: config.seed, baseAmplitude: config.baseAmplitude, masterTopologyHash: field.masterTopologyHash },
       erosion: config.erosionRecipe,
+      // The composition string stays at v1 deliberately: D5.3 paint rides the SAME stage
+      // via the per-chunk slice hash (v2 payload), so paint-less worlds keep their stage
+      // keys + artifact reuse; the stage now composes biome base -> height deltas -> paint
+      // deltas, in that order.
       "edit-layers": { composition: "ordered-additive-metres/v1" },
       collision: { source: TERRAIN_CHUNK_ARTIFACT_TYPE },
       render: { source: TERRAIN_CHUNK_ARTIFACT_TYPE, verticalRange: config.verticalRange },
@@ -758,7 +860,16 @@ export function compileWorldTerrain(input: unknown) {
       let composed;
       try { composed = composePreparedTerrainEditLayers({ baseTopology, chunkTopology: topology, baseHeightsM: base.heightsM, preparedLayers: prepared }, { shouldCancel }); }
       catch (error) { if (error instanceof TerrainEditCancelledError) throw new WorldTerrainCompileCancelledError(); throw error; }
-      const tile = normalizeEditedTile(base, composed.heightsM, config.verticalRange, shouldCancel);
+      // D5.3: paint composes AFTER biome rasterization (the slice above) and height-layer
+      // composition — biome base -> height deltas reshape -> paint deltas recolor, matching
+      // what terrain.paint produces on an EditableTerrain for the same stamp. Untouched
+      // chunks get their ORIGINAL channel arrays back, so their artifacts stay byte-identical.
+      let paint;
+      if (preparedPaint !== undefined) {
+        try { paint = composePreparedTerrainPaintLayers({ baseTopology, chunkTopology: topology, basePaintMat: base.paintMat, basePaintW: base.paintW, preparedLayers: preparedPaint }, { shouldCancel }); }
+        catch (error) { if (error instanceof TerrainEditCancelledError) throw new WorldTerrainCompileCancelledError(); throw error; }
+      }
+      const tile = normalizeEditedTile(base, composed.heightsM, config.verticalRange, shouldCancel, paint);
       const bytes = encodeTerrainChunkArtifact(tile);
       const contentHash = derivedArtifactContentHash(bytes);
       const descriptor = Object.freeze({
@@ -786,7 +897,16 @@ export function compileWorldTerrain(input: unknown) {
   const priorOverviewArtifact = previousManifest === undefined ? undefined : derivedGlobalArtifacts(previousManifest)
     .find((artifact: any) => artifact.artifactType === WORLD_OVERVIEW_ARTIFACT_TYPE);
   const overviewAuthorityStage = hydrologyProfile ? "river-channel-carve" : "erosion";
-  const reusableOverview = cacheCompilerMatches
+  // The paint stack is GLOBAL authority for the overview (one stamp can recolor any cell) but
+  // rides the chunk-scoped edit-layers stage, which the overview's authority stage never sees —
+  // so a paint-carrying compile ALWAYS rebuilds the overview from the composed master field.
+  // Paint refs are append/replace-only in the authority (no path un-refs a layer), so a reused
+  // paint-less overview can never carry stale paint. Paint-less compiles keep the exact prior
+  // reuse condition, so their overview (and content-delta mount) stays byte-identical.
+  const overviewField = preparedPaint === undefined ? terrainField
+    : composeMasterPaintForOverview(terrainField, baseTopology, paintLayers, shouldCancel);
+  const reusableOverview = preparedPaint === undefined
+    && cacheCompilerMatches
     && previousStageKeys?.stageKeys?.[overviewAuthorityStage]?.["@global"] === nextStageKeys[overviewAuthorityStage]["@global"]
     && priorOverviewArtifact?.mediaType === WORLD_OVERVIEW_ARTIFACT_MEDIA_TYPE
     && availableArtifactHashes.has(priorOverviewArtifact?.contentHash);
@@ -803,7 +923,7 @@ export function compileWorldTerrain(input: unknown) {
     }));
   } else {
     try {
-      const bytes = encodeWorldOverviewArtifact(createWorldOverviewGrid(terrainField, shouldCancel), { shouldCancel });
+      const bytes = encodeWorldOverviewArtifact(createWorldOverviewGrid(overviewField, shouldCancel), { shouldCancel });
       const contentHash = derivedArtifactContentHash(bytes);
       overviewArtifact = Object.freeze({
         artifactType: WORLD_OVERVIEW_ARTIFACT_TYPE,
@@ -1040,7 +1160,7 @@ export function compileWorldTerrain(input: unknown) {
     reusedArtifacts.push(...reusedGlobals);
   }
 
-  const contentRefs = [mapDocumentRef, ...(designSourceRef === undefined ? [] : [designSourceRef, worldMapRef!]), ...layerRefs]
+  const contentRefs = [mapDocumentRef, ...(designSourceRef === undefined ? [] : [designSourceRef, worldMapRef!]), ...layerRefs, ...paintLayerRefs]
     .sort((a, b) => a.refId < b.refId ? -1 : a.refId > b.refId ? 1 : 0);
   const globalArtifacts = [navigationArtifact, overviewArtifact,
     ...(hydrologyProfile ? [hydrologyArtifact, hydrologyWaterArtifact] : []), ...(biomeProfile ? [biomeArtifact] : [])]

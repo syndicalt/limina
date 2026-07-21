@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
-import { constants, lstatSync, realpathSync, statSync } from "node:fs";
+import { constants, lstatSync, realpathSync, statSync, watch } from "node:fs";
 import { open } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
@@ -34,6 +34,10 @@ const PROJECT_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const BRANCH_ID = /^[a-z0-9][a-z0-9._-]{0,95}$/;
 const CURRENT_PATH = "/v1/derived/current";
 const ARTIFACT_PATH = /^\/v1\/derived\/manifests\/([0-9a-f]{64})\/artifacts\/([0-9a-f]{64})$/;
+// SSE revision push (2.0-B): EventSource cannot send Authorization headers, so
+// the capability rides the path (same 43-char base64url token, same constant-
+// time compare). Polling stays the backbone; push is the accelerator.
+const EVENTS_PATH = /^\/v1\/derived\/events\/([A-Za-z0-9_-]{43})$/;
 const CONTENT_PATH = /^\/v1\/derived\/manifests\/([0-9a-f]{64})\/content\/([0-9a-f]{64})$/;
 const ALLOWED_PREFLIGHT_HEADERS = new Set(["authorization", "if-none-match"]);
 const BASE_HEADERS = Object.freeze({
@@ -164,6 +168,10 @@ export class DerivedRuntimeServer {
   #rateTokens = DERIVED_RUNTIME_CURRENT_RATE_CAPACITY;
   #rateAt;
   #cachedCurrent;
+  #subscribers = new Set();
+  #branchWatcher;
+  #broadcastTimer;
+  #stateDir;
 
   constructor(input) {
     const options = plainOptions(input);
@@ -178,6 +186,11 @@ export class DerivedRuntimeServer {
     this.#allowedHosts = exactStringSet(options.allowedHosts, "derived runtime allowedHosts");
     this.#allowedOrigins = exactStringSet(options.allowedOrigins, "derived runtime allowedOrigins");
     this.#requestedPort = boundedPort(options.port);
+    if (options.stateDir !== undefined && (typeof options.stateDir !== "string"
+        || options.stateDir.length === 0 || options.stateDir.includes("..") || options.stateDir.includes("/"))) {
+      throw new TypeError("derived runtime stateDir must be a single directory name");
+    }
+    this.#stateDir = options.stateDir ?? ".limina";
     this.#now = options.now ?? (() => Date.now());
     if (typeof this.#now !== "function") throw new TypeError("derived runtime now must be a function");
     this.#rateAt = this.#now();
@@ -216,6 +229,7 @@ export class DerivedRuntimeServer {
           return;
         }
         this.#port = address.port;
+        this.#startBranchWatch();
         resolveStart(Object.freeze({ baseUrl: `http://127.0.0.1:${address.port}`, token: this.#tokenText }));
       };
       server.once("error", failed);
@@ -236,6 +250,17 @@ export class DerivedRuntimeServer {
         active.response.destroy();
         void active.handle?.close().catch(() => {});
       }
+      this.#branchWatcher?.close();
+      this.#branchWatcher = undefined;
+      if (this.#broadcastTimer !== undefined) {
+        clearTimeout(this.#broadcastTimer);
+        this.#broadcastTimer = undefined;
+      }
+      for (const subscriber of this.#subscribers) {
+        clearInterval(subscriber.heartbeat);
+        subscriber.response.destroy();
+      }
+      this.#subscribers.clear();
       for (const socket of this.#sockets) socket.destroy();
       const server = this.#server;
       if (server?.listening) await new Promise((resolveClose) => server.close(() => resolveClose()));
@@ -333,6 +358,15 @@ export class DerivedRuntimeServer {
     const method = request.method ?? "";
     if (method === "OPTIONS") { this.#handleOptions(request, response, rawUrl, origin); return; }
     if (method !== "GET" && method !== "HEAD") { this.#sendError(response, 405, "METHOD_NOT_ALLOWED", origin); return; }
+    // The events endpoint carries its capability in the PATH (EventSource cannot
+    // send Authorization headers) — it validates that token itself, so it must
+    // route before the header-bearer check.
+    const eventsMatch = EVENTS_PATH.exec(rawUrl);
+    if (eventsMatch !== null && method === "GET") {
+      await this.#serveEvents(request, response, origin, eventsMatch[1]);
+      return;
+    }
+    if (eventsMatch !== null) { this.#sendError(response, 405, "METHOD_NOT_ALLOWED", origin); return; }
     if (!this.#validateBearer(request)) { this.#sendError(response, 401, "UNAUTHORIZED", origin); return; }
 
     if (rawUrl === CURRENT_PATH) {
@@ -390,6 +424,90 @@ export class DerivedRuntimeServer {
     });
     this.#cachedCurrent = view;
     return view;
+  }
+
+  /** Watch the branch root for pointer publishes; each fires one debounced
+   *  broadcast. A missing root (no publication yet) retries lazily on the next
+   *  SSE connection or broadcast attempt; any watch failure degrades quietly to
+   *  the polling backbone. */
+  #startBranchWatch() {
+    if (this.#branchWatcher !== undefined) return;
+    const branchRoot = join(this.#projectRoot, this.#stateDir, "derived", this.#branchId);
+    try {
+      this.#branchWatcher = watch(branchRoot, { persistent: false }, (_eventType, filename) => {
+        if (typeof filename === "string" && filename.startsWith("published.json")) this.#broadcastRevision();
+      });
+      this.#branchWatcher.on("error", () => {
+        this.#branchWatcher?.close();
+        this.#branchWatcher = undefined;
+      });
+    } catch {
+      this.#branchWatcher = undefined;
+    }
+  }
+
+  async #serveEvents(request, response, origin, encodedToken) {
+    this.#startBranchWatch();
+    let candidate;
+    try { candidate = Buffer.from(encodedToken, "base64url"); } catch { candidate = undefined; }
+    if (candidate === undefined || candidate.byteLength !== this.#token.byteLength || !timingSafeEqual(candidate, this.#token)) {
+      this.#sendError(response, 401, "UNAUTHORIZED", origin);
+      return;
+    }
+    response.writeHead(200, {
+      ...this.#corsHeaders(origin),
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Accel-Buffering": "no",
+    });
+    const subscriber = {
+      response,
+      heartbeat: setInterval(() => {
+        try { response.write(": hb\n\n"); } catch { /* dead socket cleaned on write error below */ }
+      }, 15_000),
+    };
+    subscriber.heartbeat.unref?.();
+    this.#subscribers.add(subscriber);
+    const drop = () => {
+      clearInterval(subscriber.heartbeat);
+      this.#subscribers.delete(subscriber);
+      try { response.end(); } catch { /* already closed */ }
+    };
+    response.on("close", drop);
+    response.on("error", drop);
+    response.write("retry: 3000\n\n");
+    // A fresh subscriber syncs immediately (the current revision if one exists).
+    try {
+      const view = await this.#currentView();
+      this.#writeRevision(subscriber, view);
+    } catch { /* no publication yet — the first broadcast lands it */ }
+  }
+
+  #writeRevision(subscriber, view) {
+    const payload = JSON.stringify({
+      generation: view.generation,
+      revision: view.source.revision,
+      manifestHash: view.manifest.manifestHash,
+      etag: currentEtag(view),
+    });
+    try {
+      subscriber.response.write(`event: revision\ndata: ${payload}\n\n`);
+    } catch {
+      subscriber.response.emit("error", new Error("subscriber write failed"));
+    }
+  }
+
+  #broadcastRevision() {
+    if (this.#broadcastTimer !== undefined) clearTimeout(this.#broadcastTimer);
+    // Debounce: an atomic publish is temp-write + rename, which arrives as a burst.
+    this.#broadcastTimer = setTimeout(() => {
+      this.#broadcastTimer = undefined;
+      if (this.#subscribers.size === 0) return;
+      this.#currentView().then((view) => {
+        for (const subscriber of [...this.#subscribers]) this.#writeRevision(subscriber, view);
+      }).catch(() => { /* a transient publication error is not an SSE event */ });
+    }, 120);
+    this.#broadcastTimer.unref?.();
   }
 
   async #serveCurrent(request, response, origin, headOnly) {

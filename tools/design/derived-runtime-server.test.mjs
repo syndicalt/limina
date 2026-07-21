@@ -650,3 +650,69 @@ test("artifact stream limit is bounded across server instances in one process", 
     fx.cleanup();
   }
 });
+// SSE revision push (2.0-B live link): the events endpoint streams revision
+// events on publish. Proves: capability-in-path auth (wrong token 401, right
+// token 200 + event-stream headers), an immediate sync event on connect, and a
+// broadcast on the next publish (generation 2) — the client accelerator the
+// worker subscribes to. Falsifiability: without the watch broadcast, the second
+// event never arrives (the test times out and fails).
+
+test("events endpoint pushes revision events on publish", { timeout: 30_000 }, async () => {
+  const fx = projectFixture();
+  const source = { revision: 3, headHash: hash("head:3") };
+  const fixture = revisionFixture("sse", source);
+  const authority = () => ({ projectId: "grey-field", branchId: "main", ...source });
+  let running;
+  let req;
+  try {
+    await publish(fx.root, fixture, "job-sse-1", authority);
+    running = await startServer(fx.root, authority);
+    const token = running.owner.token;
+
+    // Wrong token → 401 before any streaming.
+    const denied = await http(running.owner, `/v1/derived/events/${Buffer.alloc(32).toString("base64url")}`);
+    assert.equal(denied.status, 401);
+
+    // Correct token → 200 + SSE headers + the immediate sync event. Keep this
+    // connection OPEN — the broadcast leg reuses it.
+    const target = new URL(running.owner.baseUrl);
+    let sseText = "";
+    let syncResolve;
+    const syncSeen = new Promise((resolve) => { syncResolve = resolve; });
+    req = httpRequest({
+      hostname: target.hostname,
+      port: target.port,
+      path: `/v1/derived/events/${token}`,
+      method: "GET",
+      headers: { Host: target.host, Origin: ORIGIN },
+    }, (res) => {
+      assert.equal(res.statusCode, 200);
+      assert.match(res.headers["content-type"], /text\/event-stream/);
+      assert.equal(res.headers["cache-control"], "no-store");
+      res.on("data", (chunk) => {
+        sseText += chunk.toString("utf8");
+        if (sseText.includes("event: revision")) syncResolve();
+      });
+    });
+    req.on("error", () => {});
+    req.end();
+    await syncSeen;
+    const sync = JSON.parse(sseText.split("data: ")[1].split("\n")[0]);
+    assert.equal(sync.generation, 1, "the connect event syncs the current publication");
+    assert.equal(sync.manifestHash, fixture.manifest.manifestHash);
+    assert.equal(sync.revision, 3);
+
+    // A second publish broadcasts generation 2 on the SAME open connection.
+    const second = revisionFixture("sse-2", source);
+    await publish(fx.root, second, "job-sse-2", authority);
+    const deadline = Date.now() + 10_000;
+    while (!sseText.includes('"generation":2')) {
+      if (Date.now() > deadline) throw new Error("no generation-2 broadcast within 10s");
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  } finally {
+    req?.destroy();
+    await running?.server.stop();
+    fx.cleanup();
+  }
+});

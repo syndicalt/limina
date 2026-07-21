@@ -9,7 +9,6 @@ import {
   atlasProxyPath,
   createEditorStaticServer,
   parseAtlasOrigin,
-  parseEditorHandoffServerConfig,
 } from "./scaffold/scripts/serve.mjs";
 
 async function listen(server) {
@@ -51,37 +50,20 @@ for (const origin of [
   "http://127.0.0.1",
 ]) assert.throws(() => parseAtlasOrigin(origin), /exact http/);
 
-assert.equal(atlasProxyPath("/atlas"), "/");
-assert.equal(atlasProxyPath("/atlas/?embed=1"), "/?embed=1");
-assert.equal(atlasProxyPath("/atlas/frontend/app.js?v=2"), "/frontend/app.js?v=2");
 assert.equal(atlasProxyPath("/api/state?fresh=1"), "/api/state?fresh=1");
 assert.equal(atlasProxyPath("/shared/raster-codec.mjs"), "/shared/raster-codec.mjs");
 assert.equal(atlasProxyPath("/assets/qc/tree.png"), "/assets/qc/tree.png");
 assert.equal(atlasProxyPath("/assets/tree.glb"), undefined);
-// Engine-shared validator modules (serve-design SHARED_MODULES): the embedded
-// frontend's ../../../js/src/world/*.mjs imports escape the /atlas/ prefix, so
-// the proxy must carry the family — and ONLY that family (falsifiability: a
-// non-.mjs or out-of-family path must never be proxied).
+// Engine-shared validator modules (serve-design SHARED_MODULES): the native Atlas
+// surface imports /js/src/world/*.mjs on this origin, so the proxy must carry the
+// family — and ONLY that family (falsifiability: a non-.mjs or out-of-family path
+// must never be proxied).
 assert.equal(atlasProxyPath("/js/src/world/water-ir.mjs"), "/js/src/world/water-ir.mjs");
 assert.equal(atlasProxyPath("/js/src/world/hydrology-ir.mjs?v=1"), "/js/src/world/hydrology-ir.mjs?v=1");
 assert.equal(atlasProxyPath("/js/src/world/water-ir.js"), undefined);
 assert.equal(atlasProxyPath("/js/src/skills/registry.mjs"), undefined);
 assert.equal(atlasProxyPath("/js/src/world/pipeline/raster-codec.mjs"), undefined);
 assert.equal(atlasProxyPath("/js/src/world/../../secrets.mjs"), undefined);
-assert.deepEqual(parseEditorHandoffServerConfig({
-  atlasOrigin: "http://127.0.0.1:4321",
-  editorUrl: "http://localhost:5180/",
-  editorServerUrl: "ws://localhost:8790/",
-}), {
-  atlasOrigin: "http://127.0.0.1:4321",
-  editorUrl: "http://localhost:5180/",
-  editorServerUrl: "ws://localhost:8790/",
-});
-for (const config of [
-  { atlasOrigin: "http://127.0.0.1:4321", editorUrl: "https://localhost:5180/", editorServerUrl: "ws://localhost:8790/" },
-  { atlasOrigin: "http://127.0.0.1:4321", editorUrl: "http://evil.test:5180/", editorServerUrl: "ws://localhost:8790/" },
-  { atlasOrigin: "http://127.0.0.1:4321", editorUrl: "http://localhost:5180/", editorServerUrl: "ws://evil.test:8790/" },
-]) assert.throws(() => parseEditorHandoffServerConfig(config));
 
 const fixture = mkdtempSync(join(tmpdir(), "limina-scaffold-serve-"));
 const root = join(fixture, "editor");
@@ -89,7 +71,6 @@ const assets = join(fixture, "assets");
 mkdirSync(root, { recursive: true });
 mkdirSync(assets, { recursive: true });
 writeFileSync(join(root, "index.html"), "editor-index");
-writeFileSync(join(root, "atlas-handoff.html"), "relay-index");
 writeFileSync(join(assets, "tree.glb"), "local-asset");
 
 const received = [];
@@ -116,14 +97,11 @@ try {
     root,
     assetRoot: assets,
     atlasOrigin: `http://127.0.0.1:${atlasPort}`,
-    editorUrl: "http://localhost:5180/",
     editorServerUrl: "ws://localhost:8790/",
   });
   const editorPort = await listen(editor);
 
   for (const [path, upstreamPath] of [
-    ["/atlas/", "/"],
-    ["/atlas/frontend/app.js?embed=1", "/frontend/app.js?embed=1"],
     ["/api/state?fresh=1", "/api/state?fresh=1"],
     ["/shared/raster-codec.mjs", "/shared/raster-codec.mjs"],
     ["/assets/qc/tree.png", "/assets/qc/tree.png"],
@@ -155,30 +133,7 @@ try {
   const localAsset = await send(editorPort, "/assets/tree.glb");
   assert.equal(localAsset.status, 200);
   assert.equal(localAsset.body, "local-asset");
-  assert.equal(received.length, 6, "non-QC assets must not reach Atlas");
-
-  const relay = await send(editorPort, "/atlas-handoff.html");
-  assert.equal(relay.status, 200);
-  assert.equal(relay.body, "relay-index");
-  assert.equal(relay.headers["cross-origin-opener-policy"], undefined);
-  assert.equal(relay.headers["cross-origin-embedder-policy"], undefined);
-  assert.equal(relay.headers["cache-control"], "no-store");
-  assert.equal(relay.headers["referrer-policy"], "no-referrer");
-  assert.match(relay.headers["content-security-policy"], /script-src 'self'/);
-  const handoffConfig = await send(editorPort, "/atlas-handoff-config");
-  assert.deepEqual(JSON.parse(handoffConfig.body), {
-    atlasOrigin: `http://127.0.0.1:${atlasPort}`,
-    editorUrl: "http://localhost:5180/",
-    editorServerUrl: "ws://localhost:8790/",
-  });
-  assert.equal(handoffConfig.headers["cross-origin-opener-policy"], "same-origin");
-  assert.equal(handoffConfig.headers["cross-origin-embedder-policy"], "require-corp");
-  for (const path of ["/atlas-handoff.html?focus=secret", "/atlas-handoff-anything"]) {
-    const rejected = await send(editorPort, path);
-    assert.equal(rejected.status, 404);
-    assert.equal(rejected.headers["cross-origin-opener-policy"], "same-origin");
-    assert.equal(rejected.headers["cross-origin-embedder-policy"], "require-corp");
-  }
+  assert.equal(received.length, 4, "non-QC assets must not reach Atlas");
 
   await close(atlas);
   const unavailable = await send(editorPort, "/api/state");
@@ -192,4 +147,4 @@ try {
   rmSync(fixture, { recursive: true, force: true });
 }
 
-console.log("scaffold-serve.test OK: Atlas proxy, isolated editor, non-COOP one-shot handoff, and upstream failure");
+console.log("scaffold-serve.test OK: Atlas proxy, isolated editor, and upstream failure");

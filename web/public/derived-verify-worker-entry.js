@@ -4090,6 +4090,7 @@ function verifyTransferredDerivedRuntimeSnapshot(input) {
   let worldOverview = null;
   let navigationIndexBytes = null;
   let biomeField = null;
+  let hydrologyFieldBytes = null;
   const overview = globals.get(WORLD_OVERVIEW_ARTIFACT_TYPE);
   if (overview !== void 0) {
     exact4(overview.resource, ["kind", "decoded"], "world overview resource");
@@ -4161,6 +4162,7 @@ function verifyTransferredDerivedRuntimeSnapshot(input) {
       throw new Error("hydrology field resource does not match its canonical descriptor");
     }
     const canonical = decodeHydrologyFieldArtifact(canonicalBytes);
+    hydrologyFieldBytes = canonicalBytes;
     renderField = Object.freeze({
       placement: Object.freeze({ originX: canonical.placement.originX, originZ: canonical.placement.originZ }),
       rows: canonical.topology.rows,
@@ -4215,12 +4217,14 @@ function verifyTransferredDerivedRuntimeSnapshot(input) {
     if (prepared.artifactContentHash !== resourceArtifact.contentHash || compilerContentHash(prepared.bindings) !== compilerContentHash(parsedBindings)) {
       throw new Error("generated water prepared identity does not match its canonical artifact");
     }
+    if (hydrologyFieldBytes === null) throw new Error("generated water is missing its verified hydrology field bytes");
     generatedWater = Object.freeze({
       artifact: resourceArtifact,
       bytes,
       bindings: parsedBindings,
       topology: generatedRenderTopology(prepared.topology),
-      field: renderField
+      field: renderField,
+      fieldBytes: hydrologyFieldBytes
     });
   }
   return Object.freeze({

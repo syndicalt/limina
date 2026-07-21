@@ -691,6 +691,29 @@ export function restoreSnapshot(
   events?: SnapshotableEventRegistry,
   participants?: SnapshotParticipantRegistry,
 ): void {
+  // 0. PRE-FLIGHT every throwing validation BEFORE any mutation. installRandomState
+  //    swaps the global Math.random SINGLETON and op_physics_restore replaces the native
+  //    Rapier world; if a later step (a bad physics blob, an unknown/invalid manager
+  //    participant) then threw, the PROCESS would be left corrupted — a caller that
+  //    catches and falls back to a genesis replay would run on a hijacked RNG stream and
+  //    a half-restored native world. So decode the physics bytes and resolve+validate
+  //    every manager participant here, up front; only after all of them succeed do we
+  //    begin mutating. (restoreSnapshot is now all-or-nothing at the process level.)
+  const physicsBytes = base64ToBytes(snapshot.physics);
+  const managerKeysPreflight = Object.keys(snapshot.managers ?? {}).sort();
+  const managerRestores: Array<{ participant: SnapshotParticipant; data: unknown }> = [];
+  for (const key of managerKeysPreflight) {
+    const participant = participants?.get(key);
+    if (participant === undefined) {
+      throw new Error(`world snapshot: managers entry '${key}' has no registered snapshot participant — cannot restore state the runtime does not own`);
+    }
+    const parsed = participant.schema.safeParse(snapshot.managers[key]);
+    if (!parsed.success) {
+      throw new Error(`world snapshot: managers entry '${key}' failed its participant schema: ${parsed.error.message}`);
+    }
+    managerRestores.push({ participant, data: parsed.data });
+  }
+
   // 1. RNG: resume BOTH seeded generators mid-stream -- the global Math.random
   //    slot and the world-owned skill stream delta skills draw via ctx.world.rng.
   //    A pre-skillRngState snapshot seeds the skill stream from the legacy global
@@ -698,7 +721,8 @@ export function restoreSnapshot(
   installRandomState(snapshot.rngState);
   world.rng = installSkillRandomState(snapshot.skillRngState ?? snapshot.rngState);
   // 2. Native physics: deserialize the real Rapier state (body ids stay stable).
-  world.ops.op_physics_restore(base64ToBytes(snapshot.physics));
+  //    Bytes were decoded and validated in the pre-flight above.
+  world.ops.op_physics_restore(physicsBytes);
   // 3. bitECS allocator: future addEntity continues the original eid sequence.
   restoreEntityIndex(world.ecs, snapshot.entityIndex);
   // 4. Entity table: same live entries (creation order) + `ent_` counter.
@@ -757,22 +781,13 @@ export function restoreSnapshot(
     participants?.get(CHARACTERS_PARTICIPANT_KEY)?.restore(snapshot.characters);
   }
   // 7. Manager state (H2): every `managers` entry restores through its registered
-  //    participant, validated by that participant's own schema. An entry with NO
-  //    registered participant fails loudly — the snapshot claims state this runtime
-  //    cannot restore, and silently dropping it would be an incomplete world lying
-  //    about being complete. Absent/{} (pre-participant snapshots) restores nothing:
+  //    participant. Resolution and schema validation happened in the pre-flight
+  //    (step 0) BEFORE any mutation, so by here every entry is known-good and this is
+  //    a pure apply — an unknown/invalid participant already failed loudly with the
+  //    world untouched. Absent/{} (pre-participant snapshots) restores nothing:
   //    exactly the pre-H2 behavior.
-  const managerKeys = Object.keys(snapshot.managers ?? {}).sort();
-  for (const key of managerKeys) {
-    const participant = participants?.get(key);
-    if (participant === undefined) {
-      throw new Error(`world snapshot: managers entry '${key}' has no registered snapshot participant — cannot restore state the runtime does not own`);
-    }
-    const parsed = participant.schema.safeParse(snapshot.managers[key]);
-    if (!parsed.success) {
-      throw new Error(`world snapshot: managers entry '${key}' failed its participant schema: ${parsed.error.message}`);
-    }
-    participant.restore(parsed.data);
+  for (const { participant, data } of managerRestores) {
+    participant.restore(data);
   }
 }
 

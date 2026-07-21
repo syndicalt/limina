@@ -162,12 +162,14 @@ async function waitForPublication(projectRoot, minimumExclusiveRevision = -1) {
   throw new Error(`generated-water derived publication timed out: ${diagnostic}`);
 }
 
-async function compileFixture(atlasUrl) {
-  const sessionResponse = await fetch(new URL("api/session", atlasUrl));
+async function compileFixture(studioUrl) {
+  // Session answers the proxy-attached placeholder (see U0a); the proxy upgrades
+  // it to the real design token on the way to the sidecar.
+  const sessionResponse = await fetch(new URL("api/session", studioUrl));
   if (!sessionResponse.ok) throw new Error(`Atlas session failed with HTTP ${sessionResponse.status}`);
   const session = await sessionResponse.json();
   if (typeof session.token !== "string") throw new Error("Atlas session omitted its design token");
-  const response = await fetch(new URL("api/compile-map", atlasUrl), {
+  const response = await fetch(new URL("api/compile-map", studioUrl), {
     method: "POST",
     headers: { "content-type": "application/json", "x-limina-design-token": session.token },
     body: JSON.stringify({ mapId: "primary" }),
@@ -231,7 +233,13 @@ async function provisionGeneratedWaterUat(chromium, executablePath) {
     launcher = startLauncher(projectRoot, ports);
     const first = await launcher.ready;
     await waitForPublication(projectRoot);
-    const mapAssetId = await compileFixture(first.atlasUrl);
+    // Compile through the studio proxy (editorUrl), NOT the sidecar origin: since
+    // studio-unification U0 the sidecar runs headless and its session endpoint
+    // hands out a placeholder that authenticates nothing — the proxy attaches the
+    // real launcher-issued design token server-side. This is the production
+    // browser path; hitting the sidecar directly with the placeholder is 403 by
+    // design.
+    const mapAssetId = await compileFixture(first.editorUrl);
     await bindTerrainSource(chromium, executablePath, first, mapAssetId);
     await stopLauncher(launcher);
     launcher = startLauncher(projectRoot, ports);

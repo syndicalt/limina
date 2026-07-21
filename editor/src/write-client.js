@@ -98,7 +98,14 @@ export async function writeUpdate(entity, component, value) {
 export async function deformTerrain(center, radius, delta, mode, falloff) {
   assertEditorAuthoringAllowed();
   const client = await ensureWriter();
-  return client.callTool("terrain.deform", { center, radius, delta, mode, falloff });
+  const result = await client.callTool("terrain.deform", { center, radius, delta, mode, falloff });
+  // The skill returns ok:false (not a throw) when no EditableTerrain layer
+  // exists — e.g. brushing streamed generateRegion terrain. Until D5 edit
+  // layers land, that stroke is a no-op and MUST be loud, not silent.
+  if (!result || result.ok !== true) {
+    throw new Error("terrain.deform found no editable terrain layer (sculpting streamed terrain needs edit layers — D5)");
+  }
+  return result;
 }
 
 // Terrain material paint (Slice 3): blend a surface material (sand/grass/rock/dirt) onto the terrain.
@@ -106,7 +113,11 @@ export async function deformTerrain(center, radius, delta, mode, falloff) {
 export async function paintTerrain(center, radius, strength, falloff, material, erase) {
   assertEditorAuthoringAllowed();
   const client = await ensureWriter();
-  return client.callTool("terrain.paint", { center, radius, strength, falloff, material, erase: !!erase });
+  const result = await client.callTool("terrain.paint", { center, radius, strength, falloff, material, erase: !!erase });
+  if (!result || result.ok !== true) {
+    throw new Error("terrain.paint found no editable terrain layer (painting streamed terrain needs edit layers — D5)");
+  }
+  return result;
 }
 
 // Asset catalog (Slice 4): read the QC-approved catalog for the palette. Read-only — never held by
@@ -130,6 +141,33 @@ export async function placeAsset(assetId, position, opts = {}) {
   assertEditorAuthoringAllowed();
   const client = await ensureWriter();
   return client.callTool("asset.place", { assetId, position, ground: true, ...opts });
+}
+
+// Water tools (2.0-C): the world water plane is a single world-scale surface
+// (no position — level/size only); a river is a terrain-following ribbon over
+// a clicked centerline. Both recorded like every other write.
+export async function addWaterPlane(level, size) {
+  assertEditorAuthoringAllowed();
+  const client = await ensureWriter();
+  // Returns {level,size,color} (no ok field) — invalid input throws over the wire.
+  return client.callTool("world.addWater", { level, size });
+}
+
+export async function addRiver(points, widthM, waterClass) {
+  assertEditorAuthoringAllowed();
+  const client = await ensureWriter();
+  return client.callTool("world.addRiver", { points, widthM, class: waterClass });
+}
+
+// Scatter brush (2.0-C): one dab = one recorded vegetation.scatter confined to
+// the brush disc. The caller derives the seed deterministically (stroke counter
+// + dab index) — never Math.random, replay must rebuild the same forest.
+export async function scatterVegetation({ species, density, seed, x, z, r }) {
+  assertEditorAuthoringAllowed();
+  const client = await ensureWriter();
+  const input = { density, seed, inclusions: [{ x, z, r }] };
+  if (species !== "mixed") input.species = [species];
+  return client.callTool("vegetation.scatter", input);
 }
 
 export async function writeMaterial(entity, material) {

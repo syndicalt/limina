@@ -78,6 +78,10 @@ const PROBE_REACH = `
   r.process = probe(function () { return (typeof process !== "undefined") ? process : undefined; });
   r.require = probe(function () { return (typeof require !== "undefined") ? require : undefined; });
   r.fetch = probe(function () { return (typeof fetch !== "undefined") ? fetch : undefined; });
+  // Determinism (CLAUDE.md §2 rule 6): the sandbox context excludes the Date and
+  // Performance intrinsics, so untrusted decision code has no wall-clock to branch on.
+  r.Date = probe(function () { return (typeof Date !== "undefined") ? Date : undefined; });
+  r.performance = probe(function () { return (typeof performance !== "undefined") ? performance : undefined; });
   r.globalThis_keys = Object.getOwnPropertyNames(globalThis).sort().join(",");
   r.ctor_escape = (function () { try { var F = (function(){}).constructor; var g = F("return this")(); return (g && (g.Deno || g.process || g.require)) ? "REACHED-HOST" : "global-has-no-host"; } catch (e) { return "threw"; } })();
   return JSON.stringify(r);
@@ -93,6 +97,8 @@ assert(field(reachReport, "Deno_core_ops") === "undefined", "Deno.core.ops must 
 assert(field(reachReport, "process") === "undefined", "process must be undefined inside the sandbox");
 assert(field(reachReport, "require") === "undefined", "require must be undefined inside the sandbox");
 assert(field(reachReport, "fetch") === "undefined", "fetch must be undefined inside the sandbox");
+assert(field(reachReport, "Date") === "undefined", "Date must be undefined inside the sandbox (determinism: no wall-clock)");
+assert(field(reachReport, "performance") === "undefined", "performance must be undefined inside the sandbox (determinism: no wall-clock)");
 assert(field(reachReport, "ctor_escape") === "global-has-no-host", "Function-ctor walk must not reach a host global");
 ops.op_log("  [E1] CONTAINED: no host handle reachable; reachable globals = " + String(field(reachReport, "globalThis_keys")));
 

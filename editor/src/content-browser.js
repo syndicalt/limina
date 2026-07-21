@@ -420,12 +420,22 @@ export function createContentBrowser(root, {
     renderDetail();
   }
 
+  // Drag-drop arming (2.0-C): the viewport canvas places the armed entry on
+  // drop. Arming at dragstart (not drop) gives the ghost preview mid-drag.
   function createRow(entry, index) {
     const row = document.createElement("button");
     row.type = "button";
     row.className = "content-asset-row";
     row.id = optionIdPrefix + index;
     row.tabIndex = -1;
+    row.draggable = true;
+    row.addEventListener("dragstart", (event) => {
+      if (state.authoringLocked) { event.preventDefault(); return; }
+      event.dataTransfer?.setData("text/limina-asset", entry.id);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = "copy";
+      placement.arm(entry);
+      renderWindow();
+    });
     row.dataset.assetId = entry.id;
     row.style.transform = `translateY(${index * CONTENT_ROW_HEIGHT}px)`;
     row.setAttribute("role", "option");

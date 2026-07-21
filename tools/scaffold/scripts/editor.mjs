@@ -14,6 +14,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   renameSync,
   rmSync,
@@ -319,7 +320,7 @@ function printBanner({ uiPort, editorPort, atlasPort, capabilityPath, runtimeDis
   console.log("");
   console.log(`  Browser:     http://localhost:${uiPort}/?server=${encodeURIComponent(editorUrl)}`);
   console.log(`  Editor host: ${editorUrl}`);
-  console.log(`  Atlas dock:  http://localhost:${uiPort}/atlas/`);
+  console.log(`  Atlas:       native surface inside the editor (design API via this origin)`);
   console.log(`  Atlas solo:  http://127.0.0.1:${atlasPort}/`);
   console.log(`  Derived API: ${runtimeDiscovery.baseUrl}`);
   console.log("  Builds:      authoritative MapDoc -> derived terrain sidecar");
@@ -328,6 +329,31 @@ function printBanner({ uiPort, editorPort, atlasPort, capabilityPath, runtimeDis
   console.log("Read the private capability file to configure the browser or MCP bridge, then follow COORDINATOR.md.");
   console.log("");
   console.log("Press Ctrl-C to stop.");
+}
+
+
+/** Minimal <projectRoot>/.env reader for the allowlisted keys the launcher
+ *  forwards to the host (blank lines, # comments, optional export prefix, one
+ *  layer of matching quotes — the same grammar as the host op's parser). */
+function projectDotenv(projectRoot) {
+  const out = {};
+  let contents;
+  try { contents = readFileSync(join(projectRoot, ".env"), "utf8"); }
+  catch { return out; }
+  for (const raw of contents.split("\n")) {
+    const line = raw.trim();
+    if (line === "" || line.startsWith("#")) continue;
+    const normalized = line.startsWith("export ") ? line.slice(7) : line;
+    const eq = normalized.indexOf("=");
+    if (eq < 0) continue;
+    const key = normalized.slice(0, eq).trim();
+    let value = normalized.slice(eq + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    out[key] = value;
+  }
+  return out;
 }
 
 export function editorHostEnvironment({
@@ -345,8 +371,17 @@ export function editorHostEnvironment({
       || Object.keys(derivedRuntime).sort().join() !== "baseUrl,branchId,token") {
     throw new Error("editor host derived runtime config must contain exactly baseUrl, token, and branchId");
   }
+  // The host's env fallback reads <cwd>/.env and the host's cwd is the state
+  // dir — so the PROJECT-root .env never reaches it. The launcher owns the
+  // project's env contract: forward allowlisted keys from <projectRoot>/.env
+  // when the process environment doesn't already supply them.
+  const forwarded = projectDotenv(projectRoot);
+  const merged = { ...environment };
+  for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "LIMINA_HTTP_POST_ALLOW"]) {
+    if (merged[key] === undefined && forwarded[key] !== undefined) merged[key] = forwarded[key];
+  }
   return {
-    ...environment,
+    ...merged,
     LIMINA_EDITOR_PORT: String(editorPort),
     LIMINA_EDITOR_STATIC_PORT: String(uiPort),
     LIMINA_EDITOR_TOKEN: token,
@@ -525,6 +560,9 @@ async function main() {
     fail("LIMINA_EDITOR_TOKEN must be 32-128 URL-safe characters");
   }
   const token = requestedToken ?? randomBytes(24).toString("base64url");
+  // The design sidecar runs headless behind the UI proxy: one launcher-issued
+  // capability, attached by the proxy server-side — never held by the browser.
+  const designToken = randomBytes(24).toString("base64url");
   const hostEnvironment = editorHostEnvironment({
     projectId: id,
     editorPort,
@@ -629,15 +667,16 @@ async function main() {
     join(home, "tools", "design", "serve-design.mjs"),
     join(projectConfig.projectRoot, "design"),
     String(atlasLaunch.port),
+    "--headless",
   ], {
     cwd: projectConfig.projectRoot,
     env: {
       ...process.env,
       LIMINA_EDITOR_URL: `ws://127.0.0.1:${editorPort}/`,
       LIMINA_EDITOR_TOKEN: token,
-      LIMINA_EDITOR_HANDOFF_URL: `http://localhost:${uiPort}/atlas-handoff.html`,
       LIMINA_ATLAS_PUBLIC_ORIGIN: atlasLaunch.origin,
       LIMINA_ASSETS_ROOT: assetRoot,
+      LIMINA_DESIGN_TOKEN: designToken,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -663,8 +702,9 @@ async function main() {
       ...process.env,
       LIMINA_ASSETS_ROOT: assetRoot,
       LIMINA_ATLAS_ORIGIN: atlasLaunch.origin,
-      LIMINA_EDITOR_PUBLIC_URL: `http://localhost:${uiPort}/`,
       LIMINA_EDITOR_SERVER_URL: `ws://localhost:${editorPort}/`,
+      LIMINA_EDITOR_TOKEN: token,
+      LIMINA_DESIGN_TOKEN: designToken,
     },
     stdio: ["ignore", "ignore", "pipe"],
   });

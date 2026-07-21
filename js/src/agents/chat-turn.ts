@@ -8,6 +8,10 @@ export interface ChatTurnMessage {
   turnId: string;
   text: string;
   attachments?: unknown;
+  /** The studio context pack (surface-awareness): workspace, active tool,
+   *  selection, open doc, world summary, and the recent studio activity window.
+   *  Appended to the system prompt so the agent acts WHERE the human is working. */
+  context?: string;
 }
 
 export type ChatTurnPush =
@@ -129,7 +133,11 @@ export async function runChatTurn(opts: RunChatTurnOptions): Promise<string> {
     llm: {
       provider: "anthropic",
       model: "anthropic",
-      systemPrompt: SYSTEM_PROMPT,
+      // The context pack rides the system prompt (surface-awareness per turn);
+      // bounded by the packer's caps, not by this prompt's brevity.
+      systemPrompt: opts.msg.context !== undefined && opts.msg.context.length > 0
+        ? `${SYSTEM_PROMPT}\n\n${opts.msg.context}`
+        : SYSTEM_PROMPT,
       promptId: CHAT_SYSTEM_PROMPT_ID,
       promptVersion: CHAT_SYSTEM_PROMPT_VERSION,
     },

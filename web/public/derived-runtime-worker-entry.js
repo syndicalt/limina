@@ -663,6 +663,112 @@ function derivedArtifactContentHash(bytes) {
   return `sha256:${sha256(bytes)}`;
 }
 
+// src/browser/derived-artifact-cache.ts
+var DERIVED_ARTIFACT_CACHE_SCHEMA = 1;
+var DERIVED_ARTIFACT_CACHE_MAX_BYTES = 512 * 1024 * 1024;
+var DB_NAME = "limina-derived-artifact-cache";
+var ARTIFACT_STORE = "artifacts";
+var META_STORE = "meta";
+var META_KEY = "state";
+var SEQ_INDEX = "seq";
+function hashLookup(hashBytes, contentHash2, bytes) {
+  try {
+    return hashBytes(bytes) === contentHash2;
+  } catch {
+    return false;
+  }
+}
+function requestToPromise(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("derived artifact cache request failed"));
+  });
+}
+function transactionDone(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error ?? new Error("derived artifact cache transaction failed"));
+    transaction.onabort = () => reject(transaction.error ?? new Error("derived artifact cache transaction aborted"));
+  });
+}
+function openDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DERIVED_ARTIFACT_CACHE_SCHEMA);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (database.objectStoreNames.contains(ARTIFACT_STORE)) database.deleteObjectStore(ARTIFACT_STORE);
+      if (database.objectStoreNames.contains(META_STORE)) database.deleteObjectStore(META_STORE);
+      const store = database.createObjectStore(ARTIFACT_STORE, { keyPath: "contentHash" });
+      store.createIndex(SEQ_INDEX, SEQ_INDEX, { unique: true });
+      database.createObjectStore(META_STORE, { keyPath: "key" });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("derived artifact cache open failed"));
+    request.onblocked = () => reject(new Error("derived artifact cache open was blocked"));
+  });
+}
+function createIndexedDbDerivedArtifactCache(hashBytes) {
+  if (typeof hashBytes !== "function") throw new TypeError("derived artifact cache requires a hash function");
+  if (typeof indexedDB === "undefined") return null;
+  let database = null;
+  const ready = () => {
+    database ??= openDatabase();
+    return database;
+  };
+  return Object.freeze({
+    async get(contentHash2) {
+      try {
+        const db = await ready();
+        const transaction = db.transaction([ARTIFACT_STORE, META_STORE], "readwrite");
+        const store = transaction.objectStore(ARTIFACT_STORE);
+        const record4 = await requestToPromise(store.get(contentHash2));
+        if (record4 === void 0) {
+          await transactionDone(transaction);
+          return void 0;
+        }
+        const bytes = record4.bytes instanceof Uint8Array ? record4.bytes : new Uint8Array(record4.bytes);
+        if (bytes.byteLength !== record4.byteLength || !hashLookup(hashBytes, contentHash2, bytes)) {
+          const meta = await requestToPromise(transaction.objectStore(META_STORE).get(META_KEY)) ?? { key: META_KEY, totalBytes: 0, nextSeq: 0 };
+          meta.totalBytes = Math.max(0, meta.totalBytes - record4.byteLength);
+          store.delete(contentHash2);
+          transaction.objectStore(META_STORE).put(meta);
+          await transactionDone(transaction);
+          return void 0;
+        }
+        await transactionDone(transaction);
+        return bytes;
+      } catch {
+        return void 0;
+      }
+    },
+    async put(contentHash2, bytes) {
+      try {
+        const db = await ready();
+        const transaction = db.transaction([ARTIFACT_STORE, META_STORE], "readwrite");
+        const store = transaction.objectStore(ARTIFACT_STORE);
+        const metaStore = transaction.objectStore(META_STORE);
+        const prior = await requestToPromise(store.get(contentHash2));
+        const meta = await requestToPromise(metaStore.get(META_KEY)) ?? { key: META_KEY, totalBytes: 0, nextSeq: 0 };
+        if (prior !== void 0) meta.totalBytes = Math.max(0, meta.totalBytes - prior.byteLength);
+        meta.totalBytes += bytes.byteLength;
+        meta.nextSeq += 1;
+        store.put({ contentHash: contentHash2, byteLength: bytes.byteLength, seq: meta.nextSeq, bytes });
+        metaStore.put(meta);
+        while (meta.totalBytes > DERIVED_ARTIFACT_CACHE_MAX_BYTES) {
+          const cursor = await requestToPromise(store.index(SEQ_INDEX).openCursor());
+          if (cursor === null) break;
+          const oldest = cursor.value;
+          meta.totalBytes = Math.max(0, meta.totalBytes - oldest.byteLength);
+          store.delete(oldest.contentHash);
+          metaStore.put(meta);
+        }
+        await transactionDone(transaction);
+      } catch {
+      }
+    }
+  });
+}
+
 // src/world/asset-content-hash.mjs
 var HEX = Object.freeze(Array.from({ length: 256 }, (_, value) => value.toString(16).padStart(2, "0")));
 function portableAssetContentHash(bytes) {
@@ -1366,6 +1472,7 @@ var DerivedRevisionManager = class {
   #activateRevision;
   #disposeChunk;
   #disposeGlobal;
+  #onProgress;
   #now;
   #diagnosticsLimit;
   #diagnostics = [];
@@ -1389,7 +1496,8 @@ var DerivedRevisionManager = class {
       "disposeChunk",
       "disposeGlobal",
       "diagnosticsLimit",
-      "now"
+      "now",
+      "onProgress"
     ]), "derived revision manager options");
     this.#projectId = assertIdentifier(options.projectId, PROJECT_ID3, "derived revision manager projectId");
     this.#branchId = assertIdentifier(options.branchId, BRANCH_ID3, "derived revision manager branchId");
@@ -1401,6 +1509,7 @@ var DerivedRevisionManager = class {
     this.#activateRevision = assertFunction(options.activateRevision, "activateRevision");
     this.#disposeChunk = assertFunction(options.disposeChunk, "disposeChunk");
     this.#disposeGlobal = options.disposeGlobal === void 0 ? void 0 : assertFunction(options.disposeGlobal, "disposeGlobal");
+    this.#onProgress = options.onProgress === void 0 ? null : assertFunction(options.onProgress, "onProgress");
     if (typeof globalThis.AbortController !== "function") {
       throw new Error("DerivedRevisionManager requires the platform AbortController API");
     }
@@ -1617,7 +1726,7 @@ var DerivedRevisionManager = class {
       );
     }
   }
-  async #loadVerifiedArtifact(request, artifact, loaderInput, cache, timings, counts) {
+  async #loadVerifiedArtifact(request, artifact, loaderInput, cache, timings, counts, progress = null) {
     let pending = cache.get(artifact.contentHash);
     if (pending === void 0) {
       pending = (async () => {
@@ -1643,6 +1752,10 @@ var DerivedRevisionManager = class {
     }
     counts.artifacts++;
     counts.artifactBytes += bytes.byteLength;
+    if (progress !== null) {
+      progress.fetched += 1;
+      this.#onProgress(progress.fetched, progress.total);
+    }
     return bytes;
   }
   async #apply(request) {
@@ -1730,6 +1843,11 @@ var DerivedRevisionManager = class {
       const changedChunkIds = new Set(changedChunks.map((changed) => changed.chunk.chunkId));
       const removedChunks = [...priorChunks.values()].filter((entry) => !nextChunks.has(entry.chunk.chunkId) && !changedChunkIds.has(entry.chunk.chunkId));
       counts.removed = removedChunks.length;
+      const progress = this.#onProgress === null ? null : {
+        fetched: 0,
+        total: changedGlobals.length + changedChunks.reduce((count, changed) => count + changed.chunk.artifacts.length, 0)
+      };
+      if (progress !== null && progress.total > 0) this.#onProgress(0, progress.total);
       for (const changed of changedGlobals) {
         throwIfCancelled(request.signal);
         failurePhase = "load";
@@ -1744,7 +1862,8 @@ var DerivedRevisionManager = class {
           },
           artifactCache,
           timingsMs,
-          counts
+          counts,
+          progress
         );
         failurePhase = "stage";
         phaseAt = this.#now();
@@ -1775,7 +1894,8 @@ var DerivedRevisionManager = class {
             { manifest: request.manifest, chunk: changed.chunk, artifact, signal: request.signal },
             artifactCache,
             timingsMs,
-            counts
+            counts,
+            progress
           );
           artifactPayloads.push(Object.freeze({ artifact, bytes }));
         }
@@ -6170,6 +6290,12 @@ var DerivedRuntimeWorkerController = class {
   #initialized = false;
   #closed = false;
   #closePromise = null;
+  #baseUrl = "";
+  #token = "";
+  #eventSource = null;
+  // Undefined = the realm default (IndexedDB, lazily opened); null = caching disabled (gates).
+  #injectedCache;
+  #defaultCache;
   constructor(dependencies) {
     if (dependencies === null || typeof dependencies !== "object" || Array.isArray(dependencies)) {
       throw new TypeError("derived runtime worker dependencies must be an object");
@@ -6185,6 +6311,14 @@ var DerivedRuntimeWorkerController = class {
     if (!Number.isSafeInteger(this.#ackTimeoutMs) || this.#ackTimeoutMs < 100 || this.#ackTimeoutMs > 12e4) {
       throw new RangeError("derived runtime worker activationAckTimeoutMs must be an integer in [100, 120000]");
     }
+    this.#injectedCache = dependencies.artifactCache;
+  }
+  #artifactCache() {
+    if (this.#injectedCache !== void 0) return this.#injectedCache ?? void 0;
+    if (this.#defaultCache === void 0) {
+      this.#defaultCache = createIndexedDbDerivedArtifactCache(derivedArtifactContentHash);
+    }
+    return this.#defaultCache ?? void 0;
   }
   get isInitialized() {
     return this.#initialized;
@@ -6226,6 +6360,8 @@ var DerivedRuntimeWorkerController = class {
     const transport = this.#createTransport(message.config);
     this.#projectId = message.config.projectId;
     this.#branchId = message.config.branchId;
+    this.#baseUrl = message.config.baseUrl;
+    this.#token = message.config.token;
     this.#mode = message.mode;
     this.#pinnedSource = message.pinnedSource ?? null;
     this.#pinnedManifestHash = message.pinnedSource?.manifestHash ?? null;
@@ -6248,7 +6384,8 @@ var DerivedRuntimeWorkerController = class {
       disposeChunk: async () => {
       },
       disposeGlobal: async () => {
-      }
+      },
+      onProgress: (fetched, total) => this.#postFetchProgress(fetched, total)
     });
     this.#initialized = true;
     this.#postMessage(Object.freeze({
@@ -6257,6 +6394,7 @@ var DerivedRuntimeWorkerController = class {
       requestId: message.requestId,
       mode: message.mode
     }));
+    this.#startRevisionStream();
     this.#schedulePoll(0, true);
   }
   #setResidency(message, kind) {
@@ -6328,9 +6466,26 @@ var DerivedRuntimeWorkerController = class {
     if (current === null || current.manifestHash !== manifestHash) {
       throw fatal2("PUBLICATION_BINDING_MISMATCH", "artifact load is not bound to the submitted publication");
     }
+    const cache = this.#artifactCache();
+    const cached = await cache?.get(descriptor2.contentHash);
+    if (cached !== void 0 && cached.byteLength === descriptor2.byteLength) {
+      if (signal.aborted) throw signal.reason;
+      return cached;
+    }
+    if (signal.aborted) throw signal.reason;
     const result = await this.#requireTransport().fetchArtifact(current, descriptor2, { signal });
     if (result.status !== "artifact") throw fatal2("PROTOCOL_ERROR", "derived artifact unexpectedly returned not-modified");
+    await cache?.put(descriptor2.contentHash, result.bytes);
     return result.bytes;
+  }
+  #postFetchProgress(fetched, total) {
+    if (this.#closed) return;
+    this.#postMessage(Object.freeze({
+      schema: DERIVED_RUNTIME_WORKER_SCHEMA,
+      type: "fetch-progress",
+      fetched,
+      total
+    }));
   }
   #stageGlobal(input) {
     if (input.signal.aborted) throw input.signal.reason;
@@ -6482,6 +6637,25 @@ var DerivedRuntimeWorkerController = class {
     if (message.accepted) pending.resolve();
     else pending.reject(transient2("ACTIVATION_REJECTED", `main thread rejected activation (${message.errorCode})`));
   }
+  /** SSE revision push (2.0-B): the derived-runtime server broadcasts each
+   *  publish; a revision event cancels the idle ladder and polls NOW. Polling
+   *  stays the backbone — a stream failure (or no EventSource in the realm)
+   *  just leaves the ladder to its own cadence. */
+  #startRevisionStream() {
+    if (this.#mode !== "watch" || this.#eventSource !== null || this.#baseUrl === "" || this.#token === "") return;
+    const Ctor = globalThis.EventSource;
+    if (Ctor === void 0) return;
+    const source = new Ctor(`${this.#baseUrl}/v1/derived/events/${this.#token}`);
+    this.#eventSource = source;
+    source.addEventListener("revision", () => {
+      this.#idlePollIndex = 0;
+      this.#schedulePoll(0, true);
+    });
+  }
+  #stopRevisionStream() {
+    this.#eventSource?.close();
+    this.#eventSource = null;
+  }
   #schedulePoll(delayMs, explicit = false) {
     if (this.#closed || this.#mode === "pinned" && !explicit) return;
     if (this.#pollTimer !== null) {
@@ -6596,6 +6770,7 @@ var DerivedRuntimeWorkerController = class {
     if (this.#closePromise !== null) return this.#closePromise;
     this.#closed = true;
     this.#lifecycle.abort(fatal2("DERIVED_RUNTIME_CLOSED", "derived runtime worker was closed"));
+    this.#stopRevisionStream();
     if (this.#pollTimer !== null) {
       this.#timers.clearTimeout(this.#pollTimer);
       this.#pollTimer = null;

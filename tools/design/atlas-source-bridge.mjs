@@ -529,6 +529,45 @@ function authorityError(error, source) {
   });
 }
 
+
+/** Raster byte length of one field across maps (absent = 0). */
+function rasterDataLength(map, key) {
+  const data = map?.rasters?.[key]?.data;
+  return typeof data === "string" ? data.length : 0;
+}
+
+/** DATA-LOSS CIRCUIT BREAKER (see #save): reject a save that would gut the map
+ *  — a raster class collapsing below a quarter of its size, or a content class
+ *  (features/stamps/waterBodies) vanishing entirely — unless the caller passes
+ *  allowShrink:true to say the erasure is intentional. */
+function assertNoShrink(workspaceRaw, maps, allowShrink) {
+  if (allowShrink === true) return;
+  const currentMaps = Array.isArray(workspaceRaw?.maps) ? workspaceRaw.maps : [];
+  const currentById = new Map(currentMaps.filter((m) => m && typeof m.id === "string").map((m) => [m.id, m]));
+  const reasons = [];
+  for (const next of maps) {
+    const current = currentById.get(next.id);
+    if (current === undefined) continue; // a NEW map cannot shrink (nothing to lose)
+    for (const key of ["landmass", "elevation"]) {
+      const before = rasterDataLength(current, key);
+      const after = rasterDataLength(next, key);
+      if (before > 1024 && after * 4 < before) reasons.push(`${next.id}.${key} ${before}→${after} bytes`);
+    }
+    for (const field of ["features", "stamps", "waterBodies"]) {
+      const before = Array.isArray(current[field]) ? current[field].length : 0;
+      const after = Array.isArray(next[field]) ? next[field].length : 0;
+      if (before > 0 && after === 0) reasons.push(`${next.id}.${field} ${before}→0`);
+    }
+  }
+  if (reasons.length > 0) {
+    throw new AtlasSourceBridgeError(
+      "shrink_rejected",
+      `Atlas save would gut the map (${reasons.join("; ")}). If this erasure is intentional, pass allowShrink:true.`,
+      { status: 409, details: { reasons } },
+    );
+  }
+}
+
 export class AtlasMapDocBridge {
   constructor({ projectConfig, vaultDir, assetRoot, authoringClient, sourceWriter = persistMapDocSource, mirrorWriter = atomicWriteWorkspace }) {
     if (!projectConfig || !PROJECT_ID_PATTERN.test(projectConfig.projectId) || typeof projectConfig.projectRoot !== "string") {
@@ -570,7 +609,7 @@ export class AtlasMapDocBridge {
     return run;
   }
 
-  async #save({ maps, activeMapId, baseRev }) {
+  async #save({ maps, activeMapId, baseRev, allowShrink }) {
     const workspace = readWorkspace(this.workspacePath);
     if (typeof baseRev !== "string" || baseRev !== workspace.revision) {
       throw new AtlasSourceBridgeError("workspace_stale", "Atlas workspace changed since this client loaded it", {
@@ -580,6 +619,13 @@ export class AtlasMapDocBridge {
     }
 
     validateSavePayload(maps, activeMapId);
+    // DATA-LOSS CIRCUIT BREAKER: a save may never silently gut the map. The
+    // 2026-07-19 incident — five transactions in 11s cascading landmass →
+    // elevation → features → stamps to zero through this exact chokepoint —
+    // is the shape this guard rejects. Byte/elem counts are compared against
+    // the workspace's current content; an intentional full erasure passes
+    // allowShrink:true explicitly.
+    assertNoShrink(workspace.raw, maps, allowShrink === true);
     const serialized = serializeMapDoc(maps, activeMapId, workspace.raw);
     const { doc } = migrateMapDoc(serialized, this.projectId);
     const sourceBytes = canonicalMapDocBytes(doc);

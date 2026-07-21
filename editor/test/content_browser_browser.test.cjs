@@ -101,7 +101,7 @@ function fail(message) { console.error("FAIL: " + message); process.exit(1); }
         viewportStatus: document.getElementById("viewport-status")?.textContent,
         rootWidth: root.clientWidth,
         rootScrollWidth: root.scrollWidth,
-        terrainHud: rect(document.querySelector(".terrain-edit-hud")),
+        toolSurface: rect(document.querySelector(".viewport-tool-surface")),
         viewportToolbar: rect(document.querySelector(".viewport-tools")),
       };
     });
@@ -124,7 +124,7 @@ function fail(message) { console.error("FAIL: " + message); process.exit(1); }
         rows: root.querySelectorAll(".content-asset-row").length,
         sidebarBottom: sidebar.bottom,
         viewportTop: viewport.top,
-        terrainHud: rect(document.querySelector(".terrain-edit-hud")),
+        toolSurface: rect(document.querySelector(".viewport-tool-surface")),
         viewportToolbar: rect(document.querySelector(".viewport-tools")),
       };
     });
@@ -138,7 +138,7 @@ function fail(message) { console.error("FAIL: " + message); process.exit(1); }
       };
       return {
         status: document.getElementById("viewport-status")?.textContent,
-        terrainHud: rect(document.querySelector(".terrain-edit-hud")),
+        toolSurface: rect(document.querySelector(".viewport-tool-surface")),
         viewportToolbar: rect(document.querySelector(".viewport-tools")),
       };
     });
@@ -150,12 +150,14 @@ function fail(message) { console.error("FAIL: " + message); process.exit(1); }
     if (result.armedId !== result.selectedAfter || result.armedTitle !== "Needle Keep Updated" || Math.abs(result.yaw - Math.PI / 2) > 1e-9) fail(`refresh lost selection/arming state: ${JSON.stringify(result)}`);
     if (!result.viewportStatus?.includes("place: Needle Keep")) fail(`viewport did not receive armed placement synchronously: ${JSON.stringify(result)}`);
     const overlaps = (a, b) => !!a && !!b && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-    if (result.terrainHud || overlaps(result.terrainHud, result.viewportToolbar)) fail(`armed placement HUD overlaps desktop viewport controls: ${JSON.stringify(result)}`);
+    // The HUD is retired (2.0-C); the overlap invariant now binds the registry
+    // ribbon (.viewport-tool-surface) against the bottom viewport controls.
+    if (overlaps(result.toolSurface, result.viewportToolbar)) fail(`armed placement ribbon overlaps desktop viewport controls: ${JSON.stringify(result)}`);
     if (result.rootScrollWidth > result.rootWidth || mobile.rootScrollWidth > mobile.rootWidth || mobile.pageWidth > mobile.viewportWidth) fail(`Content Browser overflows layout: ${JSON.stringify({ result, mobile })}`);
     if (mobile.rows > 40) fail(`mobile virtualization is unbounded: ${JSON.stringify(mobile)}`);
     if (mobile.viewportTop < mobile.sidebarBottom - 1) fail(`mobile Content Browser overlaps the viewport: ${JSON.stringify(mobile)}`);
-    if (mobile.terrainHud || overlaps(mobile.terrainHud, mobile.viewportToolbar)) fail(`armed placement HUD overlaps mobile viewport controls: ${JSON.stringify(mobile)}`);
-    if (!restored.terrainHud || !restored.status?.includes("tool: raise") || overlaps(restored.terrainHud, restored.viewportToolbar)) fail(`disarm did not restore a non-overlapping terrain tool state: ${JSON.stringify(restored)}`);
+    if (overlaps(mobile.toolSurface, mobile.viewportToolbar)) fail(`armed placement ribbon overlaps mobile viewport controls: ${JSON.stringify(mobile)}`);
+    if (!restored.status?.includes("tool: raise") || overlaps(restored.toolSurface, restored.viewportToolbar)) fail(`disarm did not restore a non-overlapping terrain tool state: ${JSON.stringify(restored)}`);
     if (errors.length > 0) fail("browser errors: " + errors.join(" | "));
     console.log(`content_browser_browser.test OK: ${result.total} assets, ${result.boundedRows} desktop rows, ${mobile.rows} mobile rows, error recovery and placement handoff verified`);
   } catch (error) {

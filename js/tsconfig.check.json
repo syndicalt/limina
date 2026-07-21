@@ -1,4 +1,17 @@
 {
+  // ENGINE type-clean gate. `npm run check:types` must exit 0 for every change that
+  // touches engine code (js/src minus the leaf entry scripts below). This is the
+  // definition of "type-clean" in CLAUDE.md.
+  //
+  // The exclusions are NON-ENGINE leaf entry scripts, never imported by the engine:
+  //   - src/bootstrap.ts / src/demo.ts — top-level bootstrap shims;
+  //   - src/demos/**  — window showcase scripts (run directly, often with mock
+  //     scene/camera objects that don't satisfy the engine's strict THREE types);
+  //   - src/eyes/**   — GPU capture/verification entry scripts.
+  // These are NOT type-clean today (run `npm run check:types:all` for the full
+  // surface — ~51 known errors, incl. a FunctionalBuildingContract v1/v2 drift in the
+  // building capture windows). The exclusion is explicit and the debt is tracked here,
+  // NOT silently hidden — reducing check:types:all to zero lets these fold back in.
   "compilerOptions": {
     "target": "ES2022",
     "module": "preserve",
@@ -8,8 +21,8 @@
     "noEmit": true,
     "allowJs": true,
     "checkJs": false,
-    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "types": ["@webgpu/types"]
   },

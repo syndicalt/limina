@@ -35,7 +35,6 @@ import {
 import { createHash, randomBytes } from "node:crypto";
 import { buildPeekScene } from "./peek-scene.mjs";
 import { summarizePeekFailure } from "./peek-failure.mjs";
-import { editorLaunchConfigFromEnvironment } from "./editor-launch.mjs";
 import { listPacks, importPack } from "./pack-import.mjs";
 import { connect as netConnect } from "node:net";
 import { loadProjectConfig, resolveProjectPath } from "../project-config.mjs";
@@ -60,9 +59,8 @@ const LIMINA_HOME = resolve(__dirname, "..", "..");
 const LIMINA_BIN = process.env.LIMINA_BIN || join(LIMINA_HOME, "target", "release", "limina");
 // Content-pack library source. Imported packs and compiled maps are project-local.
 const PACKS_DIR = process.env.LIMINA_PACKS_DIR || join(LIMINA_HOME, "packs");
-// The frontend is served from disk PER REQUEST (no boot cache — caching index.html at startup
-// meant every frontend edit needed a server restart, a repeated debugging trap).
-const FRONTEND_DIR = join(__dirname, "frontend");
+// The old Atlas SPA (tools/design/frontend/) is retired: the native Atlas surface lives in the
+// editor (editor/src/atlas/). This server is API/headless-only — there is no UI to serve.
 const SHARED_MODULES = {
   "/shared/marching-squares.mjs": join(LIMINA_HOME, "js/src/world/pipeline/marching-squares.mjs"),
   "/shared/raster-codec.mjs": join(LIMINA_HOME, "js/src/world/pipeline/raster-codec.mjs"),
@@ -71,18 +69,15 @@ const SHARED_MODULES = {
   "/js/src/world/water-ir.mjs": join(LIMINA_HOME, "js/src/world/water-ir.mjs"),
   "/js/src/world/hydrology-ir.mjs": join(LIMINA_HOME, "js/src/world/hydrology-ir.mjs"),
 };
-const MIME = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".mjs": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-};
 
-const REQUESTED_VAULT_DIR = resolve(process.argv[2] || process.cwd());
+const rawArgs = process.argv.slice(2);
+// --headless: no SPA, no /api/session issuance — the launcher-supervised proxy is
+// the only client, authenticating with the launcher-issued LIMINA_DESIGN_TOKEN
+// (same capability discipline as the editor token: fail closed, never mint a
+// weaker local fallback). Standalone mode keeps the random per-boot token.
+const HEADLESS = rawArgs.includes("--headless");
+const positionalArgs = rawArgs.filter((arg) => arg !== "--headless");
+const REQUESTED_VAULT_DIR = resolve(positionalArgs[0] || process.cwd());
 const REQUESTED_PROJECT_ROOT =
   basename(REQUESTED_VAULT_DIR) === "design" ? dirname(REQUESTED_VAULT_DIR) : REQUESTED_VAULT_DIR;
 const PROJECT_CONFIG = loadProjectConfig(REQUESTED_PROJECT_ROOT);
@@ -119,10 +114,21 @@ function ensureProjectDirectory(path, label) {
 const ASSET_ROOT_REQUEST = process.env.LIMINA_ASSETS_ROOT || join(PROJECT_ROOT, CONFIGURED_ASSET_ROOT);
 ensureProjectDirectory(ASSET_ROOT_REQUEST, "asset root");
 const ASSETS_DIR = resolveProjectPath(PROJECT_ROOT, ASSET_ROOT_REQUEST, "asset root");
-const port = Number(process.argv[3]) || 4321;
+const port = Number(positionalArgs[1]) || 4321;
 const HOST = "127.0.0.1";
-const DESIGN_SESSION_TOKEN = randomBytes(32).toString("hex");
-const EDITOR_LAUNCH_CONFIG = editorLaunchConfigFromEnvironment(process.env);
+const HEADLESS_TOKEN = process.env.LIMINA_DESIGN_TOKEN;
+if (HEADLESS && (typeof HEADLESS_TOKEN !== "string" || !/^[A-Za-z0-9_-]{32,128}$/.test(HEADLESS_TOKEN))) {
+  throw new Error("serve-design --headless requires LIMINA_DESIGN_TOKEN (32-128 URL-safe chars) issued by the launcher");
+}
+const DESIGN_SESSION_TOKEN = HEADLESS ? HEADLESS_TOKEN : randomBytes(32).toString("hex");
+// Headless session placeholder: the embedded SPA's boot REQUIRES a >=32-char
+// token string (net.js), and its mutation POSTs carry it — but the launcher
+// proxy overwrites the x-limina-design-token header with the real capability
+// server-side, so the placeholder never authenticates anything. It is NOT a
+// credential: presenting it directly to the sidecar yields 403 like any wrong
+// token. This keeps the real design token inside the sidecar while the legacy
+// SPA boots unchanged.
+const HEADLESS_SESSION_PLACEHOLDER = "limina-proxy-attached-design-token";
 const MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024;
 const MAX_PEEK_JOBS = 256;
 const MAX_CONCURRENT_PEEKS = 2;
@@ -453,8 +459,8 @@ function mapsRev() {
     return "0";
   }
 }
-function saveMaps(maps, activeMapId, baseRev) {
-  return atlasMapDocBridge.save({ maps, activeMapId, baseRev });
+function saveMaps(maps, activeMapId, baseRev, allowShrinkFlag) {
+  return atlasMapDocBridge.save({ maps, activeMapId, baseRev, allowShrink: allowShrinkFlag === true });
 }
 
 // Create a new vault document (a readable, linkable markdown note). Templates carry
@@ -969,7 +975,7 @@ createServer((req, res) => {
         }
         if (req.url === "/api/map-save") {
           try {
-            const r = await saveMaps(p.maps, p.activeMapId, p.baseRev);
+            const r = await saveMaps(p.maps, p.activeMapId, p.baseRev, p.allowShrink);
             res.writeHead(200, { "content-type": "application/json" });
             res.end(JSON.stringify(r));
           } catch (error) {
@@ -1074,7 +1080,7 @@ createServer((req, res) => {
       "cache-control": "no-store",
       "x-content-type-options": "nosniff",
     });
-    res.end(JSON.stringify({ token: DESIGN_SESSION_TOKEN, editor: EDITOR_LAUNCH_CONFIG }));
+    res.end(JSON.stringify({ token: HEADLESS ? HEADLESS_SESSION_PLACEHOLDER : DESIGN_SESSION_TOKEN }));
     return;
   }
   if (req.method === "GET" && req.url.split("?")[0] === "/api/packs") {
@@ -1221,29 +1227,15 @@ createServer((req, res) => {
       res.end(String(e));
     }
   } else if (req.method === "GET") {
-    // Generic frontend static dispatch (the SPA is ES modules now, not one cached HTML blob).
-    // Resolve inside FRONTEND_DIR only; anything else (traversal, unknown type) is a 404.
-    const clean = (req.url.split("?")[0] || "/").replace(/\/+$/, "") || "/";
-    const rel = clean === "/" ? "index.html" : clean.replace(/^\/+/, "");
-    const fp = resolve(FRONTEND_DIR, rel);
-    const ext = fp.slice(fp.lastIndexOf("."));
-    if (fp.startsWith(FRONTEND_DIR + "/") || fp === join(FRONTEND_DIR, "index.html")) {
-      try {
-        const body = readFileSync(fp);
-        res.writeHead(200, { "content-type": MIME[ext] || "application/octet-stream", "cache-control": "no-cache" });
-        res.end(body);
-        return;
-      } catch {
-        /* fall through to 404 */
-      }
-    }
-    res.writeHead(404);
-    res.end("not found");
+    // The standalone SPA is retired — the native Atlas surface is part of the editor. Every
+    // non-API GET gets the headless answer regardless of launch mode.
+    res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+    res.end(JSON.stringify({ ok: false, error: "headless design service — no UI; use the studio shell" }));
+    return;
   } else {
     res.writeHead(404);
     res.end("not found");
   }
 }).listen(port, HOST, () => {
-  console.log(`\n  Design Space — ${vaultDir}`);
-  console.log(`  open  http://localhost:${port}/\n`);
+  console.log(`\n  Design Space — ${vaultDir}${HEADLESS ? " (headless sidecar)" : ""}`);
 });

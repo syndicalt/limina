@@ -61,6 +61,35 @@ export function derivedTerrainResidencyKey(input: unknown): string {
   return `${residency.lod}:${residency.center[0]}:${residency.center[1]}:${residency.radius}`;
 }
 
+/** Activation routing for one verified incoming snapshot (2.0-B + content-delta).
+ *  Pure: the render realm decides ONCE here whether an activation is a no-op
+ *  duplicate, an incremental window delta (same manifest, moved residency, no biome
+ *  population — population mounting needs the full path's content access and
+ *  presentation gate), a content delta (changed manifest, same window/topology, only
+ *  a subset of chunk content hashes moved — the sculpt-on-derived path), or a full
+ *  swap. Anything not provably incremental/content-delta routes to the full path.
+ *  `contentDeltaKeys` is precomputed by the caller (the candidate holds the active
+ *  chunk hashes; the comparison itself stays pure — two hash lists): null whenever
+ *  any content-delta invariant fails, so this function never re-checks content. */
+export type DerivedActivationPlan = "duplicate" | "incremental" | "content-delta" | "full";
+
+export function planDerivedActivation(
+  active: Readonly<{ manifestHash: string; residencyKey: string }> | null,
+  manifestHash: string,
+  residencyKey: string,
+  carriesPopulation: boolean,
+  contentDeltaKeys: readonly string[] | null = null,
+): DerivedActivationPlan {
+  if (active === null) return "full";
+  if (active.manifestHash !== manifestHash) {
+    return active.residencyKey === residencyKey && !carriesPopulation
+        && contentDeltaKeys !== null && contentDeltaKeys.length > 0
+      ? "content-delta" : "full";
+  }
+  if (active.residencyKey === residencyKey) return "duplicate";
+  return carriesPopulation ? "full" : "incremental";
+}
+
 export function selectDerivedTerrainChunks<T extends TerrainChunk>(
   manifest: Readonly<{ grid: TerrainGrid; chunks: readonly T[] }>,
   residencyInput: unknown,

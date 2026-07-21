@@ -110003,19 +110003,29 @@ var scatterInput = external_exports.object({
    *  a map's painted forest polygons, disc-covered by the caller) instead of the whole tile. */
   inclusions: external_exports.array(external_exports.object({ x: external_exports.number(), z: external_exports.number(), r: external_exports.number().nonnegative() })).optional(),
   /** Extra tags for the forest entity (it is always tagged "forest" + "vegetation"). */
-  tags: external_exports.array(external_exports.string()).optional()
+  tags: external_exports.array(external_exports.string()).optional(),
+  /** Replay pin (commitFields), derived path only: the MapDoc + base topology +
+   *  ordered height-layer hashes the placements were computed against. A rehydrated
+   *  scatter whose recomputed field identity disagrees throws — replay divergence is
+   *  loud, never a silently different forest. Absent on EditableTerrain worlds. */
+  derivedField: external_exports.object({
+    mapDocHash: external_exports.string(),
+    baseTopologyHash: external_exports.string(),
+    layerHashes: external_exports.array(external_exports.string())
+  }).optional()
 });
-function registerVegetationSkills(registry2, layers, assets, footprints = /* @__PURE__ */ new Map(), mounted = /* @__PURE__ */ new Map(), vegetationClears = /* @__PURE__ */ new Map()) {
+function registerVegetationSkills(registry2, layers, assets, footprints = /* @__PURE__ */ new Map(), mounted = /* @__PURE__ */ new Map(), vegetationClears = /* @__PURE__ */ new Map(), derived) {
   const scatter = {
     name: "vegetation.scatter",
     version: "1.0.0",
-    description: "Scatter a forest of tree archetypes across an editable terrain layer, gated by slope + elevation (tree line), deterministic + recorded. Instanced trees sit on the sculpted ground. Returns the forest entity + instance count.",
+    description: "Scatter a forest of tree archetypes across an editable terrain layer (or the derived world's composed height field), gated by slope + elevation (tree line), deterministic + recorded. Instanced trees sit on the sculpted ground. Returns the forest entity + instance count.",
     category: "terrain",
     permissions: ["scene.write"],
-    // The recorder copies resolved per-asset hashes into the recorded command so replay pins identity.
-    commitFields: ["assetHashes"],
+    // The recorder copies resolved per-asset hashes into the recorded command so replay pins identity;
+    // on the derived path the composed-field identity (MapDoc + topology + layer hashes) is pinned too.
+    commitFields: ["assetHashes", "derivedField"],
     input: scatterInput,
-    output: external_exports.object({ entity: external_exports.string(), instances: external_exports.number().int(), assetHashes: external_exports.record(external_exports.string(), external_exports.string()), placements: external_exports.array(external_exports.unknown()) }),
+    output: external_exports.object({ entity: external_exports.string(), instances: external_exports.number().int(), assetHashes: external_exports.record(external_exports.string(), external_exports.string()), placements: external_exports.array(external_exports.unknown()), derivedField: external_exports.object({ mapDocHash: external_exports.string(), baseTopologyHash: external_exports.string(), layerHashes: external_exports.array(external_exports.string()) }).optional() }),
     handler: async (input, ctx) => {
       let terrainId = input.terrain;
       if (terrainId === void 0) {
@@ -110024,9 +110034,33 @@ function registerVegetationSkills(registry2, layers, assets, footprints = /* @__
         terrainId = last;
       }
       const layer = terrainId !== void 0 ? layers.get(terrainId) : void 0;
-      if (layer === void 0) throw new Error("vegetation.scatter: no terrain layer \u2014 create one with terrain.create first");
-      const terrainKey = terrainId;
-      const bt = layer.tile;
+      const derivedField = layer === void 0 ? derived?.composedField?.() : void 0;
+      if (layer === void 0 && derivedField === void 0) throw new Error("vegetation.scatter: no terrain layer \u2014 create one with terrain.create first");
+      const terrainKey = layer !== void 0 ? terrainId : derivedField.terrainKey;
+      const surfaceTile = () => {
+        if (layer !== void 0) return layer.tile;
+        const field = derived?.composedField?.();
+        if (field === void 0) throw new Error("vegetation.scatter: the derived height field is no longer available (no MapDoc mounted)");
+        const discs = [...input.inclusions ?? [], ...input.exclusions ?? []];
+        if (discs.length === 0) return field.denseTile();
+        const margin = 96;
+        const bounds = {
+          minX: Math.min(...discs.map((d2) => d2.x - d2.r)) - margin,
+          maxX: Math.max(...discs.map((d2) => d2.x + d2.r)) + margin,
+          minZ: Math.min(...discs.map((d2) => d2.z - d2.r)) - margin,
+          maxZ: Math.max(...discs.map((d2) => d2.z + d2.r)) + margin
+        };
+        return field.denseTile(bounds);
+      };
+      let derivedPin;
+      if (derivedField !== void 0) {
+        derivedPin = { mapDocHash: derivedField.mapDocHash, baseTopologyHash: derivedField.baseTopologyHash, layerHashes: [...derivedField.layerHashes] };
+        const pinned = input.derivedField;
+        if (pinned !== void 0 && (pinned.mapDocHash !== derivedPin.mapDocHash || pinned.baseTopologyHash !== derivedPin.baseTopologyHash || pinned.layerHashes.length !== derivedPin.layerHashes.length || pinned.layerHashes.some((hash10, index) => hash10 !== derivedPin.layerHashes[index]))) {
+          throw new Error(`vegetation.scatter replay diverged: the recorded derived-field pin ${pinned.mapDocHash} does not match the recomputed field ${derivedPin.mapDocHash}`);
+        }
+      }
+      const bt = surfaceTile();
       const blightGrid = bt.blight;
       const blightAtWorld = (x3, z4) => {
         if (blightGrid === void 0) return 0;
@@ -110051,12 +110085,17 @@ function registerVegetationSkills(registry2, layers, assets, footprints = /* @__
           assetHashes[entry.treeLod.impostorId] = assets.resolve(entry.treeLod.impostorId).hash;
         }
       }
-      let loH = Infinity;
-      for (let i2 = 0; i2 < layer.tile.heights.length; i2++) {
-        const v3 = layer.tile.heights[i2];
-        if (v3 < loH) loH = v3;
+      let seaLevel;
+      if (layer !== void 0) {
+        let loH = Infinity;
+        for (let i2 = 0; i2 < layer.tile.heights.length; i2++) {
+          const v3 = layer.tile.heights[i2];
+          if (v3 < loH) loH = v3;
+        }
+        seaLevel = layer.elevationColors?.seaLevel ?? layer.tile.origin[1] + loH;
+      } else {
+        seaLevel = derivedField.seaLevelM;
       }
-      const seaLevel = layer.elevationColors?.seaLevel ?? layer.tile.origin[1] + loH;
       const elevationMinDefault = seaLevel + 1.5;
       const computePlacements = () => {
         const registered = footprints.get(terrainKey) ?? [];
@@ -110074,7 +110113,7 @@ function registerVegetationSkills(registry2, layers, assets, footprints = /* @__
           ...allExclusions.length > 0 ? { exclusions: allExclusions } : {},
           ...input.inclusions !== void 0 && input.inclusions.length > 0 ? { inclusions: input.inclusions } : {}
         };
-        return scatterAssets(layer.tile, input.seed, config2);
+        return scatterAssets(surfaceTile(), input.seed, config2);
       };
       const scene = ctx.world.scene;
       const canRender = ctx.world.mode !== "headless" && scene !== void 0 && typeof scene.add === "function";
@@ -110196,7 +110235,7 @@ function registerVegetationSkills(registry2, layers, assets, footprints = /* @__
         }
       };
       await remount();
-      const [ox, oy, oz] = layer.tile.origin;
+      const [ox, oy, oz] = bt.origin;
       const eid = spawnRenderable(ctx.world.ecs, inertTransform(), ox, oy, oz);
       if (eid >= MAX_ENTITIES) {
         active = false;
@@ -110261,7 +110300,7 @@ function registerVegetationSkills(registry2, layers, assets, footprints = /* @__
         throw error51;
       }
       ctx.emit("vegetation.scattered", { entity, terrain: terrainKey, instances: placements.length, mounted: mountedDraws });
-      return { entity, instances: placements.length, assetHashes, placements };
+      return { entity, instances: placements.length, assetHashes, placements, ...derivedPin !== void 0 ? { derivedField: derivedPin } : {} };
     }
   };
   registry2.register(scatter);
@@ -111607,7 +111646,8 @@ var PERMISSION_PROFILES = {
     "world.write",
     "design.read",
     "design.write",
-    "catalog.read"
+    "catalog.read",
+    "studio.suggest"
   ],
   // Full player character control (Part D).
   "player.full": [
@@ -111785,7 +111825,7 @@ var PERMISSION_PROFILES = {
     "game.plan",
     "catalog.read"
   ],
-  "reviewer": ["authoring.read", "scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read", "design.read", "catalog.read", DERIVED_RUNTIME_DISCOVERY_PERMISSION],
+  "reviewer": ["authoring.read", "scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read", "design.read", "catalog.read", "studio.suggest", DERIVED_RUNTIME_DISCOVERY_PERMISSION],
   // Phase 10 coordinator/delegate (existing)
   "reviewer.coordinator": [
     "orchestrate",
@@ -113461,6 +113501,7 @@ var SkillRegistry = class _SkillRegistry {
       world: base.world,
       chainId,
       chainToken: base.chainToken,
+      replay: base.replay,
       undo: (label4, fn) => {
         if (!this.chainUndoLedgerEnabled) return;
         const frame2 = this.chainFrames.get(chainId);
@@ -117245,9 +117286,9 @@ var MaterialRegistry = class {
       ...spec.parallax !== void 0 ? { parallax: spec.parallax } : {},
       ...spec.color !== void 0 ? { color: spec.color } : {}
     };
-    const contentHash3 = compilerContentHash({ schema: "limina.imported-material-recipe/v1", name, spec: canonicalSpec, hashes: pinnedHashes });
+    const contentHash4 = compilerContentHash({ schema: "limina.imported-material-recipe/v1", name, spec: canonicalSpec, hashes: pinnedHashes });
     const replaced = this.map.get(name);
-    this.map.set(name, { spec, textures, hashes: pinnedHashes, contentHash: contentHash3, build });
+    this.map.set(name, { spec, textures, hashes: pinnedHashes, contentHash: contentHash4, build });
     if (replaced !== void 0) {
       const errors = [];
       this.disposeRetiredTextures(replaced.textures, errors);
@@ -117881,6 +117922,99 @@ function registerSystemSkills(registry2) {
       return { ok: false, target: "data", invalidated: [], reason: why };
     }
   });
+}
+
+// src/skills/studio.ts
+var STUDIO_SUGGESTION_EVENT = "studio.suggestion";
+var STUDIO_SURFACES = ["atlas", "viewport", "docs", "any"];
+var inputSchema = external_exports.object({
+  /** One-line summary the card leads with (≤120 chars). */
+  title: external_exports.string().min(1).max(120),
+  /** Why + what changes if accepted (≤600 chars). */
+  detail: external_exports.string().max(600).optional(),
+  /** Which surface the suggestion belongs to (the host renders it there). */
+  surface: external_exports.enum(STUDIO_SURFACES).default("any"),
+  /** Optional one-click action: a REAL registered skill + its input. Validated
+   *  at suggestion time so the card never offers a call that cannot parse. */
+  action: external_exports.object({
+    skill: external_exports.string().min(1),
+    input: external_exports.record(external_exports.string(), external_exports.unknown()).default({}),
+    label: external_exports.string().max(60).optional()
+  }).optional(),
+  /** Optional Atlas region to highlight (world meters, any order corners). */
+  region: external_exports.object({
+    x0: external_exports.number().finite(),
+    z0: external_exports.number().finite(),
+    x1: external_exports.number().finite(),
+    z1: external_exports.number().finite()
+  }).optional()
+});
+var outputSchema = external_exports.object({
+  ok: external_exports.literal(true),
+  suggestion: external_exports.object({
+    id: external_exports.string(),
+    title: external_exports.string(),
+    detail: external_exports.string().optional(),
+    surface: external_exports.enum(STUDIO_SURFACES),
+    action: external_exports.object({
+      skill: external_exports.string(),
+      input: external_exports.record(external_exports.string(), external_exports.unknown()),
+      label: external_exports.string().optional()
+    }).optional(),
+    region: external_exports.object({
+      x0: external_exports.number(),
+      z0: external_exports.number(),
+      x1: external_exports.number(),
+      z1: external_exports.number()
+    }).optional()
+  })
+});
+var suggestionSeq = 0;
+var hostRegistry;
+var studioSuggestSkill = {
+  name: "studio.suggest",
+  version: "1.0.0",
+  description: "Offer the human an inline suggestion (card) in the studio \u2014 inert by itself; acceptance routes the optional action through the normal skill path.",
+  category: "agent",
+  permissions: ["studio.suggest"],
+  effect: "read",
+  // Conversational affordance, not catalog flood: the chat agent must see this
+  // in its bootstrap tool set to offer suggestions without a search round-trip.
+  priority: "core",
+  input: inputSchema,
+  output: outputSchema,
+  handler: (input, ctx) => {
+    let action = input.action;
+    if (action !== void 0) {
+      const skillName = action.skill.replaceAll("__", ".");
+      const def = hostRegistry?.describe(skillName);
+      if (def === void 0) throw new Error(`studio.suggest: unknown action skill "${action.skill}"`);
+      const parsed = def.input.safeParse(action.input);
+      if (!parsed.success) throw new Error(`studio.suggest: action input does not parse for ${skillName}: ${parsed.error.message}`);
+      action = { ...action, skill: skillName };
+    }
+    const region = input.region === void 0 ? void 0 : {
+      x0: Math.min(input.region.x0, input.region.x1),
+      z0: Math.min(input.region.z0, input.region.z1),
+      x1: Math.max(input.region.x0, input.region.x1),
+      z1: Math.max(input.region.z0, input.region.z1)
+    };
+    suggestionSeq += 1;
+    const suggestion = {
+      id: `sug_${ctx.tick.toString(36)}_${suggestionSeq.toString(36)}`,
+      title: input.title,
+      ...input.detail !== void 0 ? { detail: input.detail } : {},
+      surface: input.surface,
+      ...action !== void 0 ? { action } : {},
+      ...region !== void 0 ? { region } : {}
+    };
+    ctx.emit(STUDIO_SUGGESTION_EVENT, suggestion);
+    return { ok: true, suggestion };
+  }
+};
+function registerStudioSkills(registry2) {
+  hostRegistry = registry2;
+  registry2.register(studioSuggestSkill);
 }
 
 // src/skills/approval.ts
@@ -118847,9 +118981,9 @@ var PackageRegistry = class {
     if (!parsed.ok || parsed.manifest === void 0) return { ok: false, error: parsed.error };
     const manifest = parsed.manifest;
     const ref = packageRef(manifest);
-    const contentHash3 = "sha256:" + ops.op_sha256(manifest.entry);
-    const installedAt = `content:${ref}:${contentHash3}`;
-    this.installed.set(ref, { ref, manifest, contentHash: contentHash3, installedAt });
+    const contentHash4 = "sha256:" + ops.op_sha256(manifest.entry);
+    const installedAt = `content:${ref}:${contentHash4}`;
+    this.installed.set(ref, { ref, manifest, contentHash: contentHash4, installedAt });
     this.tracer.emit({
       type: "package.installed",
       actorId: manifest.name,
@@ -118864,7 +118998,7 @@ var PackageRegistry = class {
         declaredCapabilities: manifest.declaredCapabilities,
         assetRefs: manifest.assetRefs,
         engineCompat: manifest.engineCompat,
-        contentHash: contentHash3,
+        contentHash: contentHash4,
         attested: manifest.attestation !== void 0,
         signer: manifest.attestation?.signer ?? null
       }
@@ -123173,6 +123307,16 @@ function disposePropMesh(mesh) {
 // src/terrain/stream.ts
 function tileKey(tx, tz) {
   return `${validateTerrainChunkCoordinate("tx", tx)},${validateTerrainChunkCoordinate("tz", tz)}`;
+}
+function parseTileKey(key) {
+  const match = /^(-?\d+),(-?\d+)$/.exec(key);
+  if (match === null) throw new Error(`invalid tile key '${key}'`);
+  const parsed = {
+    tx: validateTerrainChunkCoordinate("tx", Number(match[1])),
+    tz: validateTerrainChunkCoordinate("tz", Number(match[2]))
+  };
+  if (tileKey(parsed.tx, parsed.tz) !== key) throw new Error(`non-canonical tile key '${key}'`);
+  return parsed;
 }
 var lastLegacyGrid;
 function legacyGrid(tileSize) {
@@ -127757,8 +127901,8 @@ function prepareGeneratedWaterFieldInput(input, options = {}) {
   const descriptor3 = exactDataRecord(descriptors2.descriptor.value, GENERATED_DESCRIPTOR_KEYS, "generated water artifact descriptor");
   if (descriptor3.artifactType.value !== HYDROLOGY_WATER_ARTIFACT_TYPE) fail5(`generated water artifact type must be '${HYDROLOGY_WATER_ARTIFACT_TYPE}'`);
   if (descriptor3.mediaType.value !== HYDROLOGY_WATER_ARTIFACT_MEDIA_TYPE) fail5(`generated water artifact media type must be '${HYDROLOGY_WATER_ARTIFACT_MEDIA_TYPE}'`);
-  const contentHash3 = descriptor3.contentHash.value;
-  if (typeof contentHash3 !== "string" || !DERIVED_CONTENT_HASH_RE.test(contentHash3)) fail5("generated water artifact contentHash must be a lowercase sha256 content hash");
+  const contentHash4 = descriptor3.contentHash.value;
+  if (typeof contentHash4 !== "string" || !DERIVED_CONTENT_HASH_RE.test(contentHash4)) fail5("generated water artifact contentHash must be a lowercase sha256 content hash");
   const byteLength2 = descriptor3.byteLength.value;
   if (!Number.isSafeInteger(byteLength2) || byteLength2 < 256 || byteLength2 > MAX_HYDROLOGY_WATER_ARTIFACT_BYTES) {
     fail5(`generated water artifact byteLength must be an integer in [256, ${MAX_HYDROLOGY_WATER_ARTIFACT_BYTES}]`);
@@ -127772,7 +127916,7 @@ function prepareGeneratedWaterFieldInput(input, options = {}) {
     }
     if (bytes.byteLength !== byteLength2) fail5(`generated water artifact byteLength mismatch: descriptor ${byteLength2}, actual ${bytes.byteLength}`);
     const actualHash = `sha256:${sha256(bytes)}`;
-    if (actualHash !== contentHash3) fail5(`generated water artifact content hash mismatch: expected ${contentHash3}, actual ${actualHash}`);
+    if (actualHash !== contentHash4) fail5(`generated water artifact content hash mismatch: expected ${contentHash4}, actual ${actualHash}`);
     decoded = decodeHydrologyWaterArtifact(
       bytes,
       expectedBindings,
@@ -127784,7 +127928,7 @@ function prepareGeneratedWaterFieldInput(input, options = {}) {
     fail5(`generated water artifact verification failed: ${error51 instanceof Error ? error51.message : String(error51)}`);
   }
   const prepared2 = Object.freeze({
-    artifactContentHash: contentHash3,
+    artifactContentHash: contentHash4,
     bindings: decoded.bindings,
     topology: decoded.topology
   });
@@ -128476,6 +128620,10 @@ function createWaterField(worldMapInput, options = {}) {
 
 // src/world/water-contact.ts
 var CONTENT_HASH = /^[0-9a-f]{64}$/;
+var DERIVED_SELF_BINDING_ID_PREFIX = "derived:self:";
+function isDerivedSelfBindingId(bindingId) {
+  return bindingId.startsWith(DERIVED_SELF_BINDING_ID_PREFIX);
+}
 function finite6(value, label4) {
   if (!Number.isFinite(value)) throw new TypeError(`${label4} must be finite`);
   return Object.is(value, -0) ? 0 : value;
@@ -128540,8 +128688,8 @@ var WaterContactRuntime = class {
     if (typeof spec?.bindingId !== "string" || spec.bindingId.length === 0 || spec.bindingId.length > 160) {
       throw new TypeError("water contact bindingId must be a non-empty string of at most 160 characters");
     }
-    const contentHash3 = worldMap?.provenance?.contentHash;
-    if (typeof contentHash3 !== "string" || !CONTENT_HASH.test(contentHash3)) {
+    const contentHash4 = worldMap?.provenance?.contentHash;
+    if (typeof contentHash4 !== "string" || !CONTENT_HASH.test(contentHash4)) {
       throw new TypeError("water contact requires a verified WorldMap content hash");
     }
     const generatedArtifactContentHash = verifiedGeneratedWaterFieldContentHash(generatedWater);
@@ -128555,22 +128703,25 @@ var WaterContactRuntime = class {
       finite6(offsetInput[2], "water contact offset[2]")
     ]);
     const bounds = parseBounds(spec.bounds);
-    const identity = Object.freeze({ worldMapContentHash: contentHash3, generatedArtifactContentHash });
-    const candidate = Object.freeze({ contentHash: contentHash3, generatedArtifactContentHash, identity, bindingId: spec.bindingId, offset, bounds });
+    const identity = Object.freeze({ worldMapContentHash: contentHash4, generatedArtifactContentHash });
+    const candidate = Object.freeze({ contentHash: contentHash4, generatedArtifactContentHash, identity, bindingId: spec.bindingId, offset, bounds });
     if (this.#active !== null && this.#active.bindingId !== candidate.bindingId) {
-      throw new Error(
-        `water contact binding conflict: '${this.#active.bindingId}'/${this.#active.contentHash} is active; cannot bind '${candidate.bindingId}'/${candidate.contentHash}`
-      );
+      if (isDerivedSelfBindingId(this.#active.bindingId)) this.#active = null;
+      else {
+        throw new Error(
+          `water contact binding conflict: '${this.#active.bindingId}'/${this.#active.contentHash} is active; cannot bind '${candidate.bindingId}'/${candidate.contentHash}`
+        );
+      }
     }
     if (this.#active !== null && this.#active.contentHash !== candidate.contentHash) {
       throw new Error(`water contact map conflict: '${this.#active.contentHash}' is active; cannot replace it with '${candidate.contentHash}'`);
     }
     let field = null;
-    if (this.#active !== null && this.#active.contentHash === contentHash3 && this.#active.generatedArtifactContentHash === generatedArtifactContentHash) field = this.#active.field;
-    else if (this.#cached !== null && this.#cached.contentHash === contentHash3 && this.#cached.generatedArtifactContentHash === generatedArtifactContentHash) field = this.#cached.field;
+    if (this.#active !== null && this.#active.contentHash === contentHash4 && this.#active.generatedArtifactContentHash === generatedArtifactContentHash) field = this.#active.field;
+    else if (this.#cached !== null && this.#cached.contentHash === contentHash4 && this.#cached.generatedArtifactContentHash === generatedArtifactContentHash) field = this.#cached.field;
     if (field === null) {
       const built = createWaterField(worldMap, generatedWater === void 0 ? {} : { generatedWater });
-      this.#cached = { contentHash: contentHash3, generatedArtifactContentHash, field: built };
+      this.#cached = { contentHash: contentHash4, generatedArtifactContentHash, field: built };
       field = built;
       this.#fieldBuildCount++;
     }
@@ -128668,6 +128819,1535 @@ function editableTerrainHeightSampler(tile) {
   };
 }
 
+// src/authoring/errors.ts
+var AuthoringError = class extends Error {
+  code;
+  details;
+  constructor(code3, message, details = {}, options = {}) {
+    super(message, options);
+    this.name = "AuthoringError";
+    this.code = code3;
+    this.details = details;
+  }
+};
+function errorMessage(error51) {
+  return error51 instanceof Error ? error51.message : String(error51);
+}
+
+// src/authoring/canonical.ts
+var SHA256_RE = /^(?:sha256:)?([0-9a-fA-F]{64})$/;
+function reject(path2, reason) {
+  throw new AuthoringError("invalid_transaction", `non-canonical value at ${path2}: ${reason}`, { path: path2, reason });
+}
+function canonicalStringify(value) {
+  const active = /* @__PURE__ */ new Set();
+  const visit = (input, path2) => {
+    if (input === null) return "null";
+    switch (typeof input) {
+      case "boolean":
+        return input ? "true" : "false";
+      case "string":
+        return JSON.stringify(input);
+      case "number":
+        if (!Number.isFinite(input)) reject(path2, "numbers must be finite");
+        return Object.is(input, -0) ? "0" : JSON.stringify(input);
+      case "undefined":
+      case "function":
+      case "symbol":
+      case "bigint":
+        reject(path2, `${typeof input} is outside the JSON value domain`);
+      case "object":
+        break;
+      default:
+        reject(path2, `unsupported value type ${typeof input}`);
+    }
+    const object5 = input;
+    if (active.has(object5)) reject(path2, "cyclic references are not supported");
+    active.add(object5);
+    try {
+      if (Array.isArray(object5)) {
+        const names2 = Object.getOwnPropertyNames(object5);
+        for (let index = 0; index < object5.length; index++) {
+          if (!Object.prototype.hasOwnProperty.call(object5, index)) {
+            reject(`${path2}[${index}]`, "sparse arrays are not supported");
+          }
+          const descriptor3 = Object.getOwnPropertyDescriptor(object5, String(index));
+          if (descriptor3 === void 0 || descriptor3.get !== void 0 || descriptor3.set !== void 0) {
+            reject(`${path2}[${index}]`, "array accessors are not supported");
+          }
+          if (!descriptor3.enumerable) reject(`${path2}[${index}]`, "non-enumerable array entries are not supported");
+        }
+        const expectedNames = /* @__PURE__ */ new Set(["length", ...Array.from({ length: object5.length }, (_3, index) => String(index))]);
+        if (names2.some((name) => !expectedNames.has(name)) || Object.getOwnPropertySymbols(object5).length > 0) {
+          reject(path2, "custom array properties are not supported");
+        }
+        return `[${object5.map((entry, index) => visit(entry, `${path2}[${index}]`)).join(",")}]`;
+      }
+      const prototype = Object.getPrototypeOf(object5);
+      if (prototype !== Object.prototype && prototype !== null) {
+        reject(path2, "only plain objects are supported");
+      }
+      if (Object.getOwnPropertySymbols(object5).length > 0) reject(path2, "symbol keys are not supported");
+      const names = Object.getOwnPropertyNames(object5);
+      for (const name of names) {
+        const descriptor3 = Object.getOwnPropertyDescriptor(object5, name);
+        if (descriptor3 === void 0 || descriptor3.get !== void 0 || descriptor3.set !== void 0) {
+          reject(`${path2}.${name}`, "object accessors are not supported");
+        }
+        if (!descriptor3.enumerable) reject(`${path2}.${name}`, "non-enumerable properties are not supported");
+      }
+      names.sort();
+      const record11 = object5;
+      return `{${names.map((name) => `${JSON.stringify(name)}:${visit(record11[name], `${path2}.${name}`)}`).join(",")}}`;
+    } finally {
+      active.delete(object5);
+    }
+  };
+  return visit(value, "$");
+}
+function utf8ByteLength2(input) {
+  let bytes = 0;
+  for (let index = 0; index < input.length; index++) {
+    const code3 = input.charCodeAt(index);
+    if (code3 < 128) bytes += 1;
+    else if (code3 < 2048) bytes += 2;
+    else if (code3 >= 55296 && code3 <= 56319 && index + 1 < input.length) {
+      const next = input.charCodeAt(index + 1);
+      if (next >= 56320 && next <= 57343) {
+        bytes += 4;
+        index++;
+      } else bytes += 3;
+    } else bytes += 3;
+  }
+  return bytes;
+}
+function normalizeSha256(value) {
+  const match = SHA256_RE.exec(value);
+  if (match === null) {
+    throw new AuthoringError("invalid_hash", "SHA-256 provider returned an invalid digest", { digest: value });
+  }
+  return `sha256:${match[1].toLowerCase()}`;
+}
+function canonicalHash(sha2563, value) {
+  return normalizeSha256(sha2563(canonicalStringify(value)));
+}
+
+// src/authoring/schema.ts
+var WORLD_PROJECT_HEAD_SCHEMA = "limina.world-project-head/v1";
+var AUTHORING_TRANSACTION_SCHEMA = "limina.authoring-transaction/v1";
+var AUTHORING_RECEIPT_SCHEMA = "limina.authoring-receipt/v1";
+var MAX_AUTHORING_OPERATIONS = 256;
+var MAX_AUTHORING_TRANSACTION_BYTES = 1048576;
+var IdSchema = external_exports.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+var AdapterIdSchema = external_exports.string().min(1).max(96).regex(/^[a-z][a-z0-9.-]*$/);
+var AdapterVersionSchema = external_exports.string().min(1).max(64).regex(/^[0-9][A-Za-z0-9._+-]*$/);
+var ActionSchema2 = external_exports.string().min(1).max(128).regex(/^[A-Za-z][A-Za-z0-9._:-]*$/);
+var ContentHashSchema = external_exports.string().regex(/^sha256:[0-9a-f]{64}$/);
+var JsonValueSchema = external_exports.lazy(() => external_exports.union([
+  external_exports.null(),
+  external_exports.boolean(),
+  external_exports.number().finite(),
+  external_exports.string(),
+  external_exports.array(JsonValueSchema),
+  external_exports.record(external_exports.string(), JsonValueSchema)
+]));
+var WorldProjectHeadSchema = external_exports.object({
+  schema: external_exports.literal(WORLD_PROJECT_HEAD_SCHEMA),
+  projectId: IdSchema,
+  revision: external_exports.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  headHash: ContentHashSchema
+}).strict();
+var AuthoringOperationSchema = external_exports.object({
+  adapter: AdapterIdSchema,
+  adapterVersion: AdapterVersionSchema,
+  action: ActionSchema2,
+  input: JsonValueSchema,
+  guard: external_exports.object({
+    beforeHash: ContentHashSchema,
+    afterHash: ContentHashSchema.optional()
+  }).strict().optional()
+}).strict();
+var CompensationSchema = external_exports.object({
+  transactionId: IdSchema
+}).strict();
+var AuthoringTransactionSchema = external_exports.object({
+  schema: external_exports.literal(AUTHORING_TRANSACTION_SCHEMA),
+  transactionId: IdSchema,
+  projectId: IdSchema,
+  baseRevision: external_exports.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  baseHeadHash: ContentHashSchema,
+  operations: external_exports.array(AuthoringOperationSchema).max(MAX_AUTHORING_OPERATIONS),
+  compensates: CompensationSchema.optional()
+}).strict().superRefine((transaction, context3) => {
+  if (transaction.compensates === void 0 && transaction.operations.length === 0) {
+    context3.addIssue({ code: "custom", path: ["operations"], message: "a normal transaction requires at least one operation" });
+  }
+  if (transaction.compensates !== void 0 && transaction.operations.length !== 0) {
+    context3.addIssue({ code: "custom", path: ["operations"], message: "a compensation transaction derives operations from its target" });
+  }
+  if (transaction.compensates?.transactionId === transaction.transactionId) {
+    context3.addIssue({ code: "custom", path: ["compensates", "transactionId"], message: "a transaction cannot compensate itself" });
+  }
+});
+var CommittedOperationReceiptSchema = external_exports.object({
+  index: external_exports.number().int().nonnegative().max(MAX_AUTHORING_OPERATIONS - 1),
+  adapter: AdapterIdSchema,
+  action: ActionSchema2,
+  stateKey: external_exports.string().min(1).max(256),
+  beforeStateHash: ContentHashSchema,
+  afterStateHash: ContentHashSchema
+}).strict();
+var CommittedAuthoringReceiptSchema = external_exports.object({
+  schema: external_exports.literal(AUTHORING_RECEIPT_SCHEMA),
+  transactionId: IdSchema,
+  projectId: IdSchema,
+  transactionHash: ContentHashSchema,
+  previousRevision: external_exports.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  committedRevision: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  previousHeadHash: ContentHashSchema,
+  headHash: ContentHashSchema,
+  operations: external_exports.array(CommittedOperationReceiptSchema).max(MAX_AUTHORING_OPERATIONS),
+  compensates: IdSchema.optional()
+}).strict();
+function parseAuthoringTransaction(input) {
+  let canonicalInput;
+  try {
+    canonicalInput = canonicalStringify(input);
+  } catch (error51) {
+    if (error51 instanceof AuthoringError) throw error51;
+    throw new AuthoringError("invalid_transaction", "authoring transaction cannot be canonicalized", {}, { cause: error51 });
+  }
+  const inputByteLength = utf8ByteLength2(canonicalInput);
+  if (inputByteLength > MAX_AUTHORING_TRANSACTION_BYTES) {
+    throw new AuthoringError(
+      "transaction_too_large",
+      `authoring transaction is ${inputByteLength} bytes; maximum is ${MAX_AUTHORING_TRANSACTION_BYTES}`,
+      { byteLength: inputByteLength, maximum: MAX_AUTHORING_TRANSACTION_BYTES }
+    );
+  }
+  let parsed;
+  try {
+    parsed = AuthoringTransactionSchema.safeParse(JSON.parse(canonicalInput));
+  } catch (error51) {
+    throw new AuthoringError("invalid_transaction", "authoring transaction validation failed", {}, { cause: error51 });
+  }
+  if (!parsed.success) {
+    throw new AuthoringError("invalid_transaction", "authoring transaction failed schema validation", {
+      issues: parsed.error.issues.map((issue2) => ({ path: issue2.path.join("."), message: issue2.message }))
+    });
+  }
+  const canonical = canonicalStringify(parsed.data);
+  if (canonical !== canonicalInput) {
+    throw new AuthoringError(
+      "invalid_transaction",
+      "authoring transaction contains fields that cannot be preserved by the wire schema"
+    );
+  }
+  const byteLength2 = utf8ByteLength2(canonical);
+  if (byteLength2 > MAX_AUTHORING_TRANSACTION_BYTES) {
+    throw new AuthoringError(
+      "transaction_too_large",
+      `authoring transaction is ${byteLength2} bytes; maximum is ${MAX_AUTHORING_TRANSACTION_BYTES}`,
+      { byteLength: byteLength2, maximum: MAX_AUTHORING_TRANSACTION_BYTES }
+    );
+  }
+  return { transaction: parsed.data, canonical, byteLength: byteLength2 };
+}
+
+// src/authoring/durability.ts
+var DURABLE_AUTHORING_RECORD_SCHEMA = "limina.authoring-commit-record/v1";
+var MAX_DURABLE_AUTHORING_RECORDS = 65536;
+var MAX_DURABLE_AUTHORING_RECORD_BYTES = 524288;
+var MAX_DURABLE_AUTHORING_LOG_BYTES = 67108864;
+var ContentHashSchema2 = external_exports.string().regex(/^sha256:[0-9a-f]{64}$/);
+var DurableAuthoringRecordSchema = external_exports.object({
+  schema: external_exports.literal(DURABLE_AUTHORING_RECORD_SCHEMA),
+  previousRecordHash: ContentHashSchema2.nullable(),
+  receipt: CommittedAuthoringReceiptSchema,
+  recordHash: ContentHashSchema2
+}).strict();
+var DurableAuthoringReplayEntrySchema = external_exports.object({
+  transaction: AuthoringTransactionSchema,
+  commit: DurableAuthoringRecordSchema
+}).strict();
+function immutable(value) {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) immutable(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+function recordPayload(record11) {
+  return {
+    schema: DURABLE_AUTHORING_RECORD_SCHEMA,
+    previousRecordHash: record11.previousRecordHash,
+    receipt: record11.receipt
+  };
+}
+function createDurableAuthoringRecord(sha2563, previousRecordHash, receipt) {
+  const payload = recordPayload({ schema: DURABLE_AUTHORING_RECORD_SCHEMA, previousRecordHash, receipt });
+  return immutable({ ...payload, recordHash: canonicalHash(sha2563, payload) });
+}
+function reject2(message, details = {}) {
+  throw new AuthoringError("durable_chain_corrupt", message, details);
+}
+function parseDurableAuthoringRecord(input, sha2563, index) {
+  const label4 = index === void 0 ? "durable authoring record" : `durable authoring record ${index}`;
+  let canonical;
+  try {
+    canonical = canonicalStringify(input);
+  } catch (error51) {
+    throw new AuthoringError("invalid_durable_record", `${label4} cannot be canonicalized`, { index }, { cause: error51 });
+  }
+  const byteLength2 = utf8ByteLength2(canonical);
+  if (byteLength2 > MAX_DURABLE_AUTHORING_RECORD_BYTES) {
+    throw new AuthoringError(
+      "durable_log_too_large",
+      `${label4} is ${byteLength2} bytes; maximum is ${MAX_DURABLE_AUTHORING_RECORD_BYTES}`,
+      { index, byteLength: byteLength2, maximum: MAX_DURABLE_AUTHORING_RECORD_BYTES }
+    );
+  }
+  let parsed;
+  try {
+    parsed = DurableAuthoringRecordSchema.safeParse(JSON.parse(canonical));
+  } catch (error51) {
+    throw new AuthoringError("invalid_durable_record", `${label4} validation failed`, { index }, { cause: error51 });
+  }
+  if (!parsed.success) {
+    throw new AuthoringError("invalid_durable_record", `${label4} failed schema validation`, {
+      index,
+      issues: parsed.error.issues.map((issue2) => ({ path: issue2.path.join("."), message: issue2.message }))
+    });
+  }
+  if (canonicalStringify(parsed.data) !== canonical) {
+    throw new AuthoringError("invalid_durable_record", `${label4} contains fields not preserved by its schema`, { index });
+  }
+  const expectedRecordHash = canonicalHash(sha2563, recordPayload(parsed.data));
+  if (parsed.data.recordHash !== expectedRecordHash) {
+    reject2(`${label4} hash does not match its content`, {
+      index,
+      expectedRecordHash,
+      actualRecordHash: parsed.data.recordHash
+    });
+  }
+  return { record: immutable(parsed.data), canonical, byteLength: byteLength2 };
+}
+function validateDurableAuthoringRecord(recordInput, transactionInput, previousHeadInput, previousRecordHash, sha2563, index) {
+  const { record: record11 } = parseDurableAuthoringRecord(recordInput, sha2563, index);
+  const previousHead = WorldProjectHeadSchema.parse(previousHeadInput);
+  const prepared2 = parseAuthoringTransaction(transactionInput);
+  const transaction = prepared2.transaction;
+  const transactionHash = canonicalHash(sha2563, transaction);
+  const label4 = index === void 0 ? "durable authoring record" : `durable authoring record ${index}`;
+  if (record11.previousRecordHash !== previousRecordHash) {
+    reject2(`${label4} is not contiguous with the preceding record`, {
+      index,
+      expectedPreviousRecordHash: previousRecordHash,
+      actualPreviousRecordHash: record11.previousRecordHash
+    });
+  }
+  const { receipt } = record11;
+  if (transaction.projectId !== previousHead.projectId || receipt.projectId !== previousHead.projectId) {
+    reject2(`${label4} targets a different WorldProject`, {
+      index,
+      expectedProjectId: previousHead.projectId,
+      transactionProjectId: transaction.projectId,
+      receiptProjectId: receipt.projectId
+    });
+  }
+  if (transaction.baseRevision !== previousHead.revision || transaction.baseHeadHash !== previousHead.headHash) {
+    reject2(`${label4} transaction base does not match the preceding head`, {
+      index,
+      expectedRevision: previousHead.revision,
+      actualRevision: transaction.baseRevision,
+      expectedHeadHash: previousHead.headHash,
+      actualHeadHash: transaction.baseHeadHash
+    });
+  }
+  if (receipt.transactionId !== transaction.transactionId || receipt.transactionHash !== transactionHash || receipt.previousRevision !== previousHead.revision || receipt.committedRevision !== previousHead.revision + 1 || receipt.previousHeadHash !== previousHead.headHash) {
+    reject2(`${label4} receipt does not bind its transaction and preceding head`, {
+      index,
+      transactionId: transaction.transactionId
+    });
+  }
+  const compensationTarget = transaction.compensates?.transactionId;
+  if (receipt.compensates !== compensationTarget) {
+    reject2(`${label4} compensation metadata is inconsistent`, {
+      index,
+      transactionCompensates: compensationTarget,
+      receiptCompensates: receipt.compensates
+    });
+  }
+  if (compensationTarget === void 0) {
+    if (receipt.operations.length !== transaction.operations.length) {
+      reject2(`${label4} receipt operation count does not match its transaction`, {
+        index,
+        transactionOperations: transaction.operations.length,
+        receiptOperations: receipt.operations.length
+      });
+    }
+    for (let operationIndex = 0; operationIndex < transaction.operations.length; operationIndex++) {
+      const operation = transaction.operations[operationIndex];
+      const committed = receipt.operations[operationIndex];
+      if (committed.index !== operationIndex || committed.adapter !== operation.adapter || committed.action !== operation.action) {
+        reject2(`${label4} receipt operation ${operationIndex} does not match its transaction`, {
+          index,
+          operationIndex
+        });
+      }
+    }
+  }
+  const expectedHeadHash = canonicalHash(sha2563, {
+    schema: previousHead.schema,
+    projectId: previousHead.projectId,
+    revision: receipt.committedRevision,
+    parentHash: previousHead.headHash,
+    transactionHash,
+    operations: receipt.operations
+  });
+  if (receipt.headHash !== expectedHeadHash) {
+    reject2(`${label4} receipt head hash is invalid`, { index, expectedHeadHash, actualHeadHash: receipt.headHash });
+  }
+  return record11;
+}
+function canonicalGenesis(head, sha2563) {
+  const expectedHeadHash = canonicalHash(sha2563, {
+    schema: head.schema,
+    projectId: head.projectId,
+    revision: 0,
+    parentHash: null,
+    transactionHash: null,
+    operations: []
+  });
+  if (head.revision !== 0 || head.headHash !== expectedHeadHash) {
+    reject2("authoring replay checkpoint must be anchored to the canonical project genesis", {
+      projectId: head.projectId,
+      revision: head.revision,
+      expectedHeadHash,
+      actualHeadHash: head.headHash
+    });
+  }
+}
+function validateAuthoringReplayCheckpoint(input, genesisInput, sha2563) {
+  const genesis = immutable(WorldProjectHeadSchema.parse(genesisInput));
+  canonicalGenesis(genesis, sha2563);
+  if (!Array.isArray(input)) throw new AuthoringError("invalid_durable_record", "authoring replay checkpoint must be an array");
+  if (input.length > MAX_DURABLE_AUTHORING_RECORDS) {
+    throw new AuthoringError("durable_log_too_large", "authoring replay checkpoint exceeds the record-count limit", {
+      recordCount: input.length,
+      maximum: MAX_DURABLE_AUTHORING_RECORDS
+    });
+  }
+  const entries = [];
+  const transactions = /* @__PURE__ */ new Map();
+  let head = genesis;
+  let previousRecordHash = null;
+  let totalBytes = 2;
+  for (let index = 0; index < input.length; index++) {
+    if (!Object.prototype.hasOwnProperty.call(input, index)) {
+      throw new AuthoringError("invalid_durable_record", "authoring replay checkpoint must be a dense array", { index });
+    }
+    let canonical;
+    try {
+      canonical = canonicalStringify(input[index]);
+    } catch (error51) {
+      throw new AuthoringError("invalid_durable_record", `authoring replay entry ${index} cannot be canonicalized`, { index }, { cause: error51 });
+    }
+    totalBytes += utf8ByteLength2(canonical) + (index === 0 ? 0 : 1);
+    if (totalBytes > MAX_DURABLE_AUTHORING_LOG_BYTES) {
+      throw new AuthoringError("durable_log_too_large", "authoring replay checkpoint exceeds the byte limit", {
+        index,
+        byteLength: totalBytes,
+        maximum: MAX_DURABLE_AUTHORING_LOG_BYTES
+      });
+    }
+    const parsed = DurableAuthoringReplayEntrySchema.safeParse(JSON.parse(canonical));
+    if (!parsed.success || canonicalStringify(parsed.data) !== canonical) {
+      throw new AuthoringError("invalid_durable_record", `authoring replay entry ${index} failed schema validation`, {
+        index,
+        issues: parsed.success ? [] : parsed.error.issues.map((issue2) => ({ path: issue2.path.join("."), message: issue2.message }))
+      });
+    }
+    const transaction = immutable(parseAuthoringTransaction(parsed.data.transaction).transaction);
+    const commit = validateDurableAuthoringRecord(
+      parsed.data.commit,
+      transaction,
+      head,
+      previousRecordHash,
+      sha2563,
+      index
+    );
+    const transactionHash = canonicalHash(sha2563, transaction);
+    const existing = transactions.get(transaction.transactionId);
+    if (existing !== void 0) {
+      reject2(
+        existing.hash === transactionHash ? `authoring replay entry ${index} duplicates transaction '${transaction.transactionId}'` : `authoring replay entry ${index} collides with transaction '${transaction.transactionId}'`,
+        { index, transactionId: transaction.transactionId, priorHash: existing.hash, transactionHash }
+      );
+    }
+    const compensationTarget = transaction.compensates?.transactionId;
+    if (compensationTarget !== void 0) {
+      const target = transactions.get(compensationTarget);
+      if (target === void 0) {
+        reject2(`authoring replay entry ${index} compensates a transaction that does not precede it`, {
+          index,
+          transactionId: transaction.transactionId,
+          compensationTarget
+        });
+      }
+      if (target.transaction.compensates !== void 0) {
+        reject2(`authoring replay entry ${index} attempts to compensate a compensation transaction`, {
+          index,
+          transactionId: transaction.transactionId,
+          compensationTarget
+        });
+      }
+      if (target.compensatedBy !== void 0) {
+        reject2(`authoring replay entry ${index} compensates an already compensated transaction`, {
+          index,
+          transactionId: transaction.transactionId,
+          compensationTarget,
+          compensatedBy: target.compensatedBy
+        });
+      }
+      const expectedOperations = [...target.commit.receipt.operations].reverse();
+      if (commit.receipt.operations.length !== expectedOperations.length) {
+        reject2(`authoring replay entry ${index} compensation receipt has the wrong operation count`, {
+          index,
+          compensationTarget,
+          expectedOperations: expectedOperations.length,
+          actualOperations: commit.receipt.operations.length
+        });
+      }
+      for (let operationIndex = 0; operationIndex < expectedOperations.length; operationIndex++) {
+        const original = expectedOperations[operationIndex];
+        const inverse3 = commit.receipt.operations[operationIndex];
+        if (inverse3.index !== original.index || inverse3.adapter !== original.adapter || inverse3.action !== original.action || inverse3.stateKey !== original.stateKey || inverse3.beforeStateHash !== original.afterStateHash || inverse3.afterStateHash !== original.beforeStateHash) {
+          reject2(`authoring replay entry ${index} compensation receipt operation ${operationIndex} is inconsistent`, {
+            index,
+            compensationTarget,
+            operationIndex
+          });
+        }
+      }
+      target.compensatedBy = transaction.transactionId;
+    }
+    transactions.set(transaction.transactionId, { hash: transactionHash, transaction, commit });
+    head = immutable({
+      schema: head.schema,
+      projectId: head.projectId,
+      revision: commit.receipt.committedRevision,
+      headHash: commit.receipt.headHash
+    });
+    previousRecordHash = commit.recordHash;
+    entries.push(immutable({ transaction, commit }));
+  }
+  return immutable({ entries, head, tailRecordHash: previousRecordHash, byteLength: totalBytes });
+}
+
+// src/terrain/brush-kernel.mjs
+var brush_kernel_exports = {};
+__export(brush_kernel_exports, {
+  brushWeightAt: () => brushWeightAt,
+  falloffWeight: () => falloffWeight,
+  hashNoise: () => hashNoise,
+  materializeLatticeBrushDeltas: () => materializeLatticeBrushDeltas
+});
+function falloffWeight(kind, t3) {
+  if (kind === "constant") return 1;
+  if (kind === "linear") return t3;
+  return t3 * t3 * (3 - 2 * t3);
+}
+function hashNoise(col, row) {
+  let h2 = Math.imul(col, 374761393) + Math.imul(row, 668265263) | 0;
+  h2 = Math.imul(h2 ^ h2 >>> 13, 1274126177) | 0;
+  return ((h2 ^ h2 >>> 16) >>> 0) / 4294967296;
+}
+function brushWeightAt(kind, wx, wz, cx, cz, r2) {
+  const dx = wx - cx, dz = wz - cz;
+  const d2 = dx * dx + dz * dz;
+  if (d2 > r2 * r2) return 0;
+  const t3 = 1 - Math.sqrt(d2) / r2;
+  return falloffWeight(kind, t3);
+}
+function materializeLatticeBrushDeltas(lattice, input, sampleHeightM) {
+  const cols = lattice.maxGx - lattice.minGx;
+  const rows = lattice.maxGz - lattice.minGz;
+  const x0 = lattice.minX, z0 = lattice.minZ;
+  const step3 = lattice.stepM;
+  const [cx, cz] = input.center;
+  const r2 = input.radius;
+  if ((input.mode === "smooth" || input.mode === "flatten") && sampleHeightM === void 0) {
+    throw new Error(`terrain brush: ${input.mode} requires a composed-height sampler`);
+  }
+  const col0 = Math.min(cols, Math.max(0, Math.floor((cx - r2 - x0) / step3)));
+  const col1 = Math.max(0, Math.min(cols, Math.ceil((cx + r2 - x0) / step3)));
+  const row0 = Math.min(rows, Math.max(0, Math.floor((cz - r2 - z0) / step3)));
+  const row1 = Math.max(0, Math.min(rows, Math.ceil((cz + r2 - z0) / step3)));
+  const deltas = [];
+  for (let row = row0; row <= row1; row++) {
+    const wz = z0 + row * step3;
+    for (let col = col0; col <= col1; col++) {
+      const wx = x0 + col * step3;
+      const f2 = brushWeightAt(input.falloff, wx, wz, cx, cz, r2);
+      if (f2 === 0) continue;
+      const gx = lattice.minGx + col, gz = lattice.minGz + row;
+      let deltaM = 0;
+      switch (input.mode) {
+        case "raise":
+          deltaM = input.delta * f2;
+          break;
+        case "lower":
+          deltaM = -(input.delta * f2);
+          break;
+        case "flatten":
+          deltaM = (input.delta - sampleHeightM(gx, gz)) * f2;
+          break;
+        case "noise":
+          deltaM = (hashNoise(col, row) * 2 - 1) * input.delta * f2;
+          break;
+        case "smooth": {
+          let sum = 0, cnt = 0;
+          for (let rr = -1; rr <= 1; rr++) {
+            const nr = row + rr;
+            if (nr < 0 || nr > rows) continue;
+            for (let cc = -1; cc <= 1; cc++) {
+              const nc = col + cc;
+              if (nc < 0 || nc > cols) continue;
+              sum += sampleHeightM(lattice.minGx + nc, lattice.minGz + nr);
+              cnt++;
+            }
+          }
+          deltaM = (sum / cnt - sampleHeightM(gx, gz)) * f2;
+          break;
+        }
+        default:
+          throw new Error(`terrain brush: unknown mode '${input.mode}'`);
+      }
+      if (deltaM === 0) continue;
+      deltas.push({ gx, gz, deltaM });
+    }
+  }
+  return deltas;
+}
+
+// src/terrain/edit-layer.mjs
+var TERRAIN_EDIT_BASE_TOPOLOGY_SCHEMA = "limina.terrain-edit-base-topology/v1";
+var TERRAIN_EDIT_LAYER_SCHEMA = "limina.terrain-edit-layer/v1";
+var TERRAIN_EDIT_OPERATION_KIND = "add";
+var MAX_TERRAIN_EDIT_OPERATIONS = 1024;
+var MAX_TERRAIN_EDIT_DELTAS_PER_OPERATION = 4096;
+var MAX_TERRAIN_EDIT_DELTAS = 65536;
+var MAX_TERRAIN_EDIT_LAYER_BYTES = 4 * 1024 * 1024;
+var MAX_TERRAIN_EDIT_COMPOSE_DELTAS = 262144;
+var MAX_TERRAIN_EDIT_INDEX_ENTRIES = MAX_TERRAIN_EDIT_COMPOSE_DELTAS * 4;
+var MAX_TERRAIN_EDIT_DOMAIN_CHUNKS = 1048576;
+var MAX_TERRAIN_EDIT_DELTA_M = 1e4;
+var MAX_TERRAIN_REBASE_CONFLICT_DETAILS = 512;
+var TERRAIN_EDIT_REBASE_CONFLICT = Object.freeze({
+  GRID_MISMATCH: "grid_mismatch",
+  GRID_GEOMETRY_CHANGED: "grid_geometry_changed",
+  COORDINATE_NOT_REPRESENTABLE: "coordinate_not_representable",
+  OUTSIDE_TARGET_DOMAIN: "outside_target_domain"
+});
+var CONTENT_HASH2 = /^sha256:[0-9a-f]{64}$/;
+var IDENTIFIER = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+var TerrainEditCancelledError = class extends Error {
+  constructor() {
+    super("terrain edit operation cancelled");
+    this.name = "TerrainEditCancelledError";
+    this.code = "terrain_edit_cancelled";
+  }
+};
+var TerrainEditBaseMismatchError = class extends Error {
+  constructor(expected, actual) {
+    super(`terrain edit base topology mismatch: expected '${expected}', received '${actual}'`);
+    this.name = "TerrainEditBaseMismatchError";
+    this.code = "terrain_edit_base_mismatch";
+    this.expected = expected;
+    this.actual = actual;
+  }
+};
+function ownDataObject(value, keys2, label4) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label4} must be an object`);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new Error(`${label4} must be a plain object`);
+  if (Object.getOwnPropertySymbols(value).length !== 0) throw new Error(`${label4} must not have symbol keys`);
+  const names = Object.getOwnPropertyNames(value).sort();
+  const expected = [...keys2].sort();
+  if (names.length !== expected.length || names.some((name, index) => name !== expected[index])) {
+    throw new Error(`${label4} must contain exactly: ${expected.join(", ")}`);
+  }
+  for (const name of names) {
+    const descriptor3 = Object.getOwnPropertyDescriptor(value, name);
+    if (descriptor3?.get !== void 0 || descriptor3?.set !== void 0 || descriptor3?.enumerable !== true) {
+      throw new Error(`${label4}.${name} must be an enumerable data property`);
+    }
+  }
+  return value;
+}
+function denseArray2(value, maximum, label4) {
+  if (!Array.isArray(value)) throw new Error(`${label4} must be an array`);
+  if (value.length > maximum) throw new Error(`${label4} exceeds ${maximum} entries`);
+  const names = Object.getOwnPropertyNames(value);
+  const allowed = /* @__PURE__ */ new Set(["length", ...Array.from({ length: value.length }, (_3, index) => String(index))]);
+  if (names.some((name) => !allowed.has(name)) || Object.getOwnPropertySymbols(value).length !== 0) {
+    throw new Error(`${label4} must be a dense array without custom properties`);
+  }
+  for (let index = 0; index < value.length; index++) {
+    const descriptor3 = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor3?.get !== void 0 || descriptor3?.set !== void 0 || descriptor3?.enumerable !== true) {
+      throw new Error(`${label4}[${index}] must be an enumerable data property`);
+    }
+  }
+  return value;
+}
+function finite7(value, label4) {
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${label4} must be finite`);
+  return Object.is(value, -0) ? 0 : value;
+}
+function identifier(value, label4) {
+  if (typeof value !== "string" || !IDENTIFIER.test(value)) {
+    throw new Error(`${label4} must be 1-64 lowercase characters using a-z, 0-9, '.', '_' or '-'`);
+  }
+  return value;
+}
+function contentHash2(value) {
+  return `sha256:${sha256(JSON.stringify(value))}`;
+}
+function validateContentHash(value, label4) {
+  if (typeof value !== "string" || !CONTENT_HASH2.test(value)) throw new Error(`${label4} must be a lowercase sha256 content hash`);
+  return value;
+}
+function canonicalGrid(input) {
+  ownDataObject(input, ["schema", "gridId", "origin", "chunkSizeM", "defaultSamples"], "terrain edit grid");
+  if (input.schema !== TERRAIN_GRID_SCHEMA) throw new Error(`terrain edit grid schema must be '${TERRAIN_GRID_SCHEMA}'`);
+  denseArray2(input.origin, 2, "terrain edit grid origin");
+  if (input.origin.length !== 2) throw new Error("terrain edit grid origin must contain exactly two values");
+  return createTerrainGridSpec({
+    gridId: input.gridId,
+    origin: [finite7(input.origin[0], "terrain edit grid origin x"), finite7(input.origin[1], "terrain edit grid origin z")],
+    chunkSizeM: finite7(input.chunkSizeM, "terrain edit grid chunkSizeM"),
+    defaultSamples: input.defaultSamples
+  });
+}
+function canonicalDomain(input) {
+  ownDataObject(input, ["minTx", "minTz", "maxTx", "maxTz"], "terrain edit domain");
+  const domain2 = {
+    minTx: validateTerrainChunkCoordinate("terrain edit domain minTx", input.minTx),
+    minTz: validateTerrainChunkCoordinate("terrain edit domain minTz", input.minTz),
+    maxTx: validateTerrainChunkCoordinate("terrain edit domain maxTx", input.maxTx),
+    maxTz: validateTerrainChunkCoordinate("terrain edit domain maxTz", input.maxTz)
+  };
+  if (domain2.maxTx < domain2.minTx || domain2.maxTz < domain2.minTz) throw new Error("terrain edit domain must not be inverted");
+  const width = domain2.maxTx - domain2.minTx + 1;
+  const height = domain2.maxTz - domain2.minTz + 1;
+  if (!Number.isSafeInteger(width * height) || width * height > MAX_TERRAIN_EDIT_DOMAIN_CHUNKS) {
+    throw new Error(`terrain edit domain exceeds ${MAX_TERRAIN_EDIT_DOMAIN_CHUNKS} chunks`);
+  }
+  return Object.freeze(domain2);
+}
+function baseCore(grid, domain2) {
+  return {
+    schema: TERRAIN_EDIT_BASE_TOPOLOGY_SCHEMA,
+    grid: {
+      schema: TERRAIN_GRID_SCHEMA,
+      gridId: grid.gridId,
+      origin: [grid.origin[0], grid.origin[1]],
+      chunkSizeM: grid.chunkSizeM,
+      defaultSamples: grid.defaultSamples
+    },
+    domain: { minTx: domain2.minTx, minTz: domain2.minTz, maxTx: domain2.maxTx, maxTz: domain2.maxTz }
+  };
+}
+function freezeBase(core, topologyHash) {
+  const grid = Object.freeze({ ...core.grid, origin: Object.freeze([...core.grid.origin]) });
+  return Object.freeze({
+    schema: TERRAIN_EDIT_BASE_TOPOLOGY_SCHEMA,
+    grid,
+    domain: Object.freeze({ ...core.domain }),
+    topologyHash
+  });
+}
+function createTerrainEditBaseTopology(input) {
+  ownDataObject(input, ["grid", "domain"], "terrain edit base topology input");
+  const grid = canonicalGrid(input.grid);
+  const domain2 = canonicalDomain(input.domain);
+  const core = baseCore(grid, domain2);
+  return freezeBase(core, contentHash2(core));
+}
+function parseTerrainEditBaseTopology(input) {
+  ownDataObject(input, ["schema", "grid", "domain", "topologyHash"], "terrain edit base topology");
+  if (input.schema !== TERRAIN_EDIT_BASE_TOPOLOGY_SCHEMA) {
+    throw new Error(`terrain edit base topology schema must be '${TERRAIN_EDIT_BASE_TOPOLOGY_SCHEMA}'`);
+  }
+  const parsed = createTerrainEditBaseTopology({ grid: input.grid, domain: input.domain });
+  const supplied = validateContentHash(input.topologyHash, "terrain edit base topology hash");
+  if (supplied !== parsed.topologyHash) throw new Error("terrain edit base topology hash does not match its canonical topology");
+  return parsed;
+}
+function sampleBounds(base) {
+  const intervals = base.grid.defaultSamples - 1;
+  return {
+    minGx: base.domain.minTx * intervals,
+    minGz: base.domain.minTz * intervals,
+    maxGx: (base.domain.maxTx + 1) * intervals,
+    maxGz: (base.domain.maxTz + 1) * intervals
+  };
+}
+function canonicalDelta(input, base, label4) {
+  ownDataObject(input, ["gx", "gz", "deltaM"], label4);
+  if (!Number.isSafeInteger(input.gx) || !Number.isSafeInteger(input.gz)) throw new Error(`${label4} coordinates must be safe integers`);
+  const bounds = sampleBounds(base);
+  if (input.gx < bounds.minGx || input.gx > bounds.maxGx || input.gz < bounds.minGz || input.gz > bounds.maxGz) {
+    throw new Error(`${label4} is outside the base topology domain`);
+  }
+  const deltaM = finite7(input.deltaM, `${label4} deltaM`);
+  if (deltaM === 0 || Math.abs(deltaM) > MAX_TERRAIN_EDIT_DELTA_M) {
+    throw new Error(`${label4} deltaM must be non-zero and within +/-${MAX_TERRAIN_EDIT_DELTA_M}m`);
+  }
+  return { gx: input.gx, gz: input.gz, deltaM };
+}
+function compareDeltas(a2, b3) {
+  return a2.gz - b3.gz || a2.gx - b3.gx;
+}
+function layerCore(layerId, baseTopology, operations) {
+  return {
+    schema: TERRAIN_EDIT_LAYER_SCHEMA,
+    layerId,
+    gridId: baseTopology.grid.gridId,
+    baseTopology,
+    operations
+  };
+}
+function wireBase(base) {
+  return {
+    schema: base.schema,
+    grid: {
+      schema: base.grid.schema,
+      gridId: base.grid.gridId,
+      origin: [base.grid.origin[0], base.grid.origin[1]],
+      chunkSizeM: base.grid.chunkSizeM,
+      defaultSamples: base.grid.defaultSamples
+    },
+    domain: { ...base.domain },
+    topologyHash: base.topologyHash
+  };
+}
+function freezeLayer(core, hash10) {
+  const operations = core.operations.map((operation) => Object.freeze({
+    operationId: operation.operationId,
+    kind: TERRAIN_EDIT_OPERATION_KIND,
+    deltas: Object.freeze(operation.deltas.map((delta) => Object.freeze({ ...delta })))
+  }));
+  return Object.freeze({
+    schema: TERRAIN_EDIT_LAYER_SCHEMA,
+    layerId: core.layerId,
+    gridId: core.gridId,
+    baseTopology: core.baseTopology,
+    operations: Object.freeze(operations),
+    contentHash: hash10
+  });
+}
+function canonicalOperations(input, base, requireCanonicalOrder) {
+  denseArray2(input, MAX_TERRAIN_EDIT_OPERATIONS, "terrain edit operations");
+  const operationIds = /* @__PURE__ */ new Set();
+  let deltaCount = 0;
+  return input.map((operation, operationIndex) => {
+    const label4 = `terrain edit operation ${operationIndex}`;
+    ownDataObject(operation, ["operationId", "kind", "deltas"], label4);
+    const operationId = identifier(operation.operationId, `${label4} id`);
+    if (operationIds.has(operationId)) throw new Error(`duplicate terrain edit operation id '${operationId}'`);
+    operationIds.add(operationId);
+    if (operation.kind !== TERRAIN_EDIT_OPERATION_KIND) throw new Error(`${label4} kind must be '${TERRAIN_EDIT_OPERATION_KIND}'`);
+    denseArray2(operation.deltas, MAX_TERRAIN_EDIT_DELTAS_PER_OPERATION, `${label4} deltas`);
+    if (operation.deltas.length === 0) throw new Error(`${label4} must contain at least one delta`);
+    deltaCount += operation.deltas.length;
+    if (deltaCount > MAX_TERRAIN_EDIT_DELTAS) throw new Error(`terrain edit layer exceeds ${MAX_TERRAIN_EDIT_DELTAS} deltas`);
+    const deltas = operation.deltas.map((delta, deltaIndex) => canonicalDelta(delta, base, `${label4} delta ${deltaIndex}`));
+    if (requireCanonicalOrder) {
+      for (let index = 1; index < deltas.length; index++) {
+        if (compareDeltas(deltas[index - 1], deltas[index]) >= 0) {
+          throw new Error(`${label4} deltas must be strictly ordered by gz then gx without duplicates`);
+        }
+      }
+    } else {
+      deltas.sort(compareDeltas);
+      for (let index = 1; index < deltas.length; index++) {
+        if (compareDeltas(deltas[index - 1], deltas[index]) === 0) throw new Error(`${label4} contains duplicate sample coordinates`);
+      }
+    }
+    return { operationId, kind: TERRAIN_EDIT_OPERATION_KIND, deltas };
+  });
+}
+function canonicalLayerBytes(core, hash10) {
+  return JSON.stringify({
+    schema: core.schema,
+    layerId: core.layerId,
+    gridId: core.gridId,
+    baseTopology: wireBase(core.baseTopology),
+    operations: core.operations,
+    ...hash10 === void 0 ? {} : { contentHash: hash10 }
+  });
+}
+function createTerrainEditLayer(input) {
+  ownDataObject(input, ["layerId", "baseTopology", "operations"], "terrain edit layer input");
+  const layerId = identifier(input.layerId, "terrain edit layer id");
+  const baseTopology = parseTerrainEditBaseTopology(input.baseTopology);
+  const operations = canonicalOperations(input.operations, baseTopology, false);
+  const core = layerCore(layerId, baseTopology, operations);
+  const hash10 = `sha256:${sha256(canonicalLayerBytes(core))}`;
+  const bytes = canonicalLayerBytes(core, hash10);
+  if (bytes.length > MAX_TERRAIN_EDIT_LAYER_BYTES) throw new Error(`terrain edit layer exceeds ${MAX_TERRAIN_EDIT_LAYER_BYTES} bytes`);
+  return freezeLayer(core, hash10);
+}
+function parseTerrainEditLayer(input) {
+  ownDataObject(input, ["schema", "layerId", "gridId", "baseTopology", "operations", "contentHash"], "terrain edit layer");
+  if (input.schema !== TERRAIN_EDIT_LAYER_SCHEMA) throw new Error(`terrain edit layer schema must be '${TERRAIN_EDIT_LAYER_SCHEMA}'`);
+  const layerId = identifier(input.layerId, "terrain edit layer id");
+  const baseTopology = parseTerrainEditBaseTopology(input.baseTopology);
+  const gridId = validateTerrainGridId(input.gridId);
+  if (gridId !== baseTopology.grid.gridId) throw new Error("terrain edit layer gridId does not match its base topology");
+  const operations = canonicalOperations(input.operations, baseTopology, true);
+  const core = layerCore(layerId, baseTopology, operations);
+  const expectedHash2 = `sha256:${sha256(canonicalLayerBytes(core))}`;
+  const suppliedHash = validateContentHash(input.contentHash, "terrain edit layer content hash");
+  if (suppliedHash !== expectedHash2) throw new Error("terrain edit layer content hash does not match its canonical content");
+  const bytes = canonicalLayerBytes(core, suppliedHash);
+  if (bytes.length > MAX_TERRAIN_EDIT_LAYER_BYTES) throw new Error(`terrain edit layer exceeds ${MAX_TERRAIN_EDIT_LAYER_BYTES} bytes`);
+  return freezeLayer(core, suppliedHash);
+}
+function checkpoint3(shouldCancel, work) {
+  if ((work & 1023) === 0 && shouldCancel?.()) throw new TerrainEditCancelledError();
+}
+function terrainEditLatticeGeometry(baseInput) {
+  const base = parseTerrainEditBaseTopology(baseInput);
+  const intervals = base.grid.defaultSamples - 1;
+  const stepM = base.grid.chunkSizeM / intervals;
+  const bounds = sampleBounds(base);
+  return Object.freeze({
+    base,
+    intervals,
+    stepM,
+    minGx: bounds.minGx,
+    minGz: bounds.minGz,
+    maxGx: bounds.maxGx,
+    maxGz: bounds.maxGz,
+    minX: base.grid.origin[0] + bounds.minGx * stepM,
+    minZ: base.grid.origin[1] + bounds.minGz * stepM
+  });
+}
+var STROKE_OPERATION_ID = /^op-\d{6}$/;
+var FOLD_OPERATION_ID = /^fold-\d{6}$/;
+function splitTerrainEditStrokeDeltas(deltas, firstOperationIndex) {
+  denseArray2(deltas, MAX_TERRAIN_EDIT_DELTAS, "terrain edit stroke deltas");
+  if (deltas.length === 0) throw new Error("terrain edit stroke must contain at least one delta");
+  if (!Number.isSafeInteger(firstOperationIndex) || firstOperationIndex < 0) {
+    throw new Error("terrain edit stroke first operation index must be a non-negative safe integer");
+  }
+  const operations = [];
+  for (let offset = 0; offset < deltas.length; offset += MAX_TERRAIN_EDIT_DELTAS_PER_OPERATION) {
+    operations.push({
+      operationId: `op-${String(firstOperationIndex + operations.length).padStart(6, "0")}`,
+      kind: TERRAIN_EDIT_OPERATION_KIND,
+      deltas: deltas.slice(offset, offset + MAX_TERRAIN_EDIT_DELTAS_PER_OPERATION)
+    });
+  }
+  return operations;
+}
+function compactTerrainEditOperations(operationsInput) {
+  denseArray2(operationsInput, MAX_TERRAIN_EDIT_OPERATIONS + MAX_TERRAIN_EDIT_DELTAS_PER_OPERATION, "terrain edit fold operations");
+  const sums = /* @__PURE__ */ new Map();
+  let deltaCount = 0;
+  const maxInput = MAX_TERRAIN_EDIT_DELTAS * 2;
+  for (const operation of operationsInput) {
+    ownDataObject(operation, ["operationId", "kind", "deltas"], "terrain edit fold operation");
+    denseArray2(operation.deltas, maxInput, "terrain edit fold operation deltas");
+    for (const delta of operation.deltas) {
+      ownDataObject(delta, ["gx", "gz", "deltaM"], "terrain edit fold delta");
+      if (!Number.isSafeInteger(delta.gx) || !Number.isSafeInteger(delta.gz)) throw new Error("terrain edit fold delta coordinates must be safe integers");
+      const deltaM = finite7(delta.deltaM, "terrain edit fold deltaM");
+      deltaCount++;
+      if (deltaCount > maxInput) throw new Error(`terrain edit fold exceeds ${maxInput} input deltas`);
+      const key = `${delta.gz}:${delta.gx}`;
+      sums.set(key, (sums.get(key) ?? 0) + deltaM);
+    }
+  }
+  const merged = [];
+  for (const [key, deltaM] of sums) {
+    if (deltaM === 0) continue;
+    if (!Number.isFinite(deltaM) || Math.abs(deltaM) > MAX_TERRAIN_EDIT_DELTA_M) {
+      throw new Error(`terrain edit fold merged deltaM must be non-zero and within +/-${MAX_TERRAIN_EDIT_DELTA_M}m`);
+    }
+    const separator = key.indexOf(":");
+    merged.push({ gz: Number(key.slice(0, separator)), gx: Number(key.slice(separator + 1)), deltaM });
+  }
+  merged.sort(compareDeltas);
+  if (merged.length === 0) throw new Error("terrain edit fold cancelled every delta; refusing an empty layer");
+  const operations = [];
+  for (let offset = 0; offset < merged.length; offset += MAX_TERRAIN_EDIT_DELTAS_PER_OPERATION) {
+    operations.push({
+      operationId: `fold-${String(operations.length).padStart(6, "0")}`,
+      kind: TERRAIN_EDIT_OPERATION_KIND,
+      deltas: merged.slice(offset, offset + MAX_TERRAIN_EDIT_DELTAS_PER_OPERATION)
+    });
+  }
+  return operations;
+}
+function appendTerrainEditStroke(layerInput, stroke) {
+  ownDataObject(stroke, ["layerId", "baseTopology", "deltas"], "terrain edit stroke");
+  const layerId = identifier(stroke.layerId, "terrain edit stroke layer id");
+  const base = parseTerrainEditBaseTopology(stroke.baseTopology);
+  let existing = [];
+  if (layerInput !== void 0) {
+    const layer2 = parseTerrainEditLayer(layerInput);
+    if (layer2.baseTopology.topologyHash !== base.topologyHash) {
+      throw new TerrainEditBaseMismatchError(base.topologyHash, layer2.baseTopology.topologyHash);
+    }
+    existing = layer2.operations.map((operation) => ({
+      operationId: operation.operationId,
+      kind: TERRAIN_EDIT_OPERATION_KIND,
+      deltas: operation.deltas.map((delta) => ({ ...delta }))
+    }));
+  }
+  let operations = [...existing, ...splitTerrainEditStrokeDeltas(stroke.deltas, existing.length)];
+  let deltaCount = 0;
+  for (const operation of operations) deltaCount += operation.deltas.length;
+  let folded = false;
+  if (operations.length > MAX_TERRAIN_EDIT_OPERATIONS || deltaCount > MAX_TERRAIN_EDIT_DELTAS) {
+    operations = compactTerrainEditOperations(operations);
+    folded = true;
+  }
+  const layer = createTerrainEditLayer({ layerId, baseTopology: base, operations });
+  return Object.freeze({
+    layer,
+    folded,
+    operationIds: Object.freeze(layer.operations.map((operation) => operation.operationId)),
+    deltaCount: layer.operations.reduce((total, operation) => total + operation.deltas.length, 0)
+  });
+}
+var TERRAIN_EDIT_OPERATION_ID_PATTERNS = Object.freeze({ stroke: STROKE_OPERATION_ID, fold: FOLD_OPERATION_ID });
+function sameGridGeometry(source, target) {
+  return source.grid.origin[0] === target.grid.origin[0] && source.grid.origin[1] === target.grid.origin[1] && source.grid.chunkSizeM === target.grid.chunkSizeM;
+}
+function rebaseReport(source, target, operationCount, deltaCount, mappedDeltaCount, conflictCount) {
+  return Object.freeze({
+    exact: conflictCount === 0,
+    fromTopologyHash: source.topologyHash,
+    toTopologyHash: target.topologyHash,
+    operationCount,
+    deltaCount,
+    mappedDeltaCount,
+    conflictCount,
+    conflictDetailsTruncated: conflictCount > MAX_TERRAIN_REBASE_CONFLICT_DETAILS
+  });
+}
+function rebaseTerrainEditLayer(input, targetBaseInput, options = {}) {
+  if (options.shouldCancel !== void 0 && typeof options.shouldCancel !== "function") throw new Error("terrain edit shouldCancel must be a function");
+  if (options.shouldCancel?.()) throw new TerrainEditCancelledError();
+  const layer = parseTerrainEditLayer(input);
+  const source = layer.baseTopology;
+  const target = parseTerrainEditBaseTopology(targetBaseInput);
+  const deltaCount = layer.operations.reduce((total, operation) => total + operation.deltas.length, 0);
+  const conflicts = [];
+  let conflictCount = 0;
+  const addConflict = (conflict) => {
+    conflictCount++;
+    if (conflicts.length < MAX_TERRAIN_REBASE_CONFLICT_DETAILS) conflicts.push(Object.freeze(conflict));
+  };
+  if (source.grid.gridId !== target.grid.gridId) {
+    addConflict({ code: TERRAIN_EDIT_REBASE_CONFLICT.GRID_MISMATCH, message: `grid '${source.grid.gridId}' cannot rebase onto '${target.grid.gridId}'` });
+  } else if (!sameGridGeometry(source, target)) {
+    addConflict({ code: TERRAIN_EDIT_REBASE_CONFLICT.GRID_GEOMETRY_CHANGED, message: "grid origin or chunk size changed; exact coordinate preservation is unavailable" });
+  }
+  if (conflictCount !== 0) {
+    return Object.freeze({
+      ok: false,
+      conflicts: Object.freeze(conflicts),
+      report: rebaseReport(source, target, layer.operations.length, deltaCount, 0, conflictCount)
+    });
+  }
+  const sourceIntervals = source.grid.defaultSamples - 1;
+  const targetIntervals = target.grid.defaultSamples - 1;
+  const targetBounds = sampleBounds(target);
+  let work = 0;
+  let mappedDeltaCount = 0;
+  const mappedOperations = layer.operations.map((operation) => {
+    const mapped = [];
+    for (const delta of operation.deltas) {
+      checkpoint3(options.shouldCancel, work++);
+      const gxNumerator = delta.gx * targetIntervals;
+      const gzNumerator = delta.gz * targetIntervals;
+      if (!Number.isSafeInteger(gxNumerator) || !Number.isSafeInteger(gzNumerator) || gxNumerator % sourceIntervals !== 0 || gzNumerator % sourceIntervals !== 0) {
+        addConflict({
+          code: TERRAIN_EDIT_REBASE_CONFLICT.COORDINATE_NOT_REPRESENTABLE,
+          operationId: operation.operationId,
+          gx: delta.gx,
+          gz: delta.gz,
+          message: "edited sample does not land exactly on the target lattice"
+        });
+        continue;
+      }
+      const gx = gxNumerator / sourceIntervals;
+      const gz = gzNumerator / sourceIntervals;
+      if (gx < targetBounds.minGx || gx > targetBounds.maxGx || gz < targetBounds.minGz || gz > targetBounds.maxGz) {
+        addConflict({
+          code: TERRAIN_EDIT_REBASE_CONFLICT.OUTSIDE_TARGET_DOMAIN,
+          operationId: operation.operationId,
+          gx: delta.gx,
+          gz: delta.gz,
+          targetGx: gx,
+          targetGz: gz,
+          message: "edited sample is outside the target topology domain"
+        });
+        continue;
+      }
+      mapped.push({ gx, gz, deltaM: delta.deltaM });
+      mappedDeltaCount++;
+    }
+    return { operationId: operation.operationId, kind: TERRAIN_EDIT_OPERATION_KIND, deltas: mapped };
+  });
+  if (options.shouldCancel?.()) throw new TerrainEditCancelledError();
+  if (conflictCount !== 0) {
+    return Object.freeze({
+      ok: false,
+      conflicts: Object.freeze(conflicts),
+      report: rebaseReport(source, target, layer.operations.length, deltaCount, mappedDeltaCount, conflictCount)
+    });
+  }
+  const rebasedLayer = createTerrainEditLayer({ layerId: layer.layerId, baseTopology: target, operations: mappedOperations });
+  return Object.freeze({
+    ok: true,
+    layer: rebasedLayer,
+    report: rebaseReport(source, target, layer.operations.length, deltaCount, mappedDeltaCount, 0)
+  });
+}
+
+// src/terrain/paint-layer.mjs
+var TERRAIN_PAINT_LAYER_SCHEMA = "limina.terrain-paint-layer/v1";
+var TERRAIN_PAINT_ERASE_MATERIAL = "none";
+var TERRAIN_PAINT_MATERIAL_IDS = Object.freeze({
+  sand: 1,
+  grass: 2,
+  rock: 3,
+  dirt: 4,
+  snow: 5,
+  murk: 6,
+  tundra: 7
+});
+var MAX_TERRAIN_PAINT_OPERATIONS = 1024;
+var MAX_TERRAIN_PAINT_DELTAS_PER_OPERATION = 4096;
+var MAX_TERRAIN_PAINT_DELTAS = 65536;
+var MAX_TERRAIN_PAINT_LAYER_BYTES = 4 * 1024 * 1024;
+var MAX_TERRAIN_PAINT_COMPOSE_DELTAS = 262144;
+var MAX_TERRAIN_PAINT_INDEX_ENTRIES = MAX_TERRAIN_PAINT_COMPOSE_DELTAS * 4;
+var MAX_TERRAIN_PAINT_WEIGHT = 1024;
+var CONTENT_HASH3 = /^sha256:[0-9a-f]{64}$/;
+var IDENTIFIER2 = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+function ownDataObject2(value, keys2, label4) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label4} must be an object`);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new Error(`${label4} must be a plain object`);
+  if (Object.getOwnPropertySymbols(value).length !== 0) throw new Error(`${label4} must not have symbol keys`);
+  const names = Object.getOwnPropertyNames(value).sort();
+  const expected = [...keys2].sort();
+  if (names.length !== expected.length || names.some((name, index) => name !== expected[index])) {
+    throw new Error(`${label4} must contain exactly: ${expected.join(", ")}`);
+  }
+  for (const name of names) {
+    const descriptor3 = Object.getOwnPropertyDescriptor(value, name);
+    if (descriptor3?.get !== void 0 || descriptor3?.set !== void 0 || descriptor3?.enumerable !== true) {
+      throw new Error(`${label4}.${name} must be an enumerable data property`);
+    }
+  }
+  return value;
+}
+function denseArray3(value, maximum, label4) {
+  if (!Array.isArray(value)) throw new Error(`${label4} must be an array`);
+  if (value.length > maximum) throw new Error(`${label4} exceeds ${maximum} entries`);
+  const names = Object.getOwnPropertyNames(value);
+  const allowed = /* @__PURE__ */ new Set(["length", ...Array.from({ length: value.length }, (_3, index) => String(index))]);
+  if (names.some((name) => !allowed.has(name)) || Object.getOwnPropertySymbols(value).length !== 0) {
+    throw new Error(`${label4} must be a dense array without custom properties`);
+  }
+  for (let index = 0; index < value.length; index++) {
+    const descriptor3 = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor3?.get !== void 0 || descriptor3?.set !== void 0 || descriptor3?.enumerable !== true) {
+      throw new Error(`${label4}[${index}] must be an enumerable data property`);
+    }
+  }
+  return value;
+}
+function finite8(value, label4) {
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${label4} must be finite`);
+  return Object.is(value, -0) ? 0 : value;
+}
+function identifier2(value, label4) {
+  if (typeof value !== "string" || !IDENTIFIER2.test(value)) {
+    throw new Error(`${label4} must be 1-64 lowercase characters using a-z, 0-9, '.', '_' or '-'`);
+  }
+  return value;
+}
+function validateContentHash2(value, label4) {
+  if (typeof value !== "string" || !CONTENT_HASH3.test(value)) throw new Error(`${label4} must be a lowercase sha256 content hash`);
+  return value;
+}
+function paintMaterial(value, label4) {
+  if (value === TERRAIN_PAINT_ERASE_MATERIAL) return value;
+  if (typeof value !== "string" || !Object.hasOwn(TERRAIN_PAINT_MATERIAL_IDS, value)) {
+    throw new Error(`${label4} must be 'none' or one of: ${Object.keys(TERRAIN_PAINT_MATERIAL_IDS).join(", ")}`);
+  }
+  return value;
+}
+function sampleBounds2(base) {
+  const intervals = base.grid.defaultSamples - 1;
+  return {
+    minGx: base.domain.minTx * intervals,
+    minGz: base.domain.minTz * intervals,
+    maxGx: (base.domain.maxTx + 1) * intervals,
+    maxGz: (base.domain.maxTz + 1) * intervals
+  };
+}
+function canonicalDelta2(input, base, label4) {
+  ownDataObject2(input, ["gx", "gz", "material", "weight"], label4);
+  if (!Number.isSafeInteger(input.gx) || !Number.isSafeInteger(input.gz)) throw new Error(`${label4} coordinates must be safe integers`);
+  const bounds = sampleBounds2(base);
+  if (input.gx < bounds.minGx || input.gx > bounds.maxGx || input.gz < bounds.minGz || input.gz > bounds.maxGz) {
+    throw new Error(`${label4} is outside the base topology domain`);
+  }
+  const material2 = paintMaterial(input.material, `${label4} material`);
+  const weight = finite8(input.weight, `${label4} weight`);
+  if (Math.abs(weight) > MAX_TERRAIN_PAINT_WEIGHT) {
+    throw new Error(`${label4} weight must be within +/-${MAX_TERRAIN_PAINT_WEIGHT}`);
+  }
+  if (material2 === TERRAIN_PAINT_ERASE_MATERIAL ? weight > 0 : weight < 0) {
+    throw new Error(`${label4} weight sign does not match its material branch`);
+  }
+  return { gx: input.gx, gz: input.gz, material: material2, weight };
+}
+function compareDeltas2(a2, b3) {
+  return a2.gz - b3.gz || a2.gx - b3.gx;
+}
+function layerCore2(layerId, baseTopology, operations) {
+  return {
+    schema: TERRAIN_PAINT_LAYER_SCHEMA,
+    layerId,
+    gridId: baseTopology.grid.gridId,
+    baseTopology,
+    operations
+  };
+}
+function wireBase2(base) {
+  return {
+    schema: base.schema,
+    grid: {
+      schema: base.grid.schema,
+      gridId: base.grid.gridId,
+      origin: [base.grid.origin[0], base.grid.origin[1]],
+      chunkSizeM: base.grid.chunkSizeM,
+      defaultSamples: base.grid.defaultSamples
+    },
+    domain: { ...base.domain },
+    topologyHash: base.topologyHash
+  };
+}
+function freezeLayer2(core, hash10) {
+  const operations = core.operations.map((operation) => Object.freeze({
+    operationId: operation.operationId,
+    deltas: Object.freeze(operation.deltas.map((delta) => Object.freeze({ ...delta })))
+  }));
+  return Object.freeze({
+    schema: TERRAIN_PAINT_LAYER_SCHEMA,
+    layerId: core.layerId,
+    gridId: core.gridId,
+    baseTopology: core.baseTopology,
+    operations: Object.freeze(operations),
+    contentHash: hash10
+  });
+}
+function canonicalOperations2(input, base, requireCanonicalOrder) {
+  denseArray3(input, MAX_TERRAIN_PAINT_OPERATIONS, "terrain paint operations");
+  const operationIds = /* @__PURE__ */ new Set();
+  let deltaCount = 0;
+  return input.map((operation, operationIndex) => {
+    const label4 = `terrain paint operation ${operationIndex}`;
+    ownDataObject2(operation, ["operationId", "deltas"], label4);
+    const operationId = identifier2(operation.operationId, `${label4} id`);
+    if (operationIds.has(operationId)) throw new Error(`duplicate terrain paint operation id '${operationId}'`);
+    operationIds.add(operationId);
+    denseArray3(operation.deltas, MAX_TERRAIN_PAINT_DELTAS_PER_OPERATION, `${label4} deltas`);
+    if (operation.deltas.length === 0) throw new Error(`${label4} must contain at least one delta`);
+    deltaCount += operation.deltas.length;
+    if (deltaCount > MAX_TERRAIN_PAINT_DELTAS) throw new Error(`terrain paint layer exceeds ${MAX_TERRAIN_PAINT_DELTAS} deltas`);
+    const deltas = operation.deltas.map((delta, deltaIndex) => canonicalDelta2(delta, base, `${label4} delta ${deltaIndex}`));
+    if (requireCanonicalOrder) {
+      for (let index = 1; index < deltas.length; index++) {
+        if (compareDeltas2(deltas[index - 1], deltas[index]) >= 0) {
+          throw new Error(`${label4} deltas must be strictly ordered by gz then gx without duplicates`);
+        }
+      }
+    } else {
+      deltas.sort(compareDeltas2);
+      for (let index = 1; index < deltas.length; index++) {
+        if (compareDeltas2(deltas[index - 1], deltas[index]) === 0) throw new Error(`${label4} contains duplicate sample coordinates`);
+      }
+    }
+    return { operationId, deltas };
+  });
+}
+function canonicalLayerBytes2(core, hash10) {
+  return JSON.stringify({
+    schema: core.schema,
+    layerId: core.layerId,
+    gridId: core.gridId,
+    baseTopology: wireBase2(core.baseTopology),
+    operations: core.operations,
+    ...hash10 === void 0 ? {} : { contentHash: hash10 }
+  });
+}
+function createTerrainPaintLayer(input) {
+  ownDataObject2(input, ["layerId", "baseTopology", "operations"], "terrain paint layer input");
+  const layerId = identifier2(input.layerId, "terrain paint layer id");
+  const baseTopology = parseTerrainEditBaseTopology(input.baseTopology);
+  const operations = canonicalOperations2(input.operations, baseTopology, false);
+  const core = layerCore2(layerId, baseTopology, operations);
+  const hash10 = `sha256:${sha256(canonicalLayerBytes2(core))}`;
+  const bytes = canonicalLayerBytes2(core, hash10);
+  if (bytes.length > MAX_TERRAIN_PAINT_LAYER_BYTES) throw new Error(`terrain paint layer exceeds ${MAX_TERRAIN_PAINT_LAYER_BYTES} bytes`);
+  return freezeLayer2(core, hash10);
+}
+function parseTerrainPaintLayer(input) {
+  ownDataObject2(input, ["schema", "layerId", "gridId", "baseTopology", "operations", "contentHash"], "terrain paint layer");
+  if (input.schema !== TERRAIN_PAINT_LAYER_SCHEMA) throw new Error(`terrain paint layer schema must be '${TERRAIN_PAINT_LAYER_SCHEMA}'`);
+  const layerId = identifier2(input.layerId, "terrain paint layer id");
+  const baseTopology = parseTerrainEditBaseTopology(input.baseTopology);
+  if (input.gridId !== baseTopology.grid.gridId) throw new Error("terrain paint layer gridId does not match its base topology");
+  const operations = canonicalOperations2(input.operations, baseTopology, true);
+  const core = layerCore2(layerId, baseTopology, operations);
+  const expectedHash2 = `sha256:${sha256(canonicalLayerBytes2(core))}`;
+  const suppliedHash = validateContentHash2(input.contentHash, "terrain paint layer content hash");
+  if (suppliedHash !== expectedHash2) throw new Error("terrain paint layer content hash does not match its canonical content");
+  const bytes = canonicalLayerBytes2(core, suppliedHash);
+  if (bytes.length > MAX_TERRAIN_PAINT_LAYER_BYTES) throw new Error(`terrain paint layer exceeds ${MAX_TERRAIN_PAINT_LAYER_BYTES} bytes`);
+  return freezeLayer2(core, suppliedHash);
+}
+function checkpoint4(shouldCancel, work) {
+  if ((work & 1023) === 0 && shouldCancel?.()) throw new TerrainEditCancelledError();
+}
+var STROKE_OPERATION_ID2 = /^op-\d{6}$/;
+var FOLD_OPERATION_ID2 = /^fold-\d{6}$/;
+function splitTerrainPaintStrokeDeltas(deltas, firstOperationIndex) {
+  denseArray3(deltas, MAX_TERRAIN_PAINT_DELTAS, "terrain paint stroke deltas");
+  if (deltas.length === 0) throw new Error("terrain paint stroke must contain at least one delta");
+  if (!Number.isSafeInteger(firstOperationIndex) || firstOperationIndex < 0) {
+    throw new Error("terrain paint stroke first operation index must be a non-negative safe integer");
+  }
+  const operations = [];
+  for (let offset = 0; offset < deltas.length; offset += MAX_TERRAIN_PAINT_DELTAS_PER_OPERATION) {
+    operations.push({
+      operationId: `op-${String(firstOperationIndex + operations.length).padStart(6, "0")}`,
+      deltas: deltas.slice(offset, offset + MAX_TERRAIN_PAINT_DELTAS_PER_OPERATION)
+    });
+  }
+  return operations;
+}
+function compactTerrainPaintOperations(operationsInput) {
+  denseArray3(operationsInput, MAX_TERRAIN_PAINT_OPERATIONS + MAX_TERRAIN_PAINT_DELTAS_PER_OPERATION, "terrain paint fold operations");
+  const runsByKey = /* @__PURE__ */ new Map();
+  const keyOrder = /* @__PURE__ */ new Map();
+  let deltaCount = 0;
+  const maxInput = MAX_TERRAIN_PAINT_DELTAS * 2;
+  for (const operation of operationsInput) {
+    ownDataObject2(operation, ["operationId", "deltas"], "terrain paint fold operation");
+    denseArray3(operation.deltas, maxInput, "terrain paint fold operation deltas");
+    for (const delta of operation.deltas) {
+      ownDataObject2(delta, ["gx", "gz", "material", "weight"], "terrain paint fold delta");
+      if (!Number.isSafeInteger(delta.gx) || !Number.isSafeInteger(delta.gz)) throw new Error("terrain paint fold delta coordinates must be safe integers");
+      const material2 = paintMaterial(delta.material, "terrain paint fold delta material");
+      const weight = finite8(delta.weight, "terrain paint fold delta weight");
+      if (material2 === TERRAIN_PAINT_ERASE_MATERIAL ? weight > 0 : weight < 0) {
+        throw new Error("terrain paint fold delta weight sign does not match its material branch");
+      }
+      deltaCount++;
+      if (deltaCount > maxInput) throw new Error(`terrain paint fold exceeds ${maxInput} input deltas`);
+      const key = `${delta.gz}:${delta.gx}`;
+      if (!keyOrder.has(key)) keyOrder.set(key, { gz: delta.gz, gx: delta.gx });
+      let runs = runsByKey.get(key);
+      if (runs === void 0) {
+        runs = [];
+        runsByKey.set(key, runs);
+      }
+      const last = runs[runs.length - 1];
+      const erase = material2 === TERRAIN_PAINT_ERASE_MATERIAL;
+      if (last !== void 0 && last.erase === erase) {
+        last.weight += weight;
+        if (!erase) last.material = material2;
+      } else {
+        runs.push({ erase, material: material2, weight });
+      }
+    }
+  }
+  if (runsByKey.size === 0) throw new Error("terrain paint fold requires at least one delta");
+  const keys2 = [...keyOrder.values()].sort((a2, b3) => a2.gz - b3.gz || a2.gx - b3.gx);
+  let runCount = 0;
+  for (const key of keys2) {
+    const runs = runsByKey.get(`${key.gz}:${key.gx}`);
+    for (const run2 of runs) {
+      if (!Number.isFinite(run2.weight) || Math.abs(run2.weight) > MAX_TERRAIN_PAINT_WEIGHT) {
+        throw new Error(`terrain paint fold merged weight must be within +/-${MAX_TERRAIN_PAINT_WEIGHT}`);
+      }
+    }
+    runCount = Math.max(runCount, runs.length);
+  }
+  const operations = [];
+  for (let run2 = 0; run2 < runCount; run2++) {
+    const deltas = [];
+    for (const key of keys2) {
+      const runs = runsByKey.get(`${key.gz}:${key.gx}`);
+      if (runs.length <= run2) continue;
+      deltas.push({ gx: key.gx, gz: key.gz, material: runs[run2].material, weight: runs[run2].weight });
+    }
+    for (let offset = 0; offset < deltas.length; offset += MAX_TERRAIN_PAINT_DELTAS_PER_OPERATION) {
+      operations.push({
+        operationId: `fold-${String(operations.length).padStart(6, "0")}`,
+        deltas: deltas.slice(offset, offset + MAX_TERRAIN_PAINT_DELTAS_PER_OPERATION)
+      });
+    }
+  }
+  return operations;
+}
+function appendTerrainPaintStroke(layerInput, stroke) {
+  ownDataObject2(stroke, ["layerId", "baseTopology", "deltas"], "terrain paint stroke");
+  const layerId = identifier2(stroke.layerId, "terrain paint stroke layer id");
+  const base = parseTerrainEditBaseTopology(stroke.baseTopology);
+  let existing = [];
+  if (layerInput !== void 0) {
+    const layer2 = parseTerrainPaintLayer(layerInput);
+    if (layer2.baseTopology.topologyHash !== base.topologyHash) {
+      throw new TerrainEditBaseMismatchError(base.topologyHash, layer2.baseTopology.topologyHash);
+    }
+    existing = layer2.operations.map((operation) => ({
+      operationId: operation.operationId,
+      deltas: operation.deltas.map((delta) => ({ ...delta }))
+    }));
+  }
+  let operations = [...existing, ...splitTerrainPaintStrokeDeltas(stroke.deltas, existing.length)];
+  let deltaCount = 0;
+  for (const operation of operations) deltaCount += operation.deltas.length;
+  let folded = false;
+  if (operations.length > MAX_TERRAIN_PAINT_OPERATIONS || deltaCount > MAX_TERRAIN_PAINT_DELTAS) {
+    operations = compactTerrainPaintOperations(operations);
+    folded = true;
+  }
+  const layer = createTerrainPaintLayer({ layerId, baseTopology: base, operations });
+  return Object.freeze({
+    layer,
+    folded,
+    operationIds: Object.freeze(layer.operations.map((operation) => operation.operationId)),
+    deltaCount: layer.operations.reduce((total, operation) => total + operation.deltas.length, 0)
+  });
+}
+var TERRAIN_PAINT_OPERATION_ID_PATTERNS = Object.freeze({ stroke: STROKE_OPERATION_ID2, fold: FOLD_OPERATION_ID2 });
+function sameGridGeometry2(source, target) {
+  return source.grid.origin[0] === target.grid.origin[0] && source.grid.origin[1] === target.grid.origin[1] && source.grid.chunkSizeM === target.grid.chunkSizeM;
+}
+function rebaseReport2(source, target, operationCount, deltaCount, mappedDeltaCount, conflictCount) {
+  return Object.freeze({
+    exact: conflictCount === 0,
+    fromTopologyHash: source.topologyHash,
+    toTopologyHash: target.topologyHash,
+    operationCount,
+    deltaCount,
+    mappedDeltaCount,
+    conflictCount,
+    conflictDetailsTruncated: conflictCount > MAX_TERRAIN_REBASE_CONFLICT_DETAILS
+  });
+}
+function rebaseTerrainPaintLayer(input, targetBaseInput, options = {}) {
+  if (options.shouldCancel !== void 0 && typeof options.shouldCancel !== "function") throw new Error("terrain paint shouldCancel must be a function");
+  if (options.shouldCancel?.()) throw new TerrainEditCancelledError();
+  const layer = parseTerrainPaintLayer(input);
+  const source = layer.baseTopology;
+  const target = parseTerrainEditBaseTopology(targetBaseInput);
+  const deltaCount = layer.operations.reduce((total, operation) => total + operation.deltas.length, 0);
+  const conflicts = [];
+  let conflictCount = 0;
+  const addConflict = (conflict) => {
+    conflictCount++;
+    if (conflicts.length < MAX_TERRAIN_REBASE_CONFLICT_DETAILS) conflicts.push(Object.freeze(conflict));
+  };
+  if (source.grid.gridId !== target.grid.gridId) {
+    addConflict({ code: TERRAIN_EDIT_REBASE_CONFLICT.GRID_MISMATCH, message: `grid '${source.grid.gridId}' cannot rebase onto '${target.grid.gridId}'` });
+  } else if (!sameGridGeometry2(source, target)) {
+    addConflict({ code: TERRAIN_EDIT_REBASE_CONFLICT.GRID_GEOMETRY_CHANGED, message: "grid origin or chunk size changed; exact coordinate preservation is unavailable" });
+  }
+  if (conflictCount !== 0) {
+    return Object.freeze({
+      ok: false,
+      conflicts: Object.freeze(conflicts),
+      report: rebaseReport2(source, target, layer.operations.length, deltaCount, 0, conflictCount)
+    });
+  }
+  const sourceIntervals = source.grid.defaultSamples - 1;
+  const targetIntervals = target.grid.defaultSamples - 1;
+  const targetBounds = sampleBounds2(target);
+  let work = 0;
+  let mappedDeltaCount = 0;
+  const mappedOperations = layer.operations.map((operation) => {
+    const mapped = [];
+    for (const delta of operation.deltas) {
+      checkpoint4(options.shouldCancel, work++);
+      const gxNumerator = delta.gx * targetIntervals;
+      const gzNumerator = delta.gz * targetIntervals;
+      if (!Number.isSafeInteger(gxNumerator) || !Number.isSafeInteger(gzNumerator) || gxNumerator % sourceIntervals !== 0 || gzNumerator % sourceIntervals !== 0) {
+        addConflict({
+          code: TERRAIN_EDIT_REBASE_CONFLICT.COORDINATE_NOT_REPRESENTABLE,
+          operationId: operation.operationId,
+          gx: delta.gx,
+          gz: delta.gz,
+          message: "painted sample does not land exactly on the target lattice"
+        });
+        continue;
+      }
+      const gx = gxNumerator / sourceIntervals;
+      const gz = gzNumerator / sourceIntervals;
+      if (gx < targetBounds.minGx || gx > targetBounds.maxGx || gz < targetBounds.minGz || gz > targetBounds.maxGz) {
+        addConflict({
+          code: TERRAIN_EDIT_REBASE_CONFLICT.OUTSIDE_TARGET_DOMAIN,
+          operationId: operation.operationId,
+          gx: delta.gx,
+          gz: delta.gz,
+          targetGx: gx,
+          targetGz: gz,
+          message: "painted sample is outside the target topology domain"
+        });
+        continue;
+      }
+      mapped.push({ gx, gz, material: delta.material, weight: delta.weight });
+      mappedDeltaCount++;
+    }
+    return { operationId: operation.operationId, deltas: mapped };
+  });
+  if (options.shouldCancel?.()) throw new TerrainEditCancelledError();
+  if (conflictCount !== 0) {
+    return Object.freeze({
+      ok: false,
+      conflicts: Object.freeze(conflicts),
+      report: rebaseReport2(source, target, layer.operations.length, deltaCount, mappedDeltaCount, conflictCount)
+    });
+  }
+  const rebasedLayer = createTerrainPaintLayer({ layerId: layer.layerId, baseTopology: target, operations: mappedOperations });
+  return Object.freeze({
+    ok: true,
+    layer: rebasedLayer,
+    report: rebaseReport2(source, target, layer.operations.length, deltaCount, mappedDeltaCount, 0)
+  });
+}
+
 // src/skills/terrain-edit.ts
 var inertTransform3 = () => ({ position: { set() {
 } }, quaternion: { set() {
@@ -128746,6 +130426,29 @@ var createInput = external_exports.object({
 });
 var DEFORM_MODES = ["raise", "lower", "smooth", "flatten", "noise"];
 var FALLOFFS = ["smooth", "linear", "constant"];
+var baseTopologyInput = external_exports.object({
+  schema: external_exports.literal("limina.terrain-edit-base-topology/v1"),
+  grid: external_exports.object({
+    schema: external_exports.literal("limina.terrain-grid/v1"),
+    gridId: external_exports.string(),
+    origin: external_exports.tuple([external_exports.number(), external_exports.number()]),
+    chunkSizeM: external_exports.number(),
+    defaultSamples: external_exports.number().int()
+  }).strict(),
+  domain: external_exports.object({
+    minTx: external_exports.number().int(),
+    minTz: external_exports.number().int(),
+    maxTx: external_exports.number().int(),
+    maxTz: external_exports.number().int()
+  }).strict(),
+  topologyHash: external_exports.string()
+}).strict();
+var layerRefInput = external_exports.object({
+  assetId: external_exports.string(),
+  hash: external_exports.string(),
+  layerId: external_exports.string(),
+  baseTopologyHash: external_exports.string()
+}).strict();
 var deformInput = external_exports.object({
   /** Which terrain layer to reshape. Defaults to the most recently created one. */
   entity: external_exports.string().optional(),
@@ -128757,19 +130460,46 @@ var deformInput = external_exports.object({
   delta: external_exports.number().default(1),
   mode: external_exports.enum(DEFORM_MODES).default("raise"),
   /** Brush weight profile from center (1) to edge (0). */
-  falloff: external_exports.enum(FALLOFFS).default("smooth")
+  falloff: external_exports.enum(FALLOFFS).default("smooth"),
+  /** Replay pin (commitFields): the derived-terrain base topology the stroke
+   *  materialized against. Absent live (resolved from the authoritative MapDoc);
+   *  present on replay, so a replayed stroke never re-reads the map. */
+  baseTopology: baseTopologyInput.optional(),
+  /** Replay pin (commitFields): the layer identity the stroke committed. A recomputed
+   *  layer that disagrees throws — replay divergence is loud, never silent. */
+  layerRef: layerRefInput.optional(),
+  /** Replay pin (commitFields): the nested authoring.commit's durable record. The
+   *  authoring record chain is ONE contiguous sequence across top-level and nested
+   *  commits, so replay must re-commit with the pinned record (commitRecorded) —
+   *  exactly like a top-level authoring.commit — or a later top-level commit's pinned
+   *  record no longer chains. */
+  commitRecord: DurableAuthoringRecordSchema.optional()
 });
-function falloffWeight(kind, t3) {
-  if (kind === "constant") return 1;
-  if (kind === "linear") return t3;
-  return t3 * t3 * (3 - 2 * t3);
-}
-function hashNoise(col, row) {
-  let h2 = Math.imul(col, 374761393) + Math.imul(row, 668265263) | 0;
-  h2 = Math.imul(h2 ^ h2 >>> 13, 1274126177) | 0;
-  return ((h2 ^ h2 >>> 16) >>> 0) / 4294967296;
-}
-var PAINT_MATERIALS = { sand: 1, grass: 2, rock: 3, dirt: 4, snow: 5, murk: 6, tundra: 7 };
+var deformOutput = external_exports.object({
+  ok: external_exports.boolean(),
+  baseTopology: baseTopologyInput.optional(),
+  layerRef: layerRefInput.optional(),
+  commitRecord: DurableAuthoringRecordSchema.optional(),
+  derived: external_exports.object({
+    layerId: external_exports.string(),
+    deltaCount: external_exports.number().int(),
+    folded: external_exports.boolean(),
+    contentHash: external_exports.string()
+  }).strict().optional()
+});
+var editLayerOutput = external_exports.object({
+  schema: external_exports.literal("limina.terrain-edit-layer/v1"),
+  layerId: external_exports.string(),
+  gridId: external_exports.string(),
+  baseTopology: baseTopologyInput,
+  operations: external_exports.array(external_exports.object({
+    operationId: external_exports.string(),
+    kind: external_exports.literal("add"),
+    deltas: external_exports.array(external_exports.object({ gx: external_exports.number().int(), gz: external_exports.number().int(), deltaM: external_exports.number() }).strict())
+  }).strict()),
+  contentHash: external_exports.string()
+}).strict();
+var PAINT_MATERIALS = TERRAIN_PAINT_MATERIAL_IDS;
 var paintInput = external_exports.object({
   entity: external_exports.string().optional(),
   center: external_exports.tuple([external_exports.number(), external_exports.number()]),
@@ -128777,7 +130507,23 @@ var paintInput = external_exports.object({
   strength: external_exports.number().min(0).max(1).default(0.5),
   falloff: external_exports.enum(FALLOFFS).default("smooth"),
   material: external_exports.enum(["sand", "grass", "rock", "dirt", "snow", "murk", "tundra"]).default("grass"),
-  erase: external_exports.boolean().default(false)
+  erase: external_exports.boolean().default(false),
+  /** Replay pins (commitFields), derived path only — identical contract to terrain.deform's. */
+  baseTopology: baseTopologyInput.optional(),
+  layerRef: layerRefInput.optional(),
+  commitRecord: DurableAuthoringRecordSchema.optional()
+});
+var paintOutput = external_exports.object({
+  ok: external_exports.boolean(),
+  baseTopology: baseTopologyInput.optional(),
+  layerRef: layerRefInput.optional(),
+  commitRecord: DurableAuthoringRecordSchema.optional(),
+  derived: external_exports.object({
+    layerId: external_exports.string(),
+    deltaCount: external_exports.number().int(),
+    folded: external_exports.boolean(),
+    contentHash: external_exports.string()
+  }).strict().optional()
 });
 function applyBrushPaint(tile, input) {
   const { nrows, ncols, origin, scale: scale2 } = tile;
@@ -128903,7 +130649,262 @@ function applyBrush(tile, input) {
     }
   }
 }
-function registerTerrainEditSkills(registry2, layers = /* @__PURE__ */ new Map(), assets, footprints = /* @__PURE__ */ new Map(), vegetationClears = /* @__PURE__ */ new Map(), waterContact, grassVisualPackage) {
+function materializeTerrainBrushOp(baseTopologyInput2, input, sampleHeightM) {
+  const lattice = terrainEditLatticeGeometry(baseTopologyInput2);
+  if ((input.mode === "smooth" || input.mode === "flatten") && sampleHeightM === void 0) {
+    throw new SkillInvocationError("invalid_input", `terrain.deform: ${input.mode} on derived terrain requires a composed-height sampler (host must wire authoring.readMapDoc + derivedTerrainTopology)`);
+  }
+  return materializeLatticeBrushDeltas(lattice, input, sampleHeightM);
+}
+function materializeTerrainPaintOp(baseTopologyInput2, input) {
+  const lattice = terrainEditLatticeGeometry(baseTopologyInput2);
+  const cols = lattice.maxGx - lattice.minGx;
+  const rows = lattice.maxGz - lattice.minGz;
+  const x0 = lattice.minX, z0 = lattice.minZ;
+  const step3 = lattice.stepM;
+  const [cx, cz] = input.center;
+  const r2 = input.radius, r22 = r2 * r2;
+  const col0 = Math.min(cols, Math.max(0, Math.floor((cx - r2 - x0) / step3)));
+  const col1 = Math.max(0, Math.min(cols, Math.ceil((cx + r2 - x0) / step3)));
+  const row0 = Math.min(rows, Math.max(0, Math.floor((cz - r2 - z0) / step3)));
+  const row1 = Math.max(0, Math.min(rows, Math.ceil((cz + r2 - z0) / step3)));
+  const deltas = [];
+  for (let row = row0; row <= row1; row++) {
+    const wz = z0 + row * step3;
+    for (let col = col0; col <= col1; col++) {
+      const wx = x0 + col * step3;
+      const f2 = brushWeightAt(input.falloff, wx, wz, cx, cz, r2);
+      const dx = wx - cx, dz = wz - cz;
+      if (f2 === 0 && dx * dx + dz * dz > r22) continue;
+      deltas.push({
+        gx: lattice.minGx + col,
+        gz: lattice.minGz + row,
+        material: input.erase ? "none" : input.material,
+        weight: input.erase ? -(input.strength * f2) : input.strength * f2
+      });
+    }
+  }
+  return deltas;
+}
+function registerTerrainEditSkills(registry2, layers = /* @__PURE__ */ new Map(), assets, footprints = /* @__PURE__ */ new Map(), vegetationClears = /* @__PURE__ */ new Map(), waterContact, grassVisualPackage, derivedDeps) {
+  const derived = derivedDeps ?? { layers: /* @__PURE__ */ new Map(), paintLayers: /* @__PURE__ */ new Map() };
+  const derivedDeform = async (input, ctx) => {
+    const projectState = derived.projectState;
+    if (projectState === void 0) return { ok: false };
+    if (ctx.replay === true && input.baseTopology === void 0) return { ok: false };
+    const nested = {
+      agentId: ctx.agentId,
+      sessionId: ctx.sessionId,
+      permissions: ctx.permissions,
+      tick: ctx.tick,
+      world: ctx.world,
+      chainId: ctx.chainId,
+      chainToken: ctx.chainToken,
+      ...ctx.profile !== void 0 ? { profile: ctx.profile } : {}
+    };
+    const snapshotRes = await registry2.invoke("authoring.sourceSnapshot", {}, nested);
+    if (!snapshotRes.success) {
+      throw new SkillInvocationError(
+        snapshotRes.error?.code ?? "handler_error",
+        `terrain.deform could not read the authoritative source snapshot: ${snapshotRes.error?.message ?? "unknown error"}`
+      );
+    }
+    const snapshot = snapshotRes.result;
+    const mapDocRef = snapshot.projectState.refs.mapDoc;
+    if (mapDocRef === null) return { ok: false };
+    let baseTopology;
+    if (input.baseTopology !== void 0) {
+      baseTopology = parseTerrainEditBaseTopology(input.baseTopology);
+    } else {
+      if (derived.resolveBaseTopology === void 0) return { ok: false };
+      baseTopology = parseTerrainEditBaseTopology(derived.resolveBaseTopology(mapDocRef));
+    }
+    const layerId = `derived-${baseTopology.grid.gridId}`;
+    const refs = snapshot.projectState.refs.terrainEditLayers;
+    const existingRef = refs.find((ref) => ref.layerId === layerId);
+    let existingLayer;
+    if (existingRef !== void 0) {
+      const content = derived.layers.get(existingRef.hash) ?? derived.readLayer?.(existingRef);
+      if (content === void 0) {
+        throw new Error(`terrain.deform: derived edit layer '${layerId}' content (${existingRef.hash}) is unavailable to this host`);
+      }
+      existingLayer = parseTerrainEditLayer(content);
+      if (existingLayer.baseTopology.topologyHash !== baseTopology.topologyHash) {
+        const rebase = rebaseTerrainEditLayer(existingLayer, baseTopology);
+        if (!rebase.ok) {
+          throw new SkillInvocationError(
+            "conflict",
+            `terrain.deform: derived edit layer '${layerId}' cannot rebase onto the mounted topology: ${rebase.conflicts.map((conflict) => conflict.code).join(", ")}`
+          );
+        }
+        existingLayer = rebase.layer;
+      }
+    }
+    const deltas = materializeTerrainBrushOp(baseTopology, input, derived.sampleHeightM);
+    if (deltas.length === 0) return { ok: false };
+    const stroke = appendTerrainEditStroke(existingLayer, { layerId, baseTopology, deltas });
+    const layerRef = {
+      assetId: `assets/sources/terrain-edit-layer/${stroke.layer.contentHash.slice("sha256:".length)}.layer.json`,
+      hash: stroke.layer.contentHash,
+      layerId,
+      baseTopologyHash: baseTopology.topologyHash
+    };
+    if (input.layerRef !== void 0 && (input.layerRef.assetId !== layerRef.assetId || input.layerRef.hash !== layerRef.hash || input.layerRef.layerId !== layerRef.layerId || input.layerRef.baseTopologyHash !== layerRef.baseTopologyHash)) {
+      throw new Error(`terrain.deform replay diverged: the recorded layer pin ${input.layerRef.hash} recomputed to ${layerRef.hash}`);
+    }
+    const nextRefs = existingRef === void 0 ? [...refs, layerRef] : refs.map((ref) => ref.layerId === layerId ? layerRef : ref);
+    const transaction = {
+      schema: "limina.authoring-transaction/v1",
+      transactionId: `terrain-edit-${stroke.layer.contentHash.slice(7, 39)}-${snapshot.head.headHash.slice(7, 39)}`,
+      projectId: projectState.projectId,
+      baseRevision: snapshot.head.revision,
+      baseHeadHash: snapshot.head.headHash,
+      operations: [{
+        adapter: "project-state",
+        adapterVersion: "1.0.0",
+        action: "refs.patch",
+        input: { projectId: projectState.projectId, patch: { terrainEditLayers: nextRefs } },
+        guard: { beforeHash: snapshot.projectState.stateHash }
+      }]
+    };
+    const commitRes = await registry2.invoke("authoring.commit", {
+      transaction,
+      // Replay forwards the pinned durable record so the authoring record chain stays
+      // contiguous across nested + top-level commits (see the input commitRecord pin).
+      ...input.commitRecord !== void 0 ? { commitRecord: input.commitRecord } : {}
+    }, nested);
+    if (!commitRes.success) {
+      throw new SkillInvocationError(
+        commitRes.error?.code ?? "handler_error",
+        `terrain.deform could not commit the derived edit layer: ${commitRes.error?.message ?? "unknown error"}`
+      );
+    }
+    const commitRecord = commitRes.result.commitRecord;
+    derived.layers.set(stroke.layer.contentHash, stroke.layer);
+    ctx.emit("terrain.deformed", {
+      derived: true,
+      layerId,
+      contentHash: stroke.layer.contentHash,
+      deltaCount: deltas.length,
+      folded: stroke.folded,
+      mode: input.mode
+    });
+    return {
+      ok: true,
+      baseTopology,
+      layerRef,
+      commitRecord,
+      derived: { layerId, deltaCount: deltas.length, folded: stroke.folded, contentHash: stroke.layer.contentHash }
+    };
+  };
+  const derivedPaint = async (input, ctx) => {
+    const projectState = derived.projectState;
+    if (projectState === void 0) return { ok: false };
+    if (ctx.replay === true && input.baseTopology === void 0) return { ok: false };
+    const nested = {
+      agentId: ctx.agentId,
+      sessionId: ctx.sessionId,
+      permissions: ctx.permissions,
+      tick: ctx.tick,
+      world: ctx.world,
+      chainId: ctx.chainId,
+      chainToken: ctx.chainToken,
+      ...ctx.profile !== void 0 ? { profile: ctx.profile } : {}
+    };
+    const snapshotRes = await registry2.invoke("authoring.sourceSnapshot", {}, nested);
+    if (!snapshotRes.success) {
+      throw new SkillInvocationError(
+        snapshotRes.error?.code ?? "handler_error",
+        `terrain.paint could not read the authoritative source snapshot: ${snapshotRes.error?.message ?? "unknown error"}`
+      );
+    }
+    const snapshot = snapshotRes.result;
+    const mapDocRef = snapshot.projectState.refs.mapDoc;
+    if (mapDocRef === null) return { ok: false };
+    let baseTopology;
+    if (input.baseTopology !== void 0) {
+      baseTopology = parseTerrainEditBaseTopology(input.baseTopology);
+    } else {
+      if (derived.resolveBaseTopology === void 0) return { ok: false };
+      baseTopology = parseTerrainEditBaseTopology(derived.resolveBaseTopology(mapDocRef));
+    }
+    const layerId = `derived-paint-${baseTopology.grid.gridId}`;
+    const refs = snapshot.projectState.refs.terrainEditLayers;
+    const existingRef = refs.find((ref) => ref.layerId === layerId);
+    let existingLayer;
+    if (existingRef !== void 0) {
+      const content = derived.paintLayers.get(existingRef.hash) ?? derived.readPaintLayer?.(existingRef);
+      if (content === void 0) {
+        throw new Error(`terrain.paint: derived paint layer '${layerId}' content (${existingRef.hash}) is unavailable to this host`);
+      }
+      existingLayer = parseTerrainPaintLayer(content);
+      if (existingLayer.baseTopology.topologyHash !== baseTopology.topologyHash) {
+        const rebase = rebaseTerrainPaintLayer(existingLayer, baseTopology);
+        if (!rebase.ok) {
+          throw new SkillInvocationError(
+            "conflict",
+            `terrain.paint: derived paint layer '${layerId}' cannot rebase onto the mounted topology: ${rebase.conflicts.map((conflict) => conflict.code).join(", ")}`
+          );
+        }
+        existingLayer = rebase.layer;
+      }
+    }
+    const deltas = materializeTerrainPaintOp(baseTopology, input);
+    if (deltas.length === 0) return { ok: false };
+    const stroke = appendTerrainPaintStroke(existingLayer, { layerId, baseTopology, deltas });
+    const layerRef = {
+      assetId: `assets/sources/terrain-paint-layer/${stroke.layer.contentHash.slice("sha256:".length)}.layer.json`,
+      hash: stroke.layer.contentHash,
+      layerId,
+      baseTopologyHash: baseTopology.topologyHash
+    };
+    if (input.layerRef !== void 0 && (input.layerRef.assetId !== layerRef.assetId || input.layerRef.hash !== layerRef.hash || input.layerRef.layerId !== layerRef.layerId || input.layerRef.baseTopologyHash !== layerRef.baseTopologyHash)) {
+      throw new Error(`terrain.paint replay diverged: the recorded layer pin ${input.layerRef.hash} recomputed to ${layerRef.hash}`);
+    }
+    const nextRefs = existingRef === void 0 ? [...refs, layerRef] : refs.map((ref) => ref.layerId === layerId ? layerRef : ref);
+    const transaction = {
+      schema: "limina.authoring-transaction/v1",
+      transactionId: `terrain-paint-${stroke.layer.contentHash.slice(7, 39)}-${snapshot.head.headHash.slice(7, 39)}`,
+      projectId: projectState.projectId,
+      baseRevision: snapshot.head.revision,
+      baseHeadHash: snapshot.head.headHash,
+      operations: [{
+        adapter: "project-state",
+        adapterVersion: "1.0.0",
+        action: "refs.patch",
+        input: { projectId: projectState.projectId, patch: { terrainEditLayers: nextRefs } },
+        guard: { beforeHash: snapshot.projectState.stateHash }
+      }]
+    };
+    const commitRes = await registry2.invoke("authoring.commit", {
+      transaction,
+      ...input.commitRecord !== void 0 ? { commitRecord: input.commitRecord } : {}
+    }, nested);
+    if (!commitRes.success) {
+      throw new SkillInvocationError(
+        commitRes.error?.code ?? "handler_error",
+        `terrain.paint could not commit the derived paint layer: ${commitRes.error?.message ?? "unknown error"}`
+      );
+    }
+    const commitRecord = commitRes.result.commitRecord;
+    derived.paintLayers.set(stroke.layer.contentHash, stroke.layer);
+    ctx.emit("terrain.painted", {
+      derived: true,
+      layerId,
+      contentHash: stroke.layer.contentHash,
+      deltaCount: deltas.length,
+      folded: stroke.folded,
+      material: input.material,
+      erase: input.erase
+    });
+    return {
+      ok: true,
+      baseTopology,
+      layerRef,
+      commitRecord,
+      derived: { layerId, deltaCount: deltas.length, folded: stroke.folded, contentHash: stroke.layer.contentHash }
+    };
+  };
   const create = {
     name: "terrain.create",
     version: "1.0.0",
@@ -129056,12 +131057,16 @@ function registerTerrainEditSkills(registry2, layers = /* @__PURE__ */ new Map()
   };
   const deform = {
     name: "terrain.deform",
-    version: "1.0.0",
-    description: "Reshape an editable terrain layer with a brush stamp (raise/lower/smooth/flatten/noise) in a world-space radius. Deterministic + recorded, so hand-sculpted terrain replays and is editable.",
+    version: "1.1.0",
+    description: "Reshape terrain with a brush stamp (raise/lower/smooth/flatten/noise) in a world-space radius. Targets the most recent editable layer; with no editable layer and a derived MapDoc mounted, the stroke materializes into the project's derived-terrain edit layer (sparse lattice deltas) and commits it to the authority, recompiling the terrain you see. Deterministic + recorded, so hand-sculpted terrain replays and is editable.",
     category: "terrain",
     permissions: ["scene.write"],
+    // Pins the resolved lattice + committed layer identity + the nested commit's
+    // durable record into the replay log (derived path only) — mirrors terrain.create's
+    // mapHash and authoring.commit's own commitRecord pin. Absent on EditableTerrain.
+    commitFields: ["baseTopology", "layerRef", "commitRecord"],
     input: deformInput,
-    output: external_exports.object({ ok: external_exports.boolean() }),
+    output: deformOutput,
     handler: (input, ctx) => {
       let id7 = input.entity;
       if (id7 === void 0) {
@@ -129070,7 +131075,7 @@ function registerTerrainEditSkills(registry2, layers = /* @__PURE__ */ new Map()
         id7 = last;
       }
       const layer = id7 !== void 0 ? layers.get(id7) : void 0;
-      if (layer === void 0) return { ok: false };
+      if (layer === void 0) return derivedDeform(input, ctx);
       const patch = captureHeightPatch(layer.tile, input.center, input.radius);
       const undoLayer = layer, undoWorld = ctx.world;
       ctx.undo("terrain.deform height patch", () => {
@@ -129085,12 +131090,15 @@ function registerTerrainEditSkills(registry2, layers = /* @__PURE__ */ new Map()
   };
   const paint = {
     name: "terrain.paint",
-    version: "1.0.0",
-    description: "Paint a surface material (sand/grass/rock/dirt) onto an editable terrain layer with a brush in a world-space radius. Blends a per-vertex material weight into the ground shading; deterministic + recorded so painted ground replays. Does NOT change height (pair with terrain.deform).",
+    version: "1.1.0",
+    description: "Paint a surface material (sand/grass/rock/dirt) onto terrain with a brush in a world-space radius. Targets the most recent editable layer; with no editable layer and a derived MapDoc mounted, the stamp materializes into the project's derived-terrain paint layer (sparse signed weight deltas) and commits it to the authority, recoloring the compiled terrain you see. Blends a per-vertex material weight into the ground shading; deterministic + recorded so painted ground replays. Does NOT change height (pair with terrain.deform). Paint-driven grass regrows only on EditableTerrain; derived grass comes from the compiler's biome stages.",
     category: "terrain",
     permissions: ["scene.write"],
+    // Pins the resolved lattice + committed layer identity + the nested commit's durable
+    // record into the replay log (derived path only) — mirrors terrain.deform's pins.
+    commitFields: ["baseTopology", "layerRef", "commitRecord"],
     input: paintInput,
-    output: external_exports.object({ ok: external_exports.boolean() }),
+    output: paintOutput,
     handler: (input, ctx) => {
       let id7 = input.entity;
       if (id7 === void 0) {
@@ -129099,7 +131107,7 @@ function registerTerrainEditSkills(registry2, layers = /* @__PURE__ */ new Map()
         id7 = last;
       }
       const layer = id7 !== void 0 ? layers.get(id7) : void 0;
-      if (layer === void 0) return { ok: false };
+      if (layer === void 0) return derivedPaint(input, ctx);
       applyBrushPaint(layer.tile, input);
       if (layer.mesh?.geometry !== void 0) {
         const g4 = layer.mesh.geometry;
@@ -129111,9 +131119,58 @@ function registerTerrainEditSkills(registry2, layers = /* @__PURE__ */ new Map()
       return { ok: true };
     }
   };
+  const editLayer = {
+    name: "authoring.terrainEditLayer",
+    version: "1.0.0",
+    description: "Read one content-addressed derived-terrain edit layer (the materialized sparse height deltas terrain.deform commits via refs.terrainEditLayers) from the authority's live store.",
+    category: "world",
+    permissions: ["authoring.read"],
+    effect: "read",
+    priority: "standard",
+    input: external_exports.object({ assetId: external_exports.string(), hash: external_exports.string() }).strict(),
+    output: external_exports.object({ layer: editLayerOutput }),
+    handler: (input) => {
+      const layer = derived.layers.get(input.hash);
+      if (layer === void 0) {
+        throw new SkillInvocationError("not_found", `no live derived terrain edit layer with content hash ${input.hash}`);
+      }
+      return { layer };
+    }
+  };
+  const paintLayerOutput = external_exports.object({
+    schema: external_exports.literal("limina.terrain-paint-layer/v1"),
+    layerId: external_exports.string(),
+    gridId: external_exports.string(),
+    baseTopology: baseTopologyInput,
+    operations: external_exports.array(external_exports.object({
+      operationId: external_exports.string(),
+      deltas: external_exports.array(external_exports.object({ gx: external_exports.number().int(), gz: external_exports.number().int(), material: external_exports.string(), weight: external_exports.number() }).strict())
+    }).strict()),
+    contentHash: external_exports.string()
+  }).strict();
+  const paintLayer = {
+    name: "authoring.terrainPaintLayer",
+    version: "1.0.0",
+    description: "Read one content-addressed derived-terrain paint layer (the materialized sparse paint stamps terrain.paint commits into refs.terrainEditLayers) from the authority's live store.",
+    category: "world",
+    permissions: ["authoring.read"],
+    effect: "read",
+    priority: "standard",
+    input: external_exports.object({ assetId: external_exports.string(), hash: external_exports.string() }).strict(),
+    output: external_exports.object({ layer: paintLayerOutput }),
+    handler: (input) => {
+      const layer = derived.paintLayers.get(input.hash);
+      if (layer === void 0) {
+        throw new SkillInvocationError("not_found", `no live derived terrain paint layer with content hash ${input.hash}`);
+      }
+      return { layer };
+    }
+  };
   registry2.register(create);
   registry2.register(deform);
   registry2.register(paint);
+  registry2.register(editLayer);
+  registry2.register(paintLayer);
   return { layers };
 }
 
@@ -131615,7 +133672,7 @@ var inertTransform6 = () => ({ position: { set() {
 } }, quaternion: { set() {
 } }, scale: { set() {
 } } });
-var inputSchema = external_exports.object({
+var inputSchema2 = external_exports.object({
   terrain: external_exports.string().optional(),
   seed: external_exports.number().int().min(-2147483648).max(2147483647).default(1337),
   spacing: external_exports.number().positive().default(0.75),
@@ -131631,7 +133688,7 @@ var inputSchema = external_exports.object({
     ctx.addIssue({ code: "custom", message: "elevationMax must be >= elevationMin", path: ["elevationMax"] });
   }
 });
-var outputSchema = external_exports.object({
+var outputSchema2 = external_exports.object({
   entity: external_exports.string(),
   gridTiles: external_exports.number().int(),
   candidateSlots: external_exports.number().int(),
@@ -131839,8 +133896,8 @@ function registerGrassFieldSkill(registry2, layers, footprints = /* @__PURE__ */
     category: "terrain",
     permissions: ["scene.write"],
     description: "Create a deterministic, bounded, paint-driven grass field using native WebGPU compute when available and the canonical CPU field plan otherwise.",
-    input: inputSchema,
-    output: outputSchema,
+    input: inputSchema2,
+    output: outputSchema2,
     handler: async (input, ctx) => {
       let terrainId = input.terrain;
       if (terrainId === void 0) for (const key of layers.keys()) terrainId = key;
@@ -132268,13 +134325,13 @@ var RIVER_TARGET_ALONG_EDGE_M = 1;
 var RIVER_MIN_CROSS_SUBDIVISIONS = 6;
 var RIVER_MAX_CROSS_SUBDIVISIONS = 20;
 var RIVER_TARGET_CROSS_EDGE_M = 0.5;
-function finite7(value, label4) {
+function finite9(value, label4) {
   if (!Number.isFinite(value)) throw new TypeError(`${label4} must be finite`);
   return Object.is(value, -0) ? 0 : value;
 }
 function point2(value, label4) {
   if (!Array.isArray(value) || value.length !== 2) throw new TypeError(`${label4} must be a 2-tuple`);
-  return [finite7(value[0], `${label4}[0]`), finite7(value[1], `${label4}[1]`)];
+  return [finite9(value[0], `${label4}[0]`), finite9(value[1], `${label4}[1]`)];
 }
 function ring(value, label4) {
   if (!Array.isArray(value) || value.length < 3 || value.length > WATER_LIMITS.ringPoints) {
@@ -132350,9 +134407,9 @@ function cleanRiver(input) {
   const cleaned = [];
   for (let index = 0; index < input.points.length; index++) {
     const [x3, z4] = point2(input.points[index], `river points[${index}]`);
-    const widthM = finite7(input.widthsM[index], `river widthsM[${index}]`);
+    const widthM = finite9(input.widthsM[index], `river widthsM[${index}]`);
     if (!(widthM > 0) || widthM > WATER_LIMITS.widthM) throw new RangeError(`river widthsM[${index}] is outside supported bounds`);
-    const elevationM = finite7(input.surfaceElevationsM[index], `river surfaceElevationsM[${index}]`);
+    const elevationM = finite9(input.surfaceElevationsM[index], `river surfaceElevationsM[${index}]`);
     const previous = cleaned[cleaned.length - 1];
     if (previous !== void 0 && Math.hypot(x3 - previous.x, z4 - previous.z) <= DUPLICATE_EPSILON_M) {
       previous.widthM = Math.max(previous.widthM, widthM);
@@ -132434,7 +134491,7 @@ function riverPointFlowDirections(segmentDirections, pointCount) {
 }
 function buildVariableRiverRibbonGeometry(input) {
   const points2 = cleanRiver(input);
-  const miterLimit = finite7(input.miterLimit ?? DEFAULT_MITER_LIMIT, "river miterLimit");
+  const miterLimit = finite9(input.miterLimit ?? DEFAULT_MITER_LIMIT, "river miterLimit");
   if (miterLimit < 1 || miterLimit > 16) throw new RangeError("river miterLimit must be in [1, 16]");
   const built = joins(points2, miterLimit);
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
@@ -137801,20 +139858,20 @@ function stableId(value, label4) {
   if (!STABLE_ID.test(out)) throw new Error(`functional building: ${label4} must be a stable lowercase id`);
   return out;
 }
-function finite8(value, label4) {
+function finite10(value, label4) {
   if (typeof value !== "number" || !Number.isFinite(value))
     throw new Error(`functional building: ${label4} must be finite`);
   return value;
 }
 function vec34(value, label4, positive5 = false) {
   if (!Array.isArray(value) || value.length !== 3) throw new Error(`functional building: ${label4} must be a vec3`);
-  const out = [finite8(value[0], `${label4}[0]`), finite8(value[1], `${label4}[1]`), finite8(value[2], `${label4}[2]`)];
+  const out = [finite10(value[0], `${label4}[0]`), finite10(value[1], `${label4}[1]`), finite10(value[2], `${label4}[2]`)];
   if (positive5 && out.some((axis) => axis <= 0)) throw new Error(`functional building: ${label4} axes must be positive`);
   return out;
 }
 function vec23(value, label4, positive5 = false) {
   if (!Array.isArray(value) || value.length !== 2) throw new Error(`functional building: ${label4} must be a vec2`);
-  const out = [finite8(value[0], `${label4}[0]`), finite8(value[1], `${label4}[1]`)];
+  const out = [finite10(value[0], `${label4}[0]`), finite10(value[1], `${label4}[1]`)];
   if (positive5 && out.some((axis) => axis <= 0)) throw new Error(`functional building: ${label4} axes must be positive`);
   return out;
 }
@@ -137822,10 +139879,10 @@ function quaternion(value, label4) {
   if (!Array.isArray(value) || value.length !== 4)
     throw new Error(`functional building: ${label4} must be a quaternion`);
   const out = [
-    finite8(value[0], `${label4}[0]`),
-    finite8(value[1], `${label4}[1]`),
-    finite8(value[2], `${label4}[2]`),
-    finite8(value[3], `${label4}[3]`)
+    finite10(value[0], `${label4}[0]`),
+    finite10(value[1], `${label4}[1]`),
+    finite10(value[2], `${label4}[2]`),
+    finite10(value[3], `${label4}[3]`)
   ];
   if (Math.abs(Math.sqrt(out.reduce((sum, axis) => sum + axis * axis, 0)) - 1) > 1e-5)
     throw new Error(`functional building: ${label4} must be normalized`);
@@ -137850,12 +139907,12 @@ function boundedArray(value, label4, minimum, maximum) {
   return value;
 }
 function coefficient(value, label4) {
-  const out = finite8(value, label4);
+  const out = finite10(value, label4);
   if (out < 0 || out > 1) throw new Error(`functional building: ${label4} must be within [0,1]`);
   return out;
 }
 function positive3(value, label4) {
-  const out = finite8(value, label4);
+  const out = finite10(value, label4);
   if (out <= 0) throw new Error(`functional building: ${label4} must be positive`);
   return out;
 }
@@ -137933,10 +139990,10 @@ function parseFunctionalBuildingContract(bytes) {
   let site;
   if (authority.site !== void 0) {
     const rawSite = object2(authority.site, "site");
-    const finishedFloorY = finite8(rawSite.finishedFloorY, "site.finishedFloorY");
-    const terrainClearance = finite8(rawSite.terrainClearance, "site.terrainClearance");
-    const vegetationClearance = finite8(rawSite.vegetationClearance, "site.vegetationClearance");
-    const maximumTerrainRelief = finite8(rawSite.maximumTerrainRelief, "site.maximumTerrainRelief");
+    const finishedFloorY = finite10(rawSite.finishedFloorY, "site.finishedFloorY");
+    const terrainClearance = finite10(rawSite.terrainClearance, "site.terrainClearance");
+    const vegetationClearance = finite10(rawSite.vegetationClearance, "site.vegetationClearance");
+    const maximumTerrainRelief = finite10(rawSite.maximumTerrainRelief, "site.maximumTerrainRelief");
     if (terrainClearance < 0.05 || terrainClearance > 1 || vegetationClearance < 0 || vegetationClearance > 5 || maximumTerrainRelief <= 0 || maximumTerrainRelief > 5)
       throw new Error("functional building: site policy is outside bounded construction limits");
     site = {
@@ -137948,7 +140005,7 @@ function parseFunctionalBuildingContract(bytes) {
       maximumTerrainRelief
     };
     if (rawSite.entranceSupport !== void 0) {
-      const support2 = object2(rawSite.entranceSupport, "site.entranceSupport"), yawRadians = finite8(support2.yawRadians, "site.entranceSupport.yawRadians"), exteriorGradeY = finite8(support2.exteriorGradeY, "site.entranceSupport.exteriorGradeY"), bearingDepth = finite8(support2.bearingDepth, "site.entranceSupport.bearingDepth"), maximumCutDepth = finite8(support2.maximumCutDepth, "site.entranceSupport.maximumCutDepth"), maximumVariation = finite8(support2.maximumVariation, "site.entranceSupport.maximumVariation");
+      const support2 = object2(rawSite.entranceSupport, "site.entranceSupport"), yawRadians = finite10(support2.yawRadians, "site.entranceSupport.yawRadians"), exteriorGradeY = finite10(support2.exteriorGradeY, "site.entranceSupport.exteriorGradeY"), bearingDepth = finite10(support2.bearingDepth, "site.entranceSupport.bearingDepth"), maximumCutDepth = finite10(support2.maximumCutDepth, "site.entranceSupport.maximumCutDepth"), maximumVariation = finite10(support2.maximumVariation, "site.entranceSupport.maximumVariation");
       if (bearingDepth <= 0 || bearingDepth > 0.5 || maximumCutDepth < 0 || maximumCutDepth > 0.2 || maximumVariation <= 0 || maximumVariation > 0.25)
         throw new Error("functional building: entrance support policy is outside bounded construction limits");
       site.entranceSupport = {
@@ -137983,7 +140040,7 @@ function parseFunctionalBuildingContract(bytes) {
   }
   const root = semantic.get(rootNodeId);
   if (root?.role !== "root") throw new Error("functional building: rootNodeId does not resolve to a root node");
-  const scenes = Array.isArray(json2.scenes) ? json2.scenes : [], sceneIndex = json2.scene === void 0 ? 0 : finite8(json2.scene, "scene");
+  const scenes = Array.isArray(json2.scenes) ? json2.scenes : [], sceneIndex = json2.scene === void 0 ? 0 : finite10(json2.scene, "scene");
   if (!Number.isSafeInteger(sceneIndex) || scenes.length !== 1 || sceneIndex !== 0)
     throw new Error("functional building: asset requires exactly one canonical scene");
   const scene = object2(scenes[sceneIndex], `scenes[${sceneIndex}]`), sceneRoots = scene.nodes;
@@ -138001,7 +140058,7 @@ function parseFunctionalBuildingContract(bytes) {
     if (raw3.children !== void 0) {
       if (!Array.isArray(raw3.children))
         throw new Error(`functional building: nodes[${index}].children must be an array`);
-      for (const child of raw3.children) visit(finite8(child, `nodes[${index}].children`));
+      for (const child of raw3.children) visit(finite10(child, `nodes[${index}].children`));
     }
     visiting.delete(index);
   };
@@ -138031,8 +140088,8 @@ function parseFunctionalBuildingContract(bytes) {
       const portalId = string4(item.data.portalId, `${item.nodeId}.portalId`);
       if (!roomIds.includes(roomId) || !portalIds.includes(portalId))
         throw new Error(`functional building: door ${item.nodeId} has unresolved room/portal`);
-      const closedYaw = finite8(item.data.closedYaw, `${item.nodeId}.closedYaw`);
-      const openYaw = finite8(item.data.openYaw, `${item.nodeId}.openYaw`);
+      const closedYaw = finite10(item.data.closedYaw, `${item.nodeId}.closedYaw`);
+      const openYaw = finite10(item.data.openYaw, `${item.nodeId}.openYaw`);
       if (Math.abs(openYaw - closedYaw) < 0.5)
         throw new Error(`functional building: door ${item.nodeId} has no useful open sweep`);
       doors.push({
@@ -138055,7 +140112,7 @@ function parseFunctionalBuildingContract(bytes) {
     const support2 = site.entranceSupport, item = semantic.get(support2.sourcePrimitiveId), boxData = item?.data.box === void 0 ? void 0 : object2(item.data.box, `${support2.sourcePrimitiveId}.box`);
     if (item?.role !== "architecture-primitive" || boxData === void 0)
       throw new Error("functional building: entrance support source primitive is unresolved");
-    const center = vec34(boxData.center, `${support2.sourcePrimitiveId}.box.center`), halfExtents = vec34(boxData.halfExtents, `${support2.sourcePrimitiveId}.box.halfExtents`, true), yaw = finite8(boxData.yawRadians, `${support2.sourcePrimitiveId}.box.yawRadians`);
+    const center = vec34(boxData.center, `${support2.sourcePrimitiveId}.box.center`), halfExtents = vec34(boxData.halfExtents, `${support2.sourcePrimitiveId}.box.halfExtents`, true), yaw = finite10(boxData.yawRadians, `${support2.sourcePrimitiveId}.box.yawRadians`);
     if (Math.abs(center[0] - support2.center[0]) > 1e-3 || Math.abs(center[2] - support2.center[1]) > 1e-3 || Math.abs(halfExtents[0] - support2.halfExtents[0]) > 1e-3 || Math.abs(halfExtents[2] - support2.halfExtents[1]) > 1e-3 || Math.abs(yaw - support2.yawRadians) > 1e-3 || Math.abs(center[1] - halfExtents[1] - (support2.exteriorGradeY - support2.bearingDepth)) > 1e-3)
       throw new Error("functional building: entrance support does not match its structural source primitive");
     const c2 = Math.cos(support2.yawRadians), s2 = Math.sin(support2.yawRadians), limitX = site.footprintHalfExtents[0] + site.vegetationClearance, limitZ = site.footprintHalfExtents[1] + site.vegetationClearance;
@@ -138106,8 +140163,8 @@ function parseFunctionalBuildingContract(bytes) {
       center: vec34(boundsRaw.center, `${label4}.bounds.center`),
       halfExtents: vec34(boundsRaw.halfExtents, `${label4}.bounds.halfExtents`, true)
     };
-    const finishedFloorY = finite8(value.finishedFloorY, `${label4}.finishedFloorY`), ceilingY = finite8(value.ceilingY, `${label4}.ceilingY`);
-    const storey = finite8(value.storey, `${label4}.storey`);
+    const finishedFloorY = finite10(value.finishedFloorY, `${label4}.finishedFloorY`), ceilingY = finite10(value.ceilingY, `${label4}.ceilingY`);
+    const storey = finite10(value.storey, `${label4}.storey`);
     if (!Number.isSafeInteger(storey) || storey < 0 || storey > 63)
       throw new Error(`functional building: ${label4}.storey must be an integer within [0,63]`);
     if (ceilingY - finishedFloorY < 1.8 || Math.abs(bounds.center[1] - bounds.halfExtents[1] - finishedFloorY) > 1e-4 || Math.abs(bounds.center[1] + bounds.halfExtents[1] - ceilingY) > 1e-4)
@@ -138207,7 +140264,7 @@ function parseFunctionalBuildingContract(bytes) {
       if (!fromRoom || !toRoom || fromRoom === toRoom || !contains(fromRoom, from) || !contains(toRoom, to))
         throw new Error(`functional building: ${label4} endpoints must resolve inside two distinct rooms`);
       const rise = positive3(value.rise, `${label4}.rise`), run2 = positive3(value.run, `${label4}.run`), actualRise = Math.abs(to[1] - from[1]);
-      const riserCount = finite8(value.riserCount, `${label4}.riserCount`), treadDepth = positive3(value.treadDepth, `${label4}.treadDepth`);
+      const riserCount = finite10(value.riserCount, `${label4}.riserCount`), treadDepth = positive3(value.treadDepth, `${label4}.treadDepth`);
       const clearWidth = positive3(value.clearWidth, `${label4}.clearWidth`), clearHeight = positive3(value.clearHeight, `${label4}.clearHeight`);
       const openingRaw = object2(value.upperFloorOpening, `${label4}.upperFloorOpening`);
       exactKeys(openingRaw, ["center", "halfExtents"], [], `${label4}.upperFloorOpening`);
@@ -138221,7 +140278,7 @@ function parseFunctionalBuildingContract(bytes) {
         return {
           from: vec34(flight.from, `${label4}.flights[${flightIndex}].from`),
           to: vec34(flight.to, `${label4}.flights[${flightIndex}].to`),
-          riserCount: finite8(flight.riserCount, `${label4}.flights[${flightIndex}].riserCount`)
+          riserCount: finite10(flight.riserCount, `${label4}.flights[${flightIndex}].riserCount`)
         };
       }), intermediateLandings = value.intermediateLandings === void 0 ? void 0 : boundedArray(value.intermediateLandings, `${label4}.intermediateLandings`, 1, 3).map(
         (rawLanding, landingIndex) => {
@@ -138239,7 +140296,7 @@ function parseFunctionalBuildingContract(bytes) {
               `${label4}.intermediateLandings[${landingIndex}].halfExtents`,
               true
             ),
-            yawRadians: finite8(landing.yawRadians, `${label4}.intermediateLandings[${landingIndex}].yawRadians`)
+            yawRadians: finite10(landing.yawRadians, `${label4}.intermediateLandings[${landingIndex}].yawRadians`)
           };
         }
       );
@@ -139319,7 +141376,7 @@ function id(value, label4) {
 function hash4(value, label4) {
   return string5(value, HASH, 71, label4);
 }
-function denseArray2(value, minimum, maximum, label4) {
+function denseArray4(value, minimum, maximum, label4) {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length < minimum || value.length > maximum || Object.getOwnPropertySymbols(value).length !== 0 || Object.getOwnPropertyNames(value).length !== value.length + 1) {
     fail6(`${label4} must be a dense, field-free array with ${minimum}..${maximum} entries`);
   }
@@ -139334,7 +141391,7 @@ function uint3(value, maximum, label4, positive5 = false) {
   return value;
 }
 function sortedUniqueIds(value, maximum, label4) {
-  const source = denseArray2(value, 1, maximum, label4), output3 = source.map((entry, index) => id(entry, `${label4}[${index}]`));
+  const source = denseArray4(value, 1, maximum, label4), output3 = source.map((entry, index) => id(entry, `${label4}[${index}]`));
   for (let index = 1; index < output3.length; index++) if (output3[index - 1] >= output3[index]) fail6(`${label4} must be strictly id-sorted and unique`);
   return Object.freeze(output3);
 }
@@ -139356,7 +141413,7 @@ function jsonDomain(value) {
   }
   return value;
 }
-function canonicalHash(value, label4) {
+function canonicalHash2(value, label4) {
   try {
     return `sha256:${sha256(canonicalCompilerJson(jsonDomain(value), { maxBytes: 1024 * 1024, maxDepth: 32, maxNodes: 1e5, maxProperties: 64, maxArrayLength: 2048 }))}`;
   } catch (error51) {
@@ -139407,7 +141464,7 @@ function lodProof(value, fingerprint, label4) {
   const d2 = record2(value, /* @__PURE__ */ new Set(["schema", "articulatedDoorPolicy", "articulatedDoorRootIndex", "levels"]), /* @__PURE__ */ new Set(), label4);
   if (d2.schema.value !== FUNCTIONAL_BUILDING_LOD_PROOF_SCHEMA) fail6(`${label4}.schema is unsupported`);
   if (d2.articulatedDoorPolicy.value !== "shared-outside-static-lods") fail6(`${label4}.articulatedDoorPolicy must isolate doors from static LODs`);
-  const levels = denseArray2(d2.levels.value, 2, FUNCTIONAL_BUILDING_CATALOG_LIMITS.lodLevels, `${label4}.levels`).map((raw3, index) => {
+  const levels = denseArray4(d2.levels.value, 2, FUNCTIONAL_BUILDING_CATALOG_LIMITS.lodLevels, `${label4}.levels`).map((raw3, index) => {
     const level = record2(raw3, /* @__PURE__ */ new Set(["level", "rootIndex", "semanticFingerprint"]), /* @__PURE__ */ new Set(), `${label4}.levels[${index}]`);
     if (level.level.value !== index) fail6(`${label4}.levels must be contiguous from zero`);
     const semanticFingerprint = hash4(level.semanticFingerprint.value, `${label4}.levels[${index}].semanticFingerprint`);
@@ -139455,7 +141512,7 @@ function parseInertEntry(value, label4) {
 function parseFunctionalBuildingCatalog(value) {
   const d2 = record2(value, /* @__PURE__ */ new Set(["schema", "catalogId", "revision", "entries"]), /* @__PURE__ */ new Set(), "functional building catalog");
   if (d2.schema.value !== FUNCTIONAL_BUILDING_CATALOG_SCHEMA) fail6("functional building catalog.schema is unsupported");
-  const entries = denseArray2(d2.entries.value, 1, FUNCTIONAL_BUILDING_CATALOG_LIMITS.entries, "functional building catalog.entries").map((entry, index) => {
+  const entries = denseArray4(d2.entries.value, 1, FUNCTIONAL_BUILDING_CATALOG_LIMITS.entries, "functional building catalog.entries").map((entry, index) => {
     if (entry === null || typeof entry !== "object") fail6(`functional building catalog.entries[${index}] must be an object`);
     const placementClass = Object.getOwnPropertyDescriptor(entry, "placementClass");
     if (!placementClass || !("value" in placementClass)) fail6(`functional building catalog.entries[${index}].placementClass must be a data field`);
@@ -139495,11 +141552,11 @@ function semanticCore(contract) {
 }
 function deriveFunctionalBuildingSemanticFingerprint(contract) {
   if (contract?.schema !== FUNCTIONAL_BUILDING_CONTRACT_V2) fail6(`semantic fingerprint requires ${FUNCTIONAL_BUILDING_CONTRACT_V2}`);
-  return canonicalHash(semanticCore(contract), "functional building semantic identity");
+  return canonicalHash2(semanticCore(contract), "functional building semantic identity");
 }
 function deriveFunctionalBuildingContractHash(contract) {
   if (contract?.schema !== FUNCTIONAL_BUILDING_CONTRACT_V2) fail6(`contract hash requires ${FUNCTIONAL_BUILDING_CONTRACT_V2}`);
-  return canonicalHash(contract, "functional building contract");
+  return canonicalHash2(contract, "functional building contract");
 }
 function deriveFunctionalBuildingSemanticIdentity(contract) {
   const sorted = (values) => Object.freeze(values.map((entry) => entry.id).sort((a2, b3) => a2 < b3 ? -1 : a2 > b3 ? 1 : 0));
@@ -139639,7 +141696,7 @@ function array4(value, length3, label4) {
     fail7(`${label4} must be a dense, field-free ${length3}-vector`);
   return value;
 }
-function finite9(value, minimum, maximum, label4) {
+function finite11(value, minimum, maximum, label4) {
   if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || value < minimum || value > maximum)
     fail7(`${label4} must be a bounded finite number`);
   return value;
@@ -139663,7 +141720,7 @@ function path(value, label4) {
 }
 function vector(value, length3, label4, magnitude = FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude) {
   return Object.freeze(
-    array4(value, length3, label4).map((item, index) => finite9(item, -magnitude, magnitude, `${label4}[${index}]`))
+    array4(value, length3, label4).map((item, index) => finite11(item, -magnitude, magnitude, `${label4}[${index}]`))
   );
 }
 function metrics(value, label4) {
@@ -139673,17 +141730,17 @@ function metrics(value, label4) {
     /* @__PURE__ */ new Set(),
     label4
   );
-  const terrainMinimum = finite9(
+  const terrainMinimum = finite11(
     d2.terrainMinimum.value,
     -FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude,
     FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude,
     `${label4}.terrainMinimum`
-  ), terrainMaximum = finite9(
+  ), terrainMaximum = finite11(
     d2.terrainMaximum.value,
     terrainMinimum,
     FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude,
     `${label4}.terrainMaximum`
-  ), terrainRelief = finite9(
+  ), terrainRelief = finite11(
     d2.terrainRelief.value,
     0,
     FUNCTIONAL_BUILDING_SITE_LIMITS.coordinateMagnitude,
@@ -139708,7 +141765,7 @@ function support(value, label4) {
     /* @__PURE__ */ new Set(),
     label4
   );
-  const terrainMinimum = finite9(d2.terrainMinimum.value, -1e9, 1e9, `${label4}.terrainMinimum`), terrainMaximum = finite9(d2.terrainMaximum.value, terrainMinimum, 1e9, `${label4}.terrainMaximum`), terrainVariation = finite9(d2.terrainVariation.value, 0, 1e9, `${label4}.terrainVariation`), worldGradeY = finite9(d2.worldGradeY.value, -1e9, 1e9, `${label4}.worldGradeY`), fillDepth = finite9(d2.fillDepth.value, 0, 1e9, `${label4}.fillDepth`), cutDepth = finite9(d2.cutDepth.value, 0, 1e9, `${label4}.cutDepth`), sampleCount = uint4(d2.sampleCount.value, FUNCTIONAL_BUILDING_SITE_LIMITS.maximumSamples, `${label4}.sampleCount`);
+  const terrainMinimum = finite11(d2.terrainMinimum.value, -1e9, 1e9, `${label4}.terrainMinimum`), terrainMaximum = finite11(d2.terrainMaximum.value, terrainMinimum, 1e9, `${label4}.terrainMaximum`), terrainVariation = finite11(d2.terrainVariation.value, 0, 1e9, `${label4}.terrainVariation`), worldGradeY = finite11(d2.worldGradeY.value, -1e9, 1e9, `${label4}.worldGradeY`), fillDepth = finite11(d2.fillDepth.value, 0, 1e9, `${label4}.fillDepth`), cutDepth = finite11(d2.cutDepth.value, 0, 1e9, `${label4}.cutDepth`), sampleCount = uint4(d2.sampleCount.value, FUNCTIONAL_BUILDING_SITE_LIMITS.maximumSamples, `${label4}.sampleCount`);
   if (Math.abs(terrainMaximum - terrainMinimum - terrainVariation) > EPS3 || Math.abs(Math.max(0, worldGradeY - terrainMinimum) - fillDepth) > EPS3 || Math.abs(Math.max(0, terrainMaximum - worldGradeY) - cutDepth) > EPS3)
     fail7(`${label4} metrics are internally inconsistent`);
   return Object.freeze({
@@ -139757,7 +141814,7 @@ function parseFunctionalBuildingSiteArtifact(value) {
     "functional building site artifact.placement"
   ), placement = Object.freeze({
     position: vector(placementRaw.position.value, 3, "placement.position"),
-    yaw: finite9(placementRaw.yaw.value, -Math.PI, Math.PI, "placement.yaw")
+    yaw: finite11(placementRaw.yaw.value, -Math.PI, Math.PI, "placement.yaw")
   });
   const policyRaw = record3(
     d2.policy.value,
@@ -139765,19 +141822,19 @@ function parseFunctionalBuildingSiteArtifact(value) {
     /* @__PURE__ */ new Set(),
     "functional building site artifact.policy"
   ), policy = Object.freeze({
-    maximumSampleSpacing: finite9(
+    maximumSampleSpacing: finite11(
       policyRaw.maximumSampleSpacing.value,
       Number.MIN_VALUE,
       1,
       "policy.maximumSampleSpacing"
     ),
-    maximumTerrainGrade: finite9(
+    maximumTerrainGrade: finite11(
       policyRaw.maximumTerrainGrade.value,
       0,
       FUNCTIONAL_BUILDING_SITE_LIMITS.maximumTerrainGrade,
       "policy.maximumTerrainGrade"
     ),
-    maximumRouteElevationDelta: finite9(
+    maximumRouteElevationDelta: finite11(
       policyRaw.maximumRouteElevationDelta.value,
       0,
       FUNCTIONAL_BUILDING_SITE_LIMITS.maximumRouteElevationTolerance,
@@ -139793,7 +141850,7 @@ function parseFunctionalBuildingSiteArtifact(value) {
     center: vector(footprintRaw.center.value, 2, "footprint.center"),
     halfExtents: vector(footprintRaw.halfExtents.value, 2, "footprint.halfExtents"),
     metrics: metrics(footprintRaw.metrics.value, "footprint.metrics"),
-    maximumObservedGrade: finite9(
+    maximumObservedGrade: finite11(
       footprintRaw.maximumObservedGrade.value,
       0,
       FUNCTIONAL_BUILDING_SITE_LIMITS.maximumTerrainGrade,
@@ -139808,11 +141865,11 @@ function parseFunctionalBuildingSiteArtifact(value) {
     /* @__PURE__ */ new Set(),
     "functional building site artifact.foundation"
   ), foundation = Object.freeze({
-    rootWorldY: finite9(foundationRaw.rootWorldY.value, -1e9, 1e9, "foundation.rootWorldY"),
-    finishedFloorWorldY: finite9(foundationRaw.finishedFloorWorldY.value, -1e9, 1e9, "foundation.finishedFloorWorldY"),
-    bearingPlaneWorldY: finite9(foundationRaw.bearingPlaneWorldY.value, -1e9, 1e9, "foundation.bearingPlaneWorldY"),
-    maximumFillDepth: finite9(foundationRaw.maximumFillDepth.value, 0, 1e9, "foundation.maximumFillDepth"),
-    maximumCutDepth: finite9(foundationRaw.maximumCutDepth.value, 0, 1e9, "foundation.maximumCutDepth")
+    rootWorldY: finite11(foundationRaw.rootWorldY.value, -1e9, 1e9, "foundation.rootWorldY"),
+    finishedFloorWorldY: finite11(foundationRaw.finishedFloorWorldY.value, -1e9, 1e9, "foundation.finishedFloorWorldY"),
+    bearingPlaneWorldY: finite11(foundationRaw.bearingPlaneWorldY.value, -1e9, 1e9, "foundation.bearingPlaneWorldY"),
+    maximumFillDepth: finite11(foundationRaw.maximumFillDepth.value, 0, 1e9, "foundation.maximumFillDepth"),
+    maximumCutDepth: finite11(foundationRaw.maximumCutDepth.value, 0, 1e9, "foundation.maximumCutDepth")
   });
   if (Math.abs(foundation.bearingPlaneWorldY - footprint.metrics.terrainMaximum) > EPS3 || Math.abs(foundation.maximumFillDepth - footprint.metrics.terrainRelief) > EPS3 || foundation.maximumCutDepth > EPS3)
     fail7("functional building site artifact foundation does not bear on the sampled terrain envelope");
@@ -139823,9 +141880,9 @@ function parseFunctionalBuildingSiteArtifact(value) {
     "functional building site artifact.routeContact"
   ), routeContact = Object.freeze({
     position: vector(routeRaw.position.value, 3, "routeContact.position"),
-    terrainY: finite9(routeRaw.terrainY.value, -1e9, 1e9, "routeContact.terrainY"),
-    worldGradeY: finite9(routeRaw.worldGradeY.value, -1e9, 1e9, "routeContact.worldGradeY"),
-    elevationDelta: finite9(routeRaw.elevationDelta.value, 0, 1e9, "routeContact.elevationDelta")
+    terrainY: finite11(routeRaw.terrainY.value, -1e9, 1e9, "routeContact.terrainY"),
+    worldGradeY: finite11(routeRaw.worldGradeY.value, -1e9, 1e9, "routeContact.worldGradeY"),
+    elevationDelta: finite11(routeRaw.elevationDelta.value, 0, 1e9, "routeContact.elevationDelta")
   });
   if (Math.abs(Math.abs(routeContact.worldGradeY - routeContact.terrainY) - routeContact.elevationDelta) > EPS3 || routeContact.elevationDelta > policy.maximumRouteElevationDelta + EPS3 || Math.abs(routeContact.position[1] - routeContact.worldGradeY) > EPS3)
     fail7("functional building site artifact route contact violates its elevation policy");
@@ -139878,7 +141935,7 @@ function pointInSupport(site, localX, localZ) {
 function resolveFunctionalBuildingSiteArtifact(input) {
   const site = input.contract?.site;
   if (!site?.entranceSupport) fail7("site artifact requires an authored entrance support");
-  const spacing = finite9(input.maximumSampleSpacing ?? 0.5, Number.MIN_VALUE, 1, "maximumSampleSpacing"), maximumTerrainGrade = finite9(input.maximumTerrainGrade ?? 0.75, 0, 4, "maximumTerrainGrade"), maximumRouteElevationDelta = finite9(input.maximumRouteElevationDelta ?? 0.1, 0, 0.5, "maximumRouteElevationDelta"), position = vector(input.position, 3, "position"), yaw = finite9(input.yaw, -Math.PI, Math.PI, "yaw"), route2 = vector(input.routeContact, 3, "routeContact");
+  const spacing = finite11(input.maximumSampleSpacing ?? 0.5, Number.MIN_VALUE, 1, "maximumSampleSpacing"), maximumTerrainGrade = finite11(input.maximumTerrainGrade ?? 0.75, 0, 4, "maximumTerrainGrade"), maximumRouteElevationDelta = finite11(input.maximumRouteElevationDelta ?? 0.1, 0, 0.5, "maximumRouteElevationDelta"), position = vector(input.position, 3, "position"), yaw = finite11(input.yaw, -Math.PI, Math.PI, "yaw"), route2 = vector(input.routeContact, 3, "routeContact");
   if (typeof input.sampleHeight !== "function") fail7("site artifact sampleHeight must be a function");
   const resolved = resolveFunctionalBuildingSitePlacement({
     contract: input.contract,
@@ -139992,7 +142049,7 @@ function verifyFunctionalBuildingSiteArtifact(bytes, expectedRef, liveInput) {
     semanticFingerprint: hash5(liveInput.semanticFingerprint, "live settlement semanticFingerprint"),
     worldMapHash: hash5(liveInput.worldMapHash, "live settlement worldMapHash"),
     position: vector(liveInput.position, 3, "live settlement position"),
-    yaw: finite9(liveInput.yaw, -Math.PI, Math.PI, "live settlement yaw"),
+    yaw: finite11(liveInput.yaw, -Math.PI, Math.PI, "live settlement yaw"),
     routeContact: vector(liveInput.routeContact, 3, "live settlement routeContact")
   };
   if (decoded.artifact.placementId !== expected.placementId || decoded.artifact.bindings.contractHash !== expected.contractHash || decoded.artifact.bindings.semanticFingerprint !== expected.semanticFingerprint || decoded.artifact.bindings.worldMapHash !== expected.worldMapHash || canonicalCompilerJson(decoded.artifact.placement) !== canonicalCompilerJson({ position: expected.position, yaw: expected.yaw }) || canonicalCompilerJson(decoded.artifact.routeContact.position) !== canonicalCompilerJson(expected.routeContact))
@@ -140060,7 +142117,7 @@ function record4(value, required2, optional2, label4) {
   for (const key of required2) if (!Object.hasOwn(value, key)) fail8(`${label4} is missing '${key}'`);
   return descriptors2;
 }
-function denseArray3(value, minimum, maximum, label4) {
+function denseArray5(value, minimum, maximum, label4) {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length < minimum || value.length > maximum || Object.getOwnPropertySymbols(value).length !== 0 || Object.getOwnPropertyNames(value).length !== value.length + 1) {
     fail8(`${label4} must be a dense, field-free array with ${minimum}..${maximum} entries`);
   }
@@ -140078,7 +142135,7 @@ function id3(value, label4) {
 function hash6(value, label4) {
   return text(value, HASH3, 71, label4);
 }
-function finite10(value, minimum, maximum, label4) {
+function finite12(value, minimum, maximum, label4) {
   if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || value < minimum || value > maximum) fail8(`${label4} is not a bounded finite number`);
   return value;
 }
@@ -140087,7 +142144,7 @@ function uint5(value, maximum, label4, positive5 = false) {
   return value;
 }
 function vector2(value, length3, label4, magnitude = FUNCTIONAL_SETTLEMENT_LIMITS.coordinateMagnitude) {
-  return Object.freeze(denseArray3(value, length3, length3, label4).map((component, index) => finite10(component, -magnitude, magnitude, `${label4}[${index}]`)));
+  return Object.freeze(denseArray5(value, length3, length3, label4).map((component, index) => finite12(component, -magnitude, magnitude, `${label4}[${index}]`)));
 }
 function direction2(value, label4) {
   const output3 = vector2(value, 2, label4, 1);
@@ -140095,7 +142152,7 @@ function direction2(value, label4) {
   return output3;
 }
 function sortedUniqueIds2(value, maximum, label4, allowEmpty = false) {
-  const source = denseArray3(value, allowEmpty ? 0 : 1, maximum, label4);
+  const source = denseArray5(value, allowEmpty ? 0 : 1, maximum, label4);
   const output3 = source.map((entry, index) => id3(entry, `${label4}[${index}]`));
   for (let index = 1; index < output3.length; index++) if (output3[index - 1] >= output3[index]) fail8(`${label4} must be strictly id-sorted and unique`);
   return Object.freeze(output3);
@@ -140161,13 +142218,13 @@ function parsePlacement3(value, planId, catalogEntries, label4) {
   if (catalogContractHash !== entry.functionalContract.hash) fail8(`${label4} does not preserve the catalog contract hash`);
   if (semanticFingerprint !== entry.semanticIdentity.fingerprint) fail8(`${label4} does not preserve the catalog semantic fingerprint`);
   const position = vector2(d2.position.value, 3, `${label4}.position`);
-  const yaw = finite10(d2.yaw.value, -Math.PI, Math.PI, `${label4}.yaw`);
+  const yaw = finite12(d2.yaw.value, -Math.PI, Math.PI, `${label4}.yaw`);
   const atlas = record4(d2.atlasBinding.value, /* @__PURE__ */ new Set(["anchorId", "routeId", "anchorPosition", "anchorYaw"]), /* @__PURE__ */ new Set(), `${label4}.atlasBinding`);
   const atlasBinding = Object.freeze({
     anchorId: id3(atlas.anchorId.value, `${label4}.atlasBinding.anchorId`),
     routeId: id3(atlas.routeId.value, `${label4}.atlasBinding.routeId`),
     anchorPosition: vector2(atlas.anchorPosition.value, 3, `${label4}.atlasBinding.anchorPosition`),
-    anchorYaw: finite10(atlas.anchorYaw.value, -Math.PI, Math.PI, `${label4}.atlasBinding.anchorYaw`)
+    anchorYaw: finite12(atlas.anchorYaw.value, -Math.PI, Math.PI, `${label4}.atlasBinding.anchorYaw`)
   });
   if (!nearVector(position, atlasBinding.anchorPosition) || !near(yaw, atlasBinding.anchorYaw)) fail8(`${label4}.atlasBinding must retain the exact placement position and rotation`);
   const placementId = id3(d2.placementId.value, `${label4}.placementId`);
@@ -140224,7 +142281,7 @@ function parseFunctionalSettlementPlan(value, catalogValue) {
   const catalogRef = parseCatalogRef(d2.catalog.value, catalog, "functional settlement plan.catalog");
   const atlas = parseAtlasRef(d2.atlas.value, "functional settlement plan.atlas");
   const catalogEntries = new Map(catalog.entries.map((entry) => [entry.entryId, entry]));
-  const placements = denseArray3(d2.placements.value, 1, FUNCTIONAL_SETTLEMENT_LIMITS.placements, "functional settlement plan.placements").map((placement, index) => parsePlacement3(placement, planId, catalogEntries, `functional settlement plan.placements[${index}]`));
+  const placements = denseArray5(d2.placements.value, 1, FUNCTIONAL_SETTLEMENT_LIMITS.placements, "functional settlement plan.placements").map((placement, index) => parsePlacement3(placement, planId, catalogEntries, `functional settlement plan.placements[${index}]`));
   for (let index = 1; index < placements.length; index++) if (placements[index - 1].placementId >= placements[index].placementId) fail8("functional settlement plan.placements must be strictly placementId-sorted and unique");
   const anchors = /* @__PURE__ */ new Set(), residencyUnits = /* @__PURE__ */ new Set();
   for (const placement of placements) {
@@ -140256,7 +142313,7 @@ var FunctionalSettlementAtlasResolutionError = class extends Error {
 function fail9(message) {
   throw new FunctionalSettlementAtlasResolutionError(message);
 }
-function finite11(value, minimum, maximum, label4) {
+function finite13(value, minimum, maximum, label4) {
   if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || value < minimum || value > maximum) fail9(`${label4} is not a bounded finite number`);
   return value;
 }
@@ -140294,7 +142351,7 @@ function resolveFunctionalSettlementAtlas(planValue, catalogValue, worldMapValue
     if (key !== "connectorToleranceM") fail9(`Atlas resolution options has unknown field '${key}'`);
     if (!("value" in descriptor3) || descriptor3.enumerable !== true) fail9(`Atlas resolution options.${key} must be an enumerable data field`);
   }
-  const connectorToleranceM = optionDescriptors.connectorToleranceM === void 0 ? 0 : finite11(optionDescriptors.connectorToleranceM.value, 0, FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.connectorToleranceM, "Atlas connectorToleranceM");
+  const connectorToleranceM = optionDescriptors.connectorToleranceM === void 0 ? 0 : finite13(optionDescriptors.connectorToleranceM.value, 0, FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.connectorToleranceM, "Atlas connectorToleranceM");
   const verification = verifyWorldMap(worldMap);
   if (!verification.ok) fail9(`WorldMap content hash mismatch: expected ${verification.expected}, actual ${verification.actual}`);
   if (worldMap.id !== plan.atlas.mapId) fail9(`settlement Atlas map id '${plan.atlas.mapId}' does not match WorldMap '${worldMap.id}'`);
@@ -140318,8 +142375,8 @@ function resolveFunctionalSettlementAtlas(planValue, catalogValue, worldMapValue
     totalRoutePoints += route2.points.length;
     if (totalRoutePoints > FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.totalRoutePoints) fail9(`WorldMap route geometry exceeds ${FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.totalRoutePoints} points`);
     for (let pointIndex = 0; pointIndex < route2.points.length; pointIndex++) {
-      finite11(route2.points[pointIndex][0], -FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.coordinateMagnitudeM, FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.coordinateMagnitudeM, `WorldMap route '${route2.id}'.points[${pointIndex}][0]`);
-      finite11(route2.points[pointIndex][1], -FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.coordinateMagnitudeM, FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.coordinateMagnitudeM, `WorldMap route '${route2.id}'.points[${pointIndex}][1]`);
+      finite13(route2.points[pointIndex][0], -FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.coordinateMagnitudeM, FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.coordinateMagnitudeM, `WorldMap route '${route2.id}'.points[${pointIndex}][0]`);
+      finite13(route2.points[pointIndex][1], -FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.coordinateMagnitudeM, FUNCTIONAL_SETTLEMENT_ATLAS_LIMITS.coordinateMagnitudeM, `WorldMap route '${route2.id}'.points[${pointIndex}][1]`);
     }
     routes.set(route2.id, route2);
   }
@@ -140327,7 +142384,7 @@ function resolveFunctionalSettlementAtlas(planValue, catalogValue, worldMapValue
     const anchor2 = anchors.get(placement.atlasBinding.anchorId);
     if (anchor2 === void 0) fail9(`placement '${placement.placementId}' references missing WorldMap anchor '${placement.atlasBinding.anchorId}'`);
     if (anchor2.rot === void 0) fail9(`WorldMap anchor '${anchor2.id}' has no authored yaw`);
-    finite11(anchor2.rot, -Math.PI, Math.PI, `WorldMap anchor '${anchor2.id}'.rot`);
+    finite13(anchor2.rot, -Math.PI, Math.PI, `WorldMap anchor '${anchor2.id}'.rot`);
     if (!near2(anchor2.position[0], placement.position[0]) || !near2(anchor2.position[1], placement.position[2]) || !near2(anchor2.rot, placement.yaw)) {
       fail9(`placement '${placement.placementId}' loses the WorldMap anchor position or rotation`);
     }
@@ -140860,8 +142917,8 @@ function assertBuildingArtifactReviewable(artifact, decision, artifacts) {
   if (validArtifact.status !== "candidate") throw new Error("only a candidate building artifact is reviewable");
   if (validDecision.artifactId !== validArtifact.artifactId || validDecision.contractHash !== validArtifact.contractHash || validDecision.contentHash !== validArtifact.contentHash) throw new Error("HITL decision does not bind the exact building artifact");
   if (validDecision.schema === BUILDING_HITL_DECISION_SCHEMA_V2) {
-    const expected = validArtifact.evidence.map(({ evidenceId, contentHash: contentHash3 }) => `${evidenceId}\0${contentHash3}`).sort();
-    const actual = validDecision.evidenceBindings.map(({ evidenceId, contentHash: contentHash3 }) => `${evidenceId}\0${contentHash3}`).sort();
+    const expected = validArtifact.evidence.map(({ evidenceId, contentHash: contentHash4 }) => `${evidenceId}\0${contentHash4}`).sort();
+    const actual = validDecision.evidenceBindings.map(({ evidenceId, contentHash: contentHash4 }) => `${evidenceId}\0${contentHash4}`).sort();
     if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error("HITL decision does not bind the complete evidence set");
   } else {
     const evidenceHashes = [...new Set(validArtifact.evidence.map((entry) => entry.contentHash))].sort();
@@ -140870,119 +142927,6 @@ function assertBuildingArtifactReviewable(artifact, decision, artifacts) {
   const invalidated = buildingArtifactInvalidation(artifacts);
   if (invalidated.some((entry) => entry.artifactId === validArtifact.artifactId)) throw new Error("stale building artifact cannot enter HITL review");
   return Object.freeze({ artifact: validArtifact, decision: validDecision });
-}
-
-// src/authoring/errors.ts
-var AuthoringError = class extends Error {
-  code;
-  details;
-  constructor(code3, message, details = {}, options = {}) {
-    super(message, options);
-    this.name = "AuthoringError";
-    this.code = code3;
-    this.details = details;
-  }
-};
-function errorMessage(error51) {
-  return error51 instanceof Error ? error51.message : String(error51);
-}
-
-// src/authoring/canonical.ts
-var SHA256_RE = /^(?:sha256:)?([0-9a-fA-F]{64})$/;
-function reject(path2, reason) {
-  throw new AuthoringError("invalid_transaction", `non-canonical value at ${path2}: ${reason}`, { path: path2, reason });
-}
-function canonicalStringify(value) {
-  const active = /* @__PURE__ */ new Set();
-  const visit = (input, path2) => {
-    if (input === null) return "null";
-    switch (typeof input) {
-      case "boolean":
-        return input ? "true" : "false";
-      case "string":
-        return JSON.stringify(input);
-      case "number":
-        if (!Number.isFinite(input)) reject(path2, "numbers must be finite");
-        return Object.is(input, -0) ? "0" : JSON.stringify(input);
-      case "undefined":
-      case "function":
-      case "symbol":
-      case "bigint":
-        reject(path2, `${typeof input} is outside the JSON value domain`);
-      case "object":
-        break;
-      default:
-        reject(path2, `unsupported value type ${typeof input}`);
-    }
-    const object5 = input;
-    if (active.has(object5)) reject(path2, "cyclic references are not supported");
-    active.add(object5);
-    try {
-      if (Array.isArray(object5)) {
-        const names2 = Object.getOwnPropertyNames(object5);
-        for (let index = 0; index < object5.length; index++) {
-          if (!Object.prototype.hasOwnProperty.call(object5, index)) {
-            reject(`${path2}[${index}]`, "sparse arrays are not supported");
-          }
-          const descriptor3 = Object.getOwnPropertyDescriptor(object5, String(index));
-          if (descriptor3 === void 0 || descriptor3.get !== void 0 || descriptor3.set !== void 0) {
-            reject(`${path2}[${index}]`, "array accessors are not supported");
-          }
-          if (!descriptor3.enumerable) reject(`${path2}[${index}]`, "non-enumerable array entries are not supported");
-        }
-        const expectedNames = /* @__PURE__ */ new Set(["length", ...Array.from({ length: object5.length }, (_3, index) => String(index))]);
-        if (names2.some((name) => !expectedNames.has(name)) || Object.getOwnPropertySymbols(object5).length > 0) {
-          reject(path2, "custom array properties are not supported");
-        }
-        return `[${object5.map((entry, index) => visit(entry, `${path2}[${index}]`)).join(",")}]`;
-      }
-      const prototype = Object.getPrototypeOf(object5);
-      if (prototype !== Object.prototype && prototype !== null) {
-        reject(path2, "only plain objects are supported");
-      }
-      if (Object.getOwnPropertySymbols(object5).length > 0) reject(path2, "symbol keys are not supported");
-      const names = Object.getOwnPropertyNames(object5);
-      for (const name of names) {
-        const descriptor3 = Object.getOwnPropertyDescriptor(object5, name);
-        if (descriptor3 === void 0 || descriptor3.get !== void 0 || descriptor3.set !== void 0) {
-          reject(`${path2}.${name}`, "object accessors are not supported");
-        }
-        if (!descriptor3.enumerable) reject(`${path2}.${name}`, "non-enumerable properties are not supported");
-      }
-      names.sort();
-      const record11 = object5;
-      return `{${names.map((name) => `${JSON.stringify(name)}:${visit(record11[name], `${path2}.${name}`)}`).join(",")}}`;
-    } finally {
-      active.delete(object5);
-    }
-  };
-  return visit(value, "$");
-}
-function utf8ByteLength2(input) {
-  let bytes = 0;
-  for (let index = 0; index < input.length; index++) {
-    const code3 = input.charCodeAt(index);
-    if (code3 < 128) bytes += 1;
-    else if (code3 < 2048) bytes += 2;
-    else if (code3 >= 55296 && code3 <= 56319 && index + 1 < input.length) {
-      const next = input.charCodeAt(index + 1);
-      if (next >= 56320 && next <= 57343) {
-        bytes += 4;
-        index++;
-      } else bytes += 3;
-    } else bytes += 3;
-  }
-  return bytes;
-}
-function normalizeSha256(value) {
-  const match = SHA256_RE.exec(value);
-  if (match === null) {
-    throw new AuthoringError("invalid_hash", "SHA-256 provider returned an invalid digest", { digest: value });
-  }
-  return `sha256:${match[1].toLowerCase()}`;
-}
-function canonicalHash2(sha2563, value) {
-  return normalizeSha256(sha2563(canonicalStringify(value)));
 }
 
 // src/render/fb4-capture-provenance.ts
@@ -141282,7 +143226,7 @@ function exactFile2(value, label4) {
     bytes
   });
 }
-function denseArray4(value, minimum, maximum, label4) {
+function denseArray6(value, minimum, maximum, label4) {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length < minimum || value.length > maximum || Object.getOwnPropertySymbols(value).length !== 0 || Object.getOwnPropertyNames(value).length !== value.length + 1) {
     fail10(`${label4} must be a dense, field-free array with ${minimum}..${maximum} entries`);
   }
@@ -141335,7 +143279,7 @@ function deriveApprovedFunctionalBuildingPublication(input, read) {
   const variantId = id5(d2.variantId.value, "functional building publication input.variantId");
   const candidateManifest = exactFile2(d2.candidateManifest.value, "functional building publication input.candidateManifest");
   const approvedReviewOutcome = exactFile2(d2.approvedReviewOutcome.value, "functional building publication input.approvedReviewOutcome");
-  const reviewLedger = denseArray4(d2.reviewLedger.value, 1, 64, "functional building publication input.reviewLedger").map((value, index) => exactFile2(value, `functional building publication input.reviewLedger[${index}]`));
+  const reviewLedger = denseArray6(d2.reviewLedger.value, 1, 64, "functional building publication input.reviewLedger").map((value, index) => exactFile2(value, `functional building publication input.reviewLedger[${index}]`));
   for (let index = 1; index < reviewLedger.length; index++) if (reviewLedger[index - 1].path >= reviewLedger[index].path) fail10("functional building publication review ledger must be strictly path-sorted and unique");
   const approvedIndex = reviewLedger.findIndex((entry2) => sameExact(entry2, approvedReviewOutcome));
   if (approvedIndex < 0) fail10("approved review outcome is absent from the supplied exact ledger");
@@ -141499,7 +143443,7 @@ var integer3 = (value, label4, min3 = 0, max3 = Number.MAX_SAFE_INTEGER) => {
   if (!Number.isSafeInteger(value) || value < min3 || value > max3) fail11(`${label4} is invalid`);
   return value;
 };
-var finite12 = (value, label4, min3 = -1e9, max3 = 1e9) => {
+var finite14 = (value, label4, min3 = -1e9, max3 = 1e9) => {
   if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || value < min3 || value > max3)
     fail11(`${label4} is invalid`);
   return value;
@@ -141651,7 +143595,7 @@ function loadApprovedFunctionalSettlementRelease(bytes, read) {
   );
   if (value.terrain.schema !== "limina.shared-local-z-grade/v1" || !Array.isArray(value.terrain.origin) || value.terrain.origin.length !== 2)
     fail11("terrain authority is unsupported");
-  const origin = value.terrain.origin.map((entry, index) => finite12(entry, `terrain.origin[${index}]`)), yaw = finite12(value.terrain.yaw, "terrain.yaw", -Math.PI, Math.PI), base = finite12(value.terrain.baseHeight, "terrain.baseHeight"), slope = finite12(value.terrain.localZSlope, "terrain.localZSlope", -0.25, 0.25), spacing = finite12(value.terrain.maximumSampleSpacing, "terrain.maximumSampleSpacing", Number.MIN_VALUE, 1), maximumGrade = finite12(value.terrain.maximumTerrainGrade, "terrain.maximumTerrainGrade", 0, 4), routeDelta = finite12(value.terrain.maximumRouteElevationDelta, "terrain.maximumRouteElevationDelta", 0, 0.5);
+  const origin = value.terrain.origin.map((entry, index) => finite14(entry, `terrain.origin[${index}]`)), yaw = finite14(value.terrain.yaw, "terrain.yaw", -Math.PI, Math.PI), base = finite14(value.terrain.baseHeight, "terrain.baseHeight"), slope = finite14(value.terrain.localZSlope, "terrain.localZSlope", -0.25, 0.25), spacing = finite14(value.terrain.maximumSampleSpacing, "terrain.maximumSampleSpacing", Number.MIN_VALUE, 1), maximumGrade = finite14(value.terrain.maximumTerrainGrade, "terrain.maximumTerrainGrade", 0, 4), routeDelta = finite14(value.terrain.maximumRouteElevationDelta, "terrain.maximumRouteElevationDelta", 0, 0.5);
   if (Math.abs(slope) > maximumGrade) fail11("terrain slope exceeds declared maximum grade");
   const c2 = Math.cos(yaw), s2 = Math.sin(yaw), sampleHeight2 = (x3, z4) => base + slope * ((x3 - origin[0]) * s2 + (z4 - origin[1]) * c2);
   const assetBytes = read(publication.asset.path), contract = parseFunctionalBuildingContract(assetBytes), sites = value.sites;
@@ -141685,8 +143629,8 @@ function loadApprovedFunctionalSettlementRelease(bytes, read) {
   }
   keys(value.runtime, ["loadDistance", "keepDistance", "maxActiveUnits", "maxResidentBytes"], "runtime");
   const runtime = {
-    loadDistance: finite12(value.runtime.loadDistance, "runtime.loadDistance", 0, 1e6),
-    keepDistance: finite12(value.runtime.keepDistance, "runtime.keepDistance", 0, 1e6),
+    loadDistance: finite14(value.runtime.loadDistance, "runtime.loadDistance", 0, 1e6),
+    keepDistance: finite14(value.runtime.keepDistance, "runtime.keepDistance", 0, 1e6),
     maxActiveUnits: integer3(value.runtime.maxActiveUnits, "runtime.maxActiveUnits", 1, plan.placements.length),
     maxResidentBytes: integer3(value.runtime.maxResidentBytes, "runtime.maxResidentBytes", 1)
   };
@@ -141721,7 +143665,7 @@ function assertApprovedFunctionalSettlementRelease(value) {
 // src/architecture/furniture-design-contract.ts
 var HASH9 = /^sha256:[0-9a-f]{64}$/;
 var ID8 = /^[a-z0-9][a-z0-9._/-]{0,159}$/;
-var finite13 = (v3, label4) => {
+var finite15 = (v3, label4) => {
   if (typeof v3 !== "number" || !Number.isFinite(v3)) throw new Error(`${label4} must be finite`);
   return v3;
 };
@@ -141752,7 +143696,7 @@ function validateFurnitureDesignContract(value, visual) {
   if (!ID8.test(c2.id) || typeof c2.role !== "string" || !c2.role.trim() || !c2.visualDesign?.id || !HASH9.test(c2.visualDesign.hash))
     throw new Error("furniture design identity is incomplete");
   if (visual && visual.id !== c2.visualDesign.id) throw new Error("furniture visual design id drifted");
-  for (const [key, v3] of Object.entries(c2.dimensions ?? {})) finite13(v3, `dimensions.${key}`);
+  for (const [key, v3] of Object.entries(c2.dimensions ?? {})) finite15(v3, `dimensions.${key}`);
   if (c2.dimensions.widthM <= 0 || c2.dimensions.heightM <= 0 || c2.dimensions.depthM <= 0)
     throw new Error("furniture outer dimensions are invalid");
   if (!Array.isArray(c2.parts) || c2.parts.length < 4) throw new Error("furniture requires semantic construction parts");
@@ -141767,28 +143711,28 @@ function validateFurnitureDesignContract(value, visual) {
     const g4 = part.geometry;
     if (g4.kind === "shaped-board") {
       vec(g4.size, "shaped-board size");
-      if (g4.size.some((v3) => v3 <= 0) || finite13(g4.edgeRadiusM, "edge radius") <= 0)
+      if (g4.size.some((v3) => v3 <= 0) || finite15(g4.edgeRadiusM, "edge radius") <= 0)
         throw new Error("shaped board geometry is invalid");
     } else if (g4.kind === "tapered-member") {
-      if (finite13(g4.lengthM, "member length") <= 0 || g4.bottomSection.some((v3) => finite13(v3, "bottom section") <= 0) || g4.topSection.some((v3) => finite13(v3, "top section") <= 0) || finite13(g4.chamferM, "member chamfer") <= 0)
+      if (finite15(g4.lengthM, "member length") <= 0 || g4.bottomSection.some((v3) => finite15(v3, "bottom section") <= 0) || g4.topSection.some((v3) => finite15(v3, "top section") <= 0) || finite15(g4.chamferM, "member chamfer") <= 0)
         throw new Error("tapered member geometry is invalid");
     } else if (g4.kind === "profile-extrusion") {
       if (g4.profile.length < 3 || g4.profile.some(
         (point3) => point3.length !== 2 || point3.some((v3) => !Number.isFinite(v3))
-      ) || finite13(g4.depthM, "profile depth") <= 0 || finite13(g4.bevelM, "profile bevel") <= 0)
+      ) || finite15(g4.depthM, "profile depth") <= 0 || finite15(g4.bevelM, "profile bevel") <= 0)
         throw new Error("profile extrusion geometry is invalid");
     } else if (g4.kind === "panel") {
       vec(g4.size, "panel size");
-      if (g4.size.some((v3) => v3 <= 0) || finite13(g4.fieldDepthM, "field depth") <= 0 || finite13(g4.fieldMarginM, "field margin") <= 0 || finite13(g4.edgeRadiusM, "panel edge radius") <= 0)
+      if (g4.size.some((v3) => v3 <= 0) || finite15(g4.fieldDepthM, "field depth") <= 0 || finite15(g4.fieldMarginM, "field margin") <= 0 || finite15(g4.edgeRadiusM, "panel edge radius") <= 0)
         throw new Error("panel geometry is invalid");
     } else if (g4.kind === "peg") {
-      if (finite13(g4.diameterM, "peg diameter") <= 0 || finite13(g4.lengthM, "peg length") <= 0)
+      if (finite15(g4.diameterM, "peg diameter") <= 0 || finite15(g4.lengthM, "peg length") <= 0)
         throw new Error("peg geometry is invalid");
     }
   }
   if (!Array.isArray(c2.joints) || c2.joints.length < 2) throw new Error("furniture requires an explicit join graph");
   for (const joint of c2.joints) {
-    if (!ID8.test(joint.id) || joint.members.length !== 2 || joint.members.some((member) => !parts.has(member)) || joint.members[0] === joint.members[1] || finite13(joint.toleranceM, "joint tolerance") <= 0 || joint.toleranceM > 0.01)
+    if (!ID8.test(joint.id) || joint.members.length !== 2 || joint.members.some((member) => !parts.has(member)) || joint.members[0] === joint.members[1] || finite15(joint.toleranceM, "joint tolerance") <= 0 || joint.toleranceM > 0.01)
       throw new Error("furniture joint is invalid");
   }
   if (!Array.isArray(c2.sockets)) throw new Error("furniture sockets must be an array");
@@ -141806,7 +143750,7 @@ function validateFurnitureDesignContract(value, visual) {
     if (approachSockets.length < 1) throw new Error("table/storage furniture requires an approach socket");
   }
   for (const socket of c2.sockets) {
-    if (!ID8.test(socket.id) || !parts.has(socket.supportedBy) || finite13(socket.clearanceRadiusM, "socket clearance") <= 0)
+    if (!ID8.test(socket.id) || !parts.has(socket.supportedBy) || finite15(socket.clearanceRadiusM, "socket clearance") <= 0)
       throw new Error("furniture socket is invalid");
     vec(socket.position, "socket position");
     vec(socket.facing, "socket facing");
@@ -141819,7 +143763,7 @@ function validateFurnitureDesignContract(value, visual) {
       throw new Error("chair semantic seat/back/four-leg identities are invalid");
     if (occupancySockets[0].supportedBy !== chair.seatPartId)
       throw new Error("chair occupancy must be supported by its semantic seat");
-    if (c2.dimensions.seatHeightM < 0.43 || c2.dimensions.seatHeightM > 0.48 || c2.dimensions.seatDepthM < 0.38 || c2.dimensions.seatDepthM > 0.45 || finite13(chair.usableSeatWidthM, "chair usable seat width") < 0.38 || chair.usableSeatWidthM > 0.46 || chair.usableSeatWidthM > c2.dimensions.widthM || finite13(chair.backSupportHeightM, "chair back support height") < 0.3 || chair.backSupportHeightM > 0.47 || c2.dimensions.seatHeightM + chair.backSupportHeightM > c2.dimensions.heightM + 2e-3 || finite13(chair.ratedLoadKg, "chair rated load") < 100 || chair.ratedLoadKg > 250)
+    if (c2.dimensions.seatHeightM < 0.43 || c2.dimensions.seatHeightM > 0.48 || c2.dimensions.seatDepthM < 0.38 || c2.dimensions.seatDepthM > 0.45 || finite15(chair.usableSeatWidthM, "chair usable seat width") < 0.38 || chair.usableSeatWidthM > 0.46 || chair.usableSeatWidthM > c2.dimensions.widthM || finite15(chair.backSupportHeightM, "chair back support height") < 0.3 || chair.backSupportHeightM > 0.47 || c2.dimensions.seatHeightM + chair.backSupportHeightM > c2.dimensions.heightM + 2e-3 || finite15(chair.ratedLoadKg, "chair rated load") < 100 || chair.ratedLoadKg > 250)
       throw new Error("chair ergonomics or rated load are outside the bounded dining policy");
     vec(chair.canonicalForward, "chair canonical forward");
     if (Math.abs(chair.canonicalForward[0]) > 1e-8 || Math.abs(chair.canonicalForward[1]) > 1e-8 || Math.abs(chair.canonicalForward[2] + 1) > 1e-8 || occupancySockets[0].facing.some(
@@ -141853,7 +143797,7 @@ function validateFurnitureDesignContract(value, visual) {
       (socket) => !socket || socket.kind !== "occupancy" || socket.supportedBy !== settle.seatPartId
     ) || !approach || approach.kind !== "approach")
       throw new Error("settle semantic sockets do not resolve the seat occupancies and front approach");
-    if (Math.abs(c2.dimensions.widthM - 1.6) > 1e-8 || Math.abs(c2.dimensions.heightM - 1.3) > 1e-8 || Math.abs(c2.dimensions.depthM - 0.7) > 1e-8 || Math.abs(c2.dimensions.seatHeightM - 0.46) > 1e-8 || Math.abs(c2.dimensions.seatDepthM - 0.5) > 1e-8 || finite13(settle.usableSeatWidthM, "settle usable seat width") < 1.28 || settle.usableSeatWidthM > 1.38 || finite13(settle.backSupportHeightM, "settle back support height") < 0.7 || settle.backSupportHeightM > 0.84 || c2.dimensions.seatHeightM + settle.backSupportHeightM > c2.dimensions.heightM + 2e-3 || finite13(settle.ratedLoadKg, "settle rated load") < 180 || settle.ratedLoadKg > 300)
+    if (Math.abs(c2.dimensions.widthM - 1.6) > 1e-8 || Math.abs(c2.dimensions.heightM - 1.3) > 1e-8 || Math.abs(c2.dimensions.depthM - 0.7) > 1e-8 || Math.abs(c2.dimensions.seatHeightM - 0.46) > 1e-8 || Math.abs(c2.dimensions.seatDepthM - 0.5) > 1e-8 || finite15(settle.usableSeatWidthM, "settle usable seat width") < 1.28 || settle.usableSeatWidthM > 1.38 || finite15(settle.backSupportHeightM, "settle back support height") < 0.7 || settle.backSupportHeightM > 0.84 || c2.dimensions.seatHeightM + settle.backSupportHeightM > c2.dimensions.heightM + 2e-3 || finite15(settle.ratedLoadKg, "settle rated load") < 180 || settle.ratedLoadKg > 300)
       throw new Error("settle dimensions, ergonomics, or rated load are outside the exact I1 r3 policy");
     vec(settle.canonicalForward, "settle canonical forward");
     if (settle.canonicalForward.some((value2, index) => Math.abs(value2 - [0, 0, -1][index]) > 1e-8))
@@ -141888,7 +143832,7 @@ function validateFurnitureDesignContract(value, visual) {
       throw new Error("storage canonical front must be local -X");
     if (approach.position.some((value2, index) => Math.abs(value2 - [-0.65, 0, 0][index]) > 1e-8) || approach.facing.some((value2, index) => Math.abs(value2 - [1, 0, 0][index]) > 1e-8) || Math.abs(approach.clearanceRadiusM - 0.35) > 1e-8)
       throw new Error("storage approach must exactly bind the approved local I1 clearance");
-    const load2 = finite13(storage3.ratedLoadKgPerTier, "storage rated load per tier");
+    const load2 = finite15(storage3.ratedLoadKgPerTier, "storage rated load per tier");
     if (load2 < 10 || load2 > 50) throw new Error("storage per-tier rated load is outside the bounded policy");
   } else if (c2.storage !== void 0) throw new Error("non-storage furniture cannot claim storage semantics");
   if (!Array.isArray(c2.colliders) || c2.colliders.length < 2)
@@ -141920,13 +143864,13 @@ var string6 = (value, label4) => {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`functional furniture: ${label4} must be a non-empty string`);
   return value;
 };
-var finite14 = (value, label4) => {
+var finite16 = (value, label4) => {
   if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`functional furniture: ${label4} must be finite`);
   return value;
 };
 var vec35 = (value, label4, positive5 = false) => {
   if (!Array.isArray(value) || value.length !== 3) throw new Error(`functional furniture: ${label4} must be a vec3`);
-  const result2 = [finite14(value[0], `${label4}[0]`), finite14(value[1], `${label4}[1]`), finite14(value[2], `${label4}[2]`)];
+  const result2 = [finite16(value[0], `${label4}[0]`), finite16(value[1], `${label4}[1]`), finite16(value[2], `${label4}[2]`)];
   if (positive5 && result2.some((axis) => axis <= 0)) throw new Error(`functional furniture: ${label4} axes must be positive`);
   return result2;
 };
@@ -141986,7 +143930,7 @@ function parseFunctionalFurnitureContract(bytes) {
     const position = vec35(item.extras["limina.position"], `${socket.id}.position`), facing = vec35(item.extras["limina.facing"], `${socket.id}.facing`);
     const length3 = Math.hypot(...facing);
     if (length3 < 1e-6 || Math.abs(length3 - 1) > 1e-5) throw new Error(`functional furniture: socket ${socket.id} facing must be normalized`);
-    const clearanceRadiusM = finite14(item.extras["limina.clearanceRadiusM"], `${socket.id}.clearanceRadiusM`);
+    const clearanceRadiusM = finite16(item.extras["limina.clearanceRadiusM"], `${socket.id}.clearanceRadiusM`);
     if (clearanceRadiusM <= 0) throw new Error(`functional furniture: socket ${socket.id} clearance must be positive`);
     if (!sameVec3(position, socket.position) || !sameVec3(facing, socket.facing) || clearanceRadiusM !== socket.clearanceRadiusM) throw new Error(`functional furniture: socket ${socket.id} node metadata drifted from its pinned contract`);
     return { id: socket.id, kind: socket.kind, position, facing, supportedBy, clearanceRadiusM };
@@ -142754,7 +144698,7 @@ function spawnSemanticRoot(world, position, yaw, origin) {
   }
 }
 function registerFurnitureSkills(registry2, assets) {
-  const inputSchema2 = external_exports.object({ assetId: external_exports.string(), position: Vec317.default([0, 0, 0]), yaw: external_exports.number().default(0), visual: external_exports.boolean().default(true), hash: external_exports.string().optional(), contractHash: external_exports.string().optional() });
+  const inputSchema3 = external_exports.object({ assetId: external_exports.string(), position: Vec317.default([0, 0, 0]), yaw: external_exports.number().default(0), visual: external_exports.boolean().default(true), hash: external_exports.string().optional(), contractHash: external_exports.string().optional() });
   const socketSchema = external_exports.object({ id: external_exports.string(), kind: external_exports.enum(["occupancy", "approach", "inspect"]), position: Vec317, facing: Vec317, supportedBy: external_exports.string(), clearanceRadiusM: external_exports.number().positive() });
   const place = {
     name: "furniture.placeFunctional",
@@ -142762,7 +144706,7 @@ function registerFurnitureSkills(registry2, assets) {
     description: "Place exact-hash authored furniture with semantic sockets and compound collision; visual=false publishes semantics without duplicating a GLB scene.",
     category: "scene",
     permissions: ["scene.write"],
-    input: inputSchema2,
+    input: inputSchema3,
     output: external_exports.object({ root: external_exports.string(), colliders: external_exports.array(external_exports.string()), sockets: external_exports.array(socketSchema), hash: external_exports.string(), contractHash: external_exports.string() }),
     commitFields: ["hash", "contractHash"],
     handler: async (input, ctx) => {
@@ -148627,6 +150571,7 @@ function registerCoreSkills(registry2, opts) {
   registerPhysicsSkills(registry2);
   registerAgentSkills(registry2);
   registerSystemSkills(registry2);
+  registerStudioSkills(registry2);
   registerApprovalSkills(registry2);
   registerAuditSkills(registry2);
   registerDesignSkills(registry2);
@@ -148646,8 +150591,10 @@ function registerCoreSkills(registry2, opts) {
   registerTerrainSkills(registry2, terrainSource, terrainCache, terrainRegions, assets, waterContact);
   const settlementFootprints = /* @__PURE__ */ new Map();
   const vegetationClears = /* @__PURE__ */ new Map();
-  registerTerrainEditSkills(registry2, terrainLayers, assets, settlementFootprints, vegetationClears, waterContact, opts?.grassVisualPackage);
-  registerVegetationSkills(registry2, terrainLayers, assets, settlementFootprints, void 0, vegetationClears);
+  const derivedTerrainEdit = { layers: /* @__PURE__ */ new Map(), paintLayers: /* @__PURE__ */ new Map() };
+  registerTerrainEditSkills(registry2, terrainLayers, assets, settlementFootprints, vegetationClears, waterContact, opts?.grassVisualPackage, derivedTerrainEdit);
+  const derivedVegetationScatter = {};
+  registerVegetationSkills(registry2, terrainLayers, assets, settlementFootprints, void 0, vegetationClears, derivedVegetationScatter);
   registerVillageSkills(registry2, terrainLayers, assets, settlementFootprints, vegetationClears, opts?.grassVisualPackage);
   registerGrassFieldSkill(registry2, terrainLayers, settlementFootprints, vegetationClears, {}, opts?.grassVisualPackage);
   registerRenderSkills(registry2);
@@ -148714,6 +150661,8 @@ function registerCoreSkills(registry2, opts) {
     social,
     audio,
     terrain: { source: terrainSource, cache: terrainCache, regions: terrainRegions, layers: terrainLayers },
+    terrainEdit: { derived: derivedTerrainEdit },
+    vegetation: { derived: derivedVegetationScatter },
     assets,
     materials,
     water,
@@ -149918,14 +151867,14 @@ var WorldProjectAssetIdSchema = external_exports.string().refine(
   isWorldProjectAssetId,
   `assetId must be a project-relative identifier of at most ${MAX_WORLD_PROJECT_ASSET_ID_LENGTH} characters without traversal`
 );
-var ContentHashSchema = external_exports.string().regex(/^sha256:[0-9a-f]{64}$/);
+var ContentHashSchema3 = external_exports.string().regex(/^sha256:[0-9a-f]{64}$/);
 var WorldProjectAssetReferenceSchema = external_exports.object({
   assetId: WorldProjectAssetIdSchema,
-  hash: ContentHashSchema
+  hash: ContentHashSchema3
 }).strict();
 var WorldProjectTerrainEditLayerSchema = WorldProjectAssetReferenceSchema.extend({
   layerId: external_exports.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
-  baseTopologyHash: ContentHashSchema
+  baseTopologyHash: ContentHashSchema3
 }).strict();
 function uniqueReferenceIds(references, context3) {
   const seen = /* @__PURE__ */ new Set();
@@ -149972,11 +151921,11 @@ var WorldProjectStateSchema = external_exports.object({
   schema: external_exports.literal(WORLD_PROJECT_STATE_SCHEMA),
   projectId: WorldProjectIdSchema,
   refs: WorldProjectRefsSchema,
-  stateHash: ContentHashSchema
+  stateHash: ContentHashSchema3
 }).strict();
-function immutable(value) {
+function immutable2(value) {
   if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
-    for (const child of Object.values(value)) immutable(child);
+    for (const child of Object.values(value)) immutable2(child);
     Object.freeze(value);
   }
   return value;
@@ -150004,7 +151953,7 @@ function parseCanonical(schema, input, label4) {
   if (canonicalStringify(parsed.data) !== canonical) {
     throw new AuthoringError("invalid_transaction", `${label4} contains fields not preserved by its wire schema`);
   }
-  return immutable(parsed.data);
+  return immutable2(parsed.data);
 }
 function parseWorldProjectRefs(input) {
   return parseCanonical(WorldProjectRefsSchema, input, "WorldProject refs");
@@ -150017,7 +151966,7 @@ function stateCore(projectId, refs) {
 }
 function parseWorldProjectState(input, sha2563) {
   const state = parseCanonical(WorldProjectStateSchema, input, "WorldProject state");
-  const expected = canonicalHash2(sha2563, stateCore(state.projectId, state.refs));
+  const expected = canonicalHash(sha2563, stateCore(state.projectId, state.refs));
   if (state.stateHash !== expected) {
     throw new AuthoringError("invalid_hash", "WorldProject state hash mismatch", {
       expectedStateHash: expected,
@@ -150065,7 +152014,7 @@ var WorldProjectStateStore = class {
   #build(refsInput) {
     const refs = parseWorldProjectRefs(refsInput);
     const core = stateCore(this.projectId, refs);
-    return immutable(WorldProjectStateSchema.parse({ ...core, stateHash: canonicalHash2(this.#sha256, core) }));
+    return immutable2(WorldProjectStateSchema.parse({ ...core, stateHash: canonicalHash(this.#sha256, core) }));
   }
 };
 function createWorldProjectStateReader(store2) {
@@ -150573,419 +152522,6 @@ var SceneAuthoringAdapter = class {
   }
 };
 
-// src/authoring/schema.ts
-var WORLD_PROJECT_HEAD_SCHEMA = "limina.world-project-head/v1";
-var AUTHORING_TRANSACTION_SCHEMA = "limina.authoring-transaction/v1";
-var AUTHORING_RECEIPT_SCHEMA = "limina.authoring-receipt/v1";
-var MAX_AUTHORING_OPERATIONS = 256;
-var MAX_AUTHORING_TRANSACTION_BYTES = 1048576;
-var IdSchema = external_exports.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
-var AdapterIdSchema = external_exports.string().min(1).max(96).regex(/^[a-z][a-z0-9.-]*$/);
-var AdapterVersionSchema = external_exports.string().min(1).max(64).regex(/^[0-9][A-Za-z0-9._+-]*$/);
-var ActionSchema2 = external_exports.string().min(1).max(128).regex(/^[A-Za-z][A-Za-z0-9._:-]*$/);
-var ContentHashSchema2 = external_exports.string().regex(/^sha256:[0-9a-f]{64}$/);
-var JsonValueSchema = external_exports.lazy(() => external_exports.union([
-  external_exports.null(),
-  external_exports.boolean(),
-  external_exports.number().finite(),
-  external_exports.string(),
-  external_exports.array(JsonValueSchema),
-  external_exports.record(external_exports.string(), JsonValueSchema)
-]));
-var WorldProjectHeadSchema = external_exports.object({
-  schema: external_exports.literal(WORLD_PROJECT_HEAD_SCHEMA),
-  projectId: IdSchema,
-  revision: external_exports.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  headHash: ContentHashSchema2
-}).strict();
-var AuthoringOperationSchema = external_exports.object({
-  adapter: AdapterIdSchema,
-  adapterVersion: AdapterVersionSchema,
-  action: ActionSchema2,
-  input: JsonValueSchema,
-  guard: external_exports.object({
-    beforeHash: ContentHashSchema2,
-    afterHash: ContentHashSchema2.optional()
-  }).strict().optional()
-}).strict();
-var CompensationSchema = external_exports.object({
-  transactionId: IdSchema
-}).strict();
-var AuthoringTransactionSchema = external_exports.object({
-  schema: external_exports.literal(AUTHORING_TRANSACTION_SCHEMA),
-  transactionId: IdSchema,
-  projectId: IdSchema,
-  baseRevision: external_exports.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  baseHeadHash: ContentHashSchema2,
-  operations: external_exports.array(AuthoringOperationSchema).max(MAX_AUTHORING_OPERATIONS),
-  compensates: CompensationSchema.optional()
-}).strict().superRefine((transaction, context3) => {
-  if (transaction.compensates === void 0 && transaction.operations.length === 0) {
-    context3.addIssue({ code: "custom", path: ["operations"], message: "a normal transaction requires at least one operation" });
-  }
-  if (transaction.compensates !== void 0 && transaction.operations.length !== 0) {
-    context3.addIssue({ code: "custom", path: ["operations"], message: "a compensation transaction derives operations from its target" });
-  }
-  if (transaction.compensates?.transactionId === transaction.transactionId) {
-    context3.addIssue({ code: "custom", path: ["compensates", "transactionId"], message: "a transaction cannot compensate itself" });
-  }
-});
-var CommittedOperationReceiptSchema = external_exports.object({
-  index: external_exports.number().int().nonnegative().max(MAX_AUTHORING_OPERATIONS - 1),
-  adapter: AdapterIdSchema,
-  action: ActionSchema2,
-  stateKey: external_exports.string().min(1).max(256),
-  beforeStateHash: ContentHashSchema2,
-  afterStateHash: ContentHashSchema2
-}).strict();
-var CommittedAuthoringReceiptSchema = external_exports.object({
-  schema: external_exports.literal(AUTHORING_RECEIPT_SCHEMA),
-  transactionId: IdSchema,
-  projectId: IdSchema,
-  transactionHash: ContentHashSchema2,
-  previousRevision: external_exports.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  committedRevision: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  previousHeadHash: ContentHashSchema2,
-  headHash: ContentHashSchema2,
-  operations: external_exports.array(CommittedOperationReceiptSchema).max(MAX_AUTHORING_OPERATIONS),
-  compensates: IdSchema.optional()
-}).strict();
-function parseAuthoringTransaction(input) {
-  let canonicalInput;
-  try {
-    canonicalInput = canonicalStringify(input);
-  } catch (error51) {
-    if (error51 instanceof AuthoringError) throw error51;
-    throw new AuthoringError("invalid_transaction", "authoring transaction cannot be canonicalized", {}, { cause: error51 });
-  }
-  const inputByteLength = utf8ByteLength2(canonicalInput);
-  if (inputByteLength > MAX_AUTHORING_TRANSACTION_BYTES) {
-    throw new AuthoringError(
-      "transaction_too_large",
-      `authoring transaction is ${inputByteLength} bytes; maximum is ${MAX_AUTHORING_TRANSACTION_BYTES}`,
-      { byteLength: inputByteLength, maximum: MAX_AUTHORING_TRANSACTION_BYTES }
-    );
-  }
-  let parsed;
-  try {
-    parsed = AuthoringTransactionSchema.safeParse(JSON.parse(canonicalInput));
-  } catch (error51) {
-    throw new AuthoringError("invalid_transaction", "authoring transaction validation failed", {}, { cause: error51 });
-  }
-  if (!parsed.success) {
-    throw new AuthoringError("invalid_transaction", "authoring transaction failed schema validation", {
-      issues: parsed.error.issues.map((issue2) => ({ path: issue2.path.join("."), message: issue2.message }))
-    });
-  }
-  const canonical = canonicalStringify(parsed.data);
-  if (canonical !== canonicalInput) {
-    throw new AuthoringError(
-      "invalid_transaction",
-      "authoring transaction contains fields that cannot be preserved by the wire schema"
-    );
-  }
-  const byteLength2 = utf8ByteLength2(canonical);
-  if (byteLength2 > MAX_AUTHORING_TRANSACTION_BYTES) {
-    throw new AuthoringError(
-      "transaction_too_large",
-      `authoring transaction is ${byteLength2} bytes; maximum is ${MAX_AUTHORING_TRANSACTION_BYTES}`,
-      { byteLength: byteLength2, maximum: MAX_AUTHORING_TRANSACTION_BYTES }
-    );
-  }
-  return { transaction: parsed.data, canonical, byteLength: byteLength2 };
-}
-
-// src/authoring/durability.ts
-var DURABLE_AUTHORING_RECORD_SCHEMA = "limina.authoring-commit-record/v1";
-var MAX_DURABLE_AUTHORING_RECORDS = 65536;
-var MAX_DURABLE_AUTHORING_RECORD_BYTES = 524288;
-var MAX_DURABLE_AUTHORING_LOG_BYTES = 67108864;
-var ContentHashSchema3 = external_exports.string().regex(/^sha256:[0-9a-f]{64}$/);
-var DurableAuthoringRecordSchema = external_exports.object({
-  schema: external_exports.literal(DURABLE_AUTHORING_RECORD_SCHEMA),
-  previousRecordHash: ContentHashSchema3.nullable(),
-  receipt: CommittedAuthoringReceiptSchema,
-  recordHash: ContentHashSchema3
-}).strict();
-var DurableAuthoringReplayEntrySchema = external_exports.object({
-  transaction: AuthoringTransactionSchema,
-  commit: DurableAuthoringRecordSchema
-}).strict();
-function immutable2(value) {
-  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
-    for (const child of Object.values(value)) immutable2(child);
-    Object.freeze(value);
-  }
-  return value;
-}
-function recordPayload(record11) {
-  return {
-    schema: DURABLE_AUTHORING_RECORD_SCHEMA,
-    previousRecordHash: record11.previousRecordHash,
-    receipt: record11.receipt
-  };
-}
-function createDurableAuthoringRecord(sha2563, previousRecordHash, receipt) {
-  const payload = recordPayload({ schema: DURABLE_AUTHORING_RECORD_SCHEMA, previousRecordHash, receipt });
-  return immutable2({ ...payload, recordHash: canonicalHash2(sha2563, payload) });
-}
-function reject2(message, details = {}) {
-  throw new AuthoringError("durable_chain_corrupt", message, details);
-}
-function parseDurableAuthoringRecord(input, sha2563, index) {
-  const label4 = index === void 0 ? "durable authoring record" : `durable authoring record ${index}`;
-  let canonical;
-  try {
-    canonical = canonicalStringify(input);
-  } catch (error51) {
-    throw new AuthoringError("invalid_durable_record", `${label4} cannot be canonicalized`, { index }, { cause: error51 });
-  }
-  const byteLength2 = utf8ByteLength2(canonical);
-  if (byteLength2 > MAX_DURABLE_AUTHORING_RECORD_BYTES) {
-    throw new AuthoringError(
-      "durable_log_too_large",
-      `${label4} is ${byteLength2} bytes; maximum is ${MAX_DURABLE_AUTHORING_RECORD_BYTES}`,
-      { index, byteLength: byteLength2, maximum: MAX_DURABLE_AUTHORING_RECORD_BYTES }
-    );
-  }
-  let parsed;
-  try {
-    parsed = DurableAuthoringRecordSchema.safeParse(JSON.parse(canonical));
-  } catch (error51) {
-    throw new AuthoringError("invalid_durable_record", `${label4} validation failed`, { index }, { cause: error51 });
-  }
-  if (!parsed.success) {
-    throw new AuthoringError("invalid_durable_record", `${label4} failed schema validation`, {
-      index,
-      issues: parsed.error.issues.map((issue2) => ({ path: issue2.path.join("."), message: issue2.message }))
-    });
-  }
-  if (canonicalStringify(parsed.data) !== canonical) {
-    throw new AuthoringError("invalid_durable_record", `${label4} contains fields not preserved by its schema`, { index });
-  }
-  const expectedRecordHash = canonicalHash2(sha2563, recordPayload(parsed.data));
-  if (parsed.data.recordHash !== expectedRecordHash) {
-    reject2(`${label4} hash does not match its content`, {
-      index,
-      expectedRecordHash,
-      actualRecordHash: parsed.data.recordHash
-    });
-  }
-  return { record: immutable2(parsed.data), canonical, byteLength: byteLength2 };
-}
-function validateDurableAuthoringRecord(recordInput, transactionInput, previousHeadInput, previousRecordHash, sha2563, index) {
-  const { record: record11 } = parseDurableAuthoringRecord(recordInput, sha2563, index);
-  const previousHead = WorldProjectHeadSchema.parse(previousHeadInput);
-  const prepared2 = parseAuthoringTransaction(transactionInput);
-  const transaction = prepared2.transaction;
-  const transactionHash = canonicalHash2(sha2563, transaction);
-  const label4 = index === void 0 ? "durable authoring record" : `durable authoring record ${index}`;
-  if (record11.previousRecordHash !== previousRecordHash) {
-    reject2(`${label4} is not contiguous with the preceding record`, {
-      index,
-      expectedPreviousRecordHash: previousRecordHash,
-      actualPreviousRecordHash: record11.previousRecordHash
-    });
-  }
-  const { receipt } = record11;
-  if (transaction.projectId !== previousHead.projectId || receipt.projectId !== previousHead.projectId) {
-    reject2(`${label4} targets a different WorldProject`, {
-      index,
-      expectedProjectId: previousHead.projectId,
-      transactionProjectId: transaction.projectId,
-      receiptProjectId: receipt.projectId
-    });
-  }
-  if (transaction.baseRevision !== previousHead.revision || transaction.baseHeadHash !== previousHead.headHash) {
-    reject2(`${label4} transaction base does not match the preceding head`, {
-      index,
-      expectedRevision: previousHead.revision,
-      actualRevision: transaction.baseRevision,
-      expectedHeadHash: previousHead.headHash,
-      actualHeadHash: transaction.baseHeadHash
-    });
-  }
-  if (receipt.transactionId !== transaction.transactionId || receipt.transactionHash !== transactionHash || receipt.previousRevision !== previousHead.revision || receipt.committedRevision !== previousHead.revision + 1 || receipt.previousHeadHash !== previousHead.headHash) {
-    reject2(`${label4} receipt does not bind its transaction and preceding head`, {
-      index,
-      transactionId: transaction.transactionId
-    });
-  }
-  const compensationTarget = transaction.compensates?.transactionId;
-  if (receipt.compensates !== compensationTarget) {
-    reject2(`${label4} compensation metadata is inconsistent`, {
-      index,
-      transactionCompensates: compensationTarget,
-      receiptCompensates: receipt.compensates
-    });
-  }
-  if (compensationTarget === void 0) {
-    if (receipt.operations.length !== transaction.operations.length) {
-      reject2(`${label4} receipt operation count does not match its transaction`, {
-        index,
-        transactionOperations: transaction.operations.length,
-        receiptOperations: receipt.operations.length
-      });
-    }
-    for (let operationIndex = 0; operationIndex < transaction.operations.length; operationIndex++) {
-      const operation = transaction.operations[operationIndex];
-      const committed = receipt.operations[operationIndex];
-      if (committed.index !== operationIndex || committed.adapter !== operation.adapter || committed.action !== operation.action) {
-        reject2(`${label4} receipt operation ${operationIndex} does not match its transaction`, {
-          index,
-          operationIndex
-        });
-      }
-    }
-  }
-  const expectedHeadHash = canonicalHash2(sha2563, {
-    schema: previousHead.schema,
-    projectId: previousHead.projectId,
-    revision: receipt.committedRevision,
-    parentHash: previousHead.headHash,
-    transactionHash,
-    operations: receipt.operations
-  });
-  if (receipt.headHash !== expectedHeadHash) {
-    reject2(`${label4} receipt head hash is invalid`, { index, expectedHeadHash, actualHeadHash: receipt.headHash });
-  }
-  return record11;
-}
-function canonicalGenesis(head, sha2563) {
-  const expectedHeadHash = canonicalHash2(sha2563, {
-    schema: head.schema,
-    projectId: head.projectId,
-    revision: 0,
-    parentHash: null,
-    transactionHash: null,
-    operations: []
-  });
-  if (head.revision !== 0 || head.headHash !== expectedHeadHash) {
-    reject2("authoring replay checkpoint must be anchored to the canonical project genesis", {
-      projectId: head.projectId,
-      revision: head.revision,
-      expectedHeadHash,
-      actualHeadHash: head.headHash
-    });
-  }
-}
-function validateAuthoringReplayCheckpoint(input, genesisInput, sha2563) {
-  const genesis = immutable2(WorldProjectHeadSchema.parse(genesisInput));
-  canonicalGenesis(genesis, sha2563);
-  if (!Array.isArray(input)) throw new AuthoringError("invalid_durable_record", "authoring replay checkpoint must be an array");
-  if (input.length > MAX_DURABLE_AUTHORING_RECORDS) {
-    throw new AuthoringError("durable_log_too_large", "authoring replay checkpoint exceeds the record-count limit", {
-      recordCount: input.length,
-      maximum: MAX_DURABLE_AUTHORING_RECORDS
-    });
-  }
-  const entries = [];
-  const transactions = /* @__PURE__ */ new Map();
-  let head = genesis;
-  let previousRecordHash = null;
-  let totalBytes = 2;
-  for (let index = 0; index < input.length; index++) {
-    if (!Object.prototype.hasOwnProperty.call(input, index)) {
-      throw new AuthoringError("invalid_durable_record", "authoring replay checkpoint must be a dense array", { index });
-    }
-    let canonical;
-    try {
-      canonical = canonicalStringify(input[index]);
-    } catch (error51) {
-      throw new AuthoringError("invalid_durable_record", `authoring replay entry ${index} cannot be canonicalized`, { index }, { cause: error51 });
-    }
-    totalBytes += utf8ByteLength2(canonical) + (index === 0 ? 0 : 1);
-    if (totalBytes > MAX_DURABLE_AUTHORING_LOG_BYTES) {
-      throw new AuthoringError("durable_log_too_large", "authoring replay checkpoint exceeds the byte limit", {
-        index,
-        byteLength: totalBytes,
-        maximum: MAX_DURABLE_AUTHORING_LOG_BYTES
-      });
-    }
-    const parsed = DurableAuthoringReplayEntrySchema.safeParse(JSON.parse(canonical));
-    if (!parsed.success || canonicalStringify(parsed.data) !== canonical) {
-      throw new AuthoringError("invalid_durable_record", `authoring replay entry ${index} failed schema validation`, {
-        index,
-        issues: parsed.success ? [] : parsed.error.issues.map((issue2) => ({ path: issue2.path.join("."), message: issue2.message }))
-      });
-    }
-    const transaction = immutable2(parseAuthoringTransaction(parsed.data.transaction).transaction);
-    const commit = validateDurableAuthoringRecord(
-      parsed.data.commit,
-      transaction,
-      head,
-      previousRecordHash,
-      sha2563,
-      index
-    );
-    const transactionHash = canonicalHash2(sha2563, transaction);
-    const existing = transactions.get(transaction.transactionId);
-    if (existing !== void 0) {
-      reject2(
-        existing.hash === transactionHash ? `authoring replay entry ${index} duplicates transaction '${transaction.transactionId}'` : `authoring replay entry ${index} collides with transaction '${transaction.transactionId}'`,
-        { index, transactionId: transaction.transactionId, priorHash: existing.hash, transactionHash }
-      );
-    }
-    const compensationTarget = transaction.compensates?.transactionId;
-    if (compensationTarget !== void 0) {
-      const target = transactions.get(compensationTarget);
-      if (target === void 0) {
-        reject2(`authoring replay entry ${index} compensates a transaction that does not precede it`, {
-          index,
-          transactionId: transaction.transactionId,
-          compensationTarget
-        });
-      }
-      if (target.transaction.compensates !== void 0) {
-        reject2(`authoring replay entry ${index} attempts to compensate a compensation transaction`, {
-          index,
-          transactionId: transaction.transactionId,
-          compensationTarget
-        });
-      }
-      if (target.compensatedBy !== void 0) {
-        reject2(`authoring replay entry ${index} compensates an already compensated transaction`, {
-          index,
-          transactionId: transaction.transactionId,
-          compensationTarget,
-          compensatedBy: target.compensatedBy
-        });
-      }
-      const expectedOperations = [...target.commit.receipt.operations].reverse();
-      if (commit.receipt.operations.length !== expectedOperations.length) {
-        reject2(`authoring replay entry ${index} compensation receipt has the wrong operation count`, {
-          index,
-          compensationTarget,
-          expectedOperations: expectedOperations.length,
-          actualOperations: commit.receipt.operations.length
-        });
-      }
-      for (let operationIndex = 0; operationIndex < expectedOperations.length; operationIndex++) {
-        const original = expectedOperations[operationIndex];
-        const inverse3 = commit.receipt.operations[operationIndex];
-        if (inverse3.index !== original.index || inverse3.adapter !== original.adapter || inverse3.action !== original.action || inverse3.stateKey !== original.stateKey || inverse3.beforeStateHash !== original.afterStateHash || inverse3.afterStateHash !== original.beforeStateHash) {
-          reject2(`authoring replay entry ${index} compensation receipt operation ${operationIndex} is inconsistent`, {
-            index,
-            compensationTarget,
-            operationIndex
-          });
-        }
-      }
-      target.compensatedBy = transaction.transactionId;
-    }
-    transactions.set(transaction.transactionId, { hash: transactionHash, transaction, commit });
-    head = immutable2({
-      schema: head.schema,
-      projectId: head.projectId,
-      revision: commit.receipt.committedRevision,
-      headHash: commit.receipt.headHash
-    });
-    previousRecordHash = commit.recordHash;
-    entries.push(immutable2({ transaction, commit }));
-  }
-  return immutable2({ entries, head, tailRecordHash: previousRecordHash, byteLength: totalBytes });
-}
-
 // src/authoring/kernel.ts
 function immutable3(value) {
   if (value !== null && typeof value === "object") {
@@ -151006,7 +152542,7 @@ function createWorldProjectHead(projectId, sha2563) {
     schema: WORLD_PROJECT_HEAD_SCHEMA,
     projectId,
     revision: 0,
-    headHash: canonicalHash2(sha2563, {
+    headHash: canonicalHash(sha2563, {
       schema: WORLD_PROJECT_HEAD_SCHEMA,
       projectId,
       revision: 0,
@@ -151190,7 +152726,7 @@ var AuthoringTransactionKernel = class _AuthoringTransactionKernel {
     this.#tail = pending.then(() => void 0, () => void 0);
     return pending;
   }
-  #hashJson = (value) => canonicalHash2(this.#sha256, value);
+  #hashJson = (value) => canonicalHash(this.#sha256, value);
   #context(transaction, operationIndex, mode) {
     return { transaction, operationIndex, head: this.#head, mode, hashJson: this.#hashJson };
   }
@@ -151650,7 +153186,7 @@ function createWorldProjectSourceSnapshot(sha2563, headInput, projectStateInput)
   const core = snapshotCore(head, projectState);
   return immutable4(WorldProjectSourceSnapshotSchema.parse({
     ...core,
-    snapshotHash: canonicalHash2(sha2563, core)
+    snapshotHash: canonicalHash(sha2563, core)
   }));
 }
 
@@ -153886,16 +155422,16 @@ var DerivedLod0TerrainIndex = class {
   #byCoord;
   #grid;
   constructor(entries, grid) {
-    const canonicalGrid = createTerrainGridSpec(grid);
+    const canonicalGrid2 = createTerrainGridSpec(grid);
     const byCoord = /* @__PURE__ */ new Map();
     for (const entry of entries) {
-      assertDerivedTerrainTilePlacement(entry.tile, entry.chunk, canonicalGrid);
+      assertDerivedTerrainTilePlacement(entry.tile, entry.chunk, canonicalGrid2);
       const key = tileKey(entry.chunk.tx, entry.chunk.tz);
       if (byCoord.has(key)) throw new Error(`derived terrain coordinate '${entry.chunk.lod}:${key}' is duplicated`);
       byCoord.set(key, Object.freeze({ chunk: entry.chunk, tile: entry.tile }));
     }
     this.#byCoord = byCoord;
-    this.#grid = canonicalGrid;
+    this.#grid = canonicalGrid2;
   }
   get size() {
     return this.#byCoord.size;
@@ -153997,6 +155533,31 @@ function parseDerivedTerrainTile(value, label4) {
   }
   return Object.freeze({ nrows, ncols, origin, scale: scale2, heights });
 }
+function parseDerivedSimWindowEntry(value, grid, manifestHash, label4) {
+  const item = exactPlainRecord(value, ["key", "tx", "tz", "tile"], [], label4);
+  let canonicalKey;
+  try {
+    canonicalKey = tileKey(item.tx, item.tz);
+  } catch (error51) {
+    throw derivedError("INVALID_DERIVED_TERRAIN", error51 instanceof Error ? error51.message : String(error51));
+  }
+  if (item.key !== canonicalKey) throw derivedError("INVALID_DERIVED_TERRAIN", `${label4}.key is not canonical`);
+  const tile = parseDerivedTerrainTile(item.tile, `${label4}.tile`);
+  const chunk = Object.freeze({
+    chunkId: `resident:${grid.gridId}:0:${item.tx}:${item.tz}`,
+    gridId: grid.gridId,
+    lod: 0,
+    tx: item.tx,
+    tz: item.tz,
+    topologyHash: manifestHash,
+    sourceSliceHashes: Object.freeze([]),
+    artifacts: Object.freeze([])
+  });
+  return Object.freeze({
+    windowEntry: Object.freeze({ key: canonicalKey, tx: item.tx, tz: item.tz, tile }),
+    indexEntry: Object.freeze({ chunk, tile })
+  });
+}
 function parseDerivedSimStageSnapshot(value) {
   const record11 = exactPlainRecord(
     value,
@@ -154029,27 +155590,9 @@ function parseDerivedSimStageSnapshot(value) {
   const entries = [];
   const window2 = [];
   for (let index = 0; index < record11.terrainWindow.length; index++) {
-    const item = exactPlainRecord(record11.terrainWindow[index], ["key", "tx", "tz", "tile"], [], `derived sim terrainWindow[${index}]`);
-    let canonicalKey;
-    try {
-      canonicalKey = tileKey(item.tx, item.tz);
-    } catch (error51) {
-      throw derivedError("INVALID_DERIVED_TERRAIN", error51 instanceof Error ? error51.message : String(error51));
-    }
-    if (item.key !== canonicalKey) throw derivedError("INVALID_DERIVED_TERRAIN", `derived sim terrainWindow[${index}].key is not canonical`);
-    const tile = parseDerivedTerrainTile(item.tile, `derived sim terrainWindow[${index}].tile`);
-    const chunk = Object.freeze({
-      chunkId: `resident:${grid.gridId}:0:${item.tx}:${item.tz}`,
-      gridId: grid.gridId,
-      lod: 0,
-      tx: item.tx,
-      tz: item.tz,
-      topologyHash: manifestHash,
-      sourceSliceHashes: Object.freeze([]),
-      artifacts: Object.freeze([])
-    });
-    entries.push(Object.freeze({ chunk, tile }));
-    window2.push(Object.freeze({ key: canonicalKey, tx: item.tx, tz: item.tz, tile }));
+    const parsed = parseDerivedSimWindowEntry(record11.terrainWindow[index], grid, manifestHash, `derived sim terrainWindow[${index}]`);
+    entries.push(parsed.indexEntry);
+    window2.push(parsed.windowEntry);
   }
   let terrainIndex;
   try {
@@ -154059,8 +155602,9 @@ function parseDerivedSimStageSnapshot(value) {
   }
   let generatedWater;
   let preparedGeneratedWater = void 0;
+  let preparedGeneratedField;
   if (record11.generatedWater !== void 0) {
-    const generated = exactPlainRecord(record11.generatedWater, ["artifact", "bytes", "bindings"], [], "derived sim generatedWater");
+    const generated = exactPlainRecord(record11.generatedWater, ["artifact", "bytes", "bindings"], ["fieldBytes"], "derived sim generatedWater");
     try {
       preparedGeneratedWater = prepareGeneratedWaterFieldInput({
         bytes: generated.bytes,
@@ -154069,6 +155613,9 @@ function parseDerivedSimStageSnapshot(value) {
       });
     } catch (error51) {
       throw derivedError("INVALID_DERIVED_WATER", error51 instanceof Error ? error51.message : String(error51));
+    }
+    if (generated.fieldBytes !== void 0) {
+      preparedGeneratedField = prepareDerivedSimFieldBytes(generated.fieldBytes, preparedGeneratedWater);
     }
     generatedWater = generated;
   }
@@ -154082,7 +155629,52 @@ function parseDerivedSimStageSnapshot(value) {
     terrainWindow: Object.freeze(window2),
     ...generatedWater === void 0 ? {} : { generatedWater }
   });
-  return Object.freeze({ snapshot, entries: Object.freeze(entries), index: terrainIndex, preparedGeneratedWater });
+  return Object.freeze({ snapshot, entries: Object.freeze(entries), index: terrainIndex, preparedGeneratedWater, preparedGeneratedField });
+}
+function prepareDerivedSimFieldBytes(value, preparedWater) {
+  if (!ArrayBuffer.isView(value) || Object.getPrototypeOf(value) !== Uint8Array.prototype || !(value.buffer instanceof ArrayBuffer) || value.byteOffset !== 0 || value.byteLength !== value.buffer.byteLength) {
+    throw derivedError("INVALID_DERIVED_WATER", "derived sim hydrology field bytes must own a complete non-shared Uint8Array");
+  }
+  if (`sha256:${sha256(value)}` !== preparedWater.bindings.hydrologyFieldContentHash) {
+    throw derivedError("INVALID_DERIVED_WATER", "derived sim hydrology field bytes do not match the water artifact's pinned field binding");
+  }
+  try {
+    const decoded = decodeHydrologyFieldArtifact(value);
+    const topology = preparedWater.topology;
+    if (decoded.topology.rows !== topology.rows || decoded.topology.cols !== topology.cols || decoded.topology.cellSizeM !== topology.cellSizeM || decoded.placement.originX !== topology.placement.originX || decoded.placement.originZ !== topology.placement.originZ) {
+      throw new Error("derived sim hydrology field grid does not match the verified water topology");
+    }
+    return Object.freeze({
+      placement: Object.freeze({ originX: decoded.placement.originX, originZ: decoded.placement.originZ }),
+      rows: decoded.topology.rows,
+      cols: decoded.topology.cols,
+      cellSizeM: decoded.topology.cellSizeM,
+      seaLevelM: decoded.topology.seaLevelM
+    });
+  } catch (error51) {
+    if (error51 instanceof DerivedSimActivationError) throw error51;
+    throw derivedError("INVALID_DERIVED_WATER", error51 instanceof Error ? error51.message : String(error51));
+  }
+}
+function derivedSelfBindingMap(preparedWater, field) {
+  const fieldHash = preparedWater.bindings.hydrologyFieldContentHash;
+  const map2 = {
+    version: 1,
+    id: `derived-self:${fieldHash}`,
+    unitsPerMeter: 1,
+    origin: [field.placement.originX, field.placement.originZ],
+    extent: { w: field.cols * field.cellSizeM, h: field.rows * field.cellSizeM },
+    seaLevel: field.seaLevelM,
+    land: [],
+    relief: [],
+    biomes: [],
+    waterways: [],
+    routes: [],
+    anchors: [],
+    provenance: { tool: "limina.derived-self-binding", sourceHash: fieldHash, contentHash: "0".repeat(64) }
+  };
+  map2.provenance.contentHash = worldMapContentHash(map2);
+  return Object.freeze(map2);
 }
 var DEFAULT_GRANTS = realmDefaultGrants();
 function stubScene() {
@@ -154194,7 +155786,8 @@ var SimWorkerController = class _SimWorkerController {
     for (const [id7, bytes] of assetBytes) assets.seed(id7, bytes);
     const core = registerCoreSkills(registry2, { assets });
     const authoringBinding = new AuthoringProjectBinding((projectId) => {
-      registerBrowserAuthoringRuntime(registry2, world, projectId);
+      const runtime = registerBrowserAuthoringRuntime(registry2, world, projectId);
+      core.terrainEdit.derived.projectState = runtime.projectState;
     }, opts.authoringProjectId);
     return new _SimWorkerController({
       physics,
@@ -154240,7 +155833,10 @@ var SimWorkerController = class _SimWorkerController {
     if (this.activeDerived !== null) {
       this.suppressAuthoredTerrainColliders();
       if (this.activeDerived.preparedContact !== null) {
-        this.core.water.contact.activate(this.activeDerived.preparedContact, this.activeDerived.terrainSampler);
+        const activeBindingId = this.core.water.contact.activeBindingId;
+        if (activeBindingId === null || activeBindingId === this.activeDerived.preparedContact.bindingId) {
+          this.core.water.contact.activate(this.activeDerived.preparedContact, this.activeDerived.terrainSampler);
+        }
       }
     }
     this.syncTransforms();
@@ -154297,10 +155893,10 @@ var SimWorkerController = class _SimWorkerController {
     const contact = this.core.water.contact;
     const priorTerrainSampler = contact.activeTerrainSampler;
     let preparedContact = null;
-    if (contact.activeBindingId !== null || parsed.preparedGeneratedWater !== void 0) {
-      if (contact.activeBindingId === null) {
-        throw derivedError("DERIVED_CONTACT_UNBOUND", "generated water requires an active verified authored map binding");
-      }
+    let priorContactBindingId = contact.activeBindingId;
+    let priorContactContentHash = contact.activeContentHash;
+    let priorGeneratedContentHash = contact.activeGeneratedArtifactContentHash;
+    if (priorContactBindingId !== null && !isDerivedSelfBindingId(priorContactBindingId)) {
       try {
         preparedContact = contact.prepareGeneratedForActive(parsed.preparedGeneratedWater);
       } catch (error51) {
@@ -154309,6 +155905,28 @@ var SimWorkerController = class _SimWorkerController {
       if (priorTerrainSampler === null) {
         throw derivedError("DERIVED_CONTACT_UNBOUND", "active water contact has no terrain sampler");
       }
+    } else if (parsed.preparedGeneratedWater !== void 0) {
+      if (parsed.preparedGeneratedField === void 0) {
+        throw derivedError("DERIVED_CONTACT_UNBOUND", "generated water self-binding requires the pinned hydrology field bytes");
+      }
+      const selfMap = derivedSelfBindingMap(parsed.preparedGeneratedWater, parsed.preparedGeneratedField);
+      const selfBindingId = `${DERIVED_SELF_BINDING_ID_PREFIX}${selfMap.provenance.contentHash}`;
+      if (priorContactBindingId !== null && priorContactBindingId !== selfBindingId) {
+        contact.clear(priorContactBindingId);
+        priorContactBindingId = null;
+        priorContactContentHash = null;
+        priorGeneratedContentHash = null;
+      }
+      try {
+        preparedContact = contact.prepareVerifiedMap(selfMap, { bindingId: selfBindingId }, parsed.preparedGeneratedWater);
+      } catch (error51) {
+        throw derivedError("DERIVED_CONTACT_PREPARE_FAILED", error51 instanceof Error ? error51.message : String(error51));
+      }
+    } else if (priorContactBindingId !== null) {
+      contact.clear(priorContactBindingId);
+      priorContactBindingId = null;
+      priorContactContentHash = null;
+      priorGeneratedContentHash = null;
     }
     this.stagedDerived = Object.freeze({
       requestId,
@@ -154317,9 +155935,9 @@ var SimWorkerController = class _SimWorkerController {
       index: parsed.index,
       preparedContact,
       priorTerrainSampler,
-      priorContactBindingId: contact.activeBindingId,
-      priorContactContentHash: contact.activeContentHash,
-      priorGeneratedContentHash: contact.activeGeneratedArtifactContentHash
+      priorContactBindingId,
+      priorContactContentHash,
+      priorGeneratedContentHash
     });
     this.lastDiscardedDerived = null;
     return Object.freeze({ requestId, manifestHash, tick: this.ticks });
@@ -154341,8 +155959,9 @@ var SimWorkerController = class _SimWorkerController {
       throw derivedError("STALE_DERIVED_CONTACT", "active water contact changed after derived staging");
     }
     const fallback = candidate.priorTerrainSampler;
+    const indexCell = { current: candidate.index };
     const terrainSampler = (x3, z4) => {
-      const resident = candidate.index.sampleHeight(x3, z4);
+      const resident = indexCell.current.sampleHeight(x3, z4);
       if (resident !== null) return resident;
       if (fallback !== null) return fallback(x3, z4);
       throw new RangeError("derived terrain query is outside the resident LOD0 window and has no prior sampler");
@@ -154375,7 +155994,11 @@ var SimWorkerController = class _SimWorkerController {
       this.activeDerived = Object.freeze({
         requestId: stagedRequestId,
         manifestHash,
+        grid: candidate.snapshot.grid,
         colliderIds: Object.freeze(nextColliderIds),
+        colliders: new Map(candidate.entries.map((entry, index) => [tileKey(entry.chunk.tx, entry.chunk.tz), nextColliderIds[index]])),
+        tiles: new Map(candidate.entries.map((entry) => [tileKey(entry.chunk.tx, entry.chunk.tz), entry])),
+        indexCell,
         preparedContact: candidate.preparedContact,
         terrainSampler
       });
@@ -154391,6 +156014,184 @@ var SimWorkerController = class _SimWorkerController {
       throw derivedError("DERIVED_COMMIT_FAILED", error51 instanceof Error ? error51.message : String(error51));
     }
     return Object.freeze({ requestId, stagedRequestId, manifestHash, tick: this.ticks });
+  }
+  /** 2.0-B incremental residency delta: add/remove ONLY the chunk-set difference of a
+   *  same-manifest window move. Mirrors the streamTileColliders precedent (keyed
+   *  heightfield add/remove between fixed steps) but goes through ONE physics
+   *  snapshot/rollback wrapper like commitDerivedRevision — a tick never observes a
+   *  half-applied delta. Every semantic check runs BEFORE the wrapper, so a rejected
+   *  delta leaves physics, colliders, and the contact sampler untouched (fail-closed;
+   *  the render realm falls back to a full stage/commit on the next activation). */
+  updateDerivedResidency(requestIdValue, manifestHashValue, updateValue) {
+    if (this.disposed) throw derivedError("SIM_DISPOSED", "sim worker is disposed");
+    const requestId = derivedId(requestIdValue, "derived residency update requestId");
+    const manifestHash = derivedHash(manifestHashValue, "derived residency update manifestHash");
+    const active = this.activeDerived;
+    if (active === null || active.manifestHash !== manifestHash) {
+      throw derivedError("STALE_DERIVED_STAGE", "derived residency update does not name the active revision");
+    }
+    if (this.stagedDerived !== null) {
+      throw derivedError("STALE_DERIVED_STAGE", "derived residency update raced a staged full revision");
+    }
+    const update = exactPlainRecord(updateValue, ["added", "removed"], [], "derived residency update");
+    if (!Array.isArray(update.added) || update.added.length > DERIVED_SIM_MAX_RESIDENT_TILES || !Array.isArray(update.removed) || update.removed.length > DERIVED_SIM_MAX_RESIDENT_TILES) {
+      throw derivedError("INVALID_DERIVED_TERRAIN", `derived residency update must carry 0-${DERIVED_SIM_MAX_RESIDENT_TILES} added and removed entries`);
+    }
+    const added = [];
+    const addedKeys = /* @__PURE__ */ new Set();
+    for (let index = 0; index < update.added.length; index++) {
+      const parsed = parseDerivedSimWindowEntry(update.added[index], active.grid, manifestHash, `derived residency added[${index}]`);
+      if (addedKeys.has(parsed.windowEntry.key)) {
+        throw derivedError("INVALID_DERIVED_TERRAIN", `derived residency added key '${parsed.windowEntry.key}' is duplicated`);
+      }
+      if (active.colliders.has(parsed.windowEntry.key)) {
+        throw derivedError("INVALID_DERIVED_TERRAIN", `derived residency added key '${parsed.windowEntry.key}' is already resident`);
+      }
+      addedKeys.add(parsed.windowEntry.key);
+      added.push(parsed);
+    }
+    const removedKeys = [];
+    const removedKeySet = /* @__PURE__ */ new Set();
+    for (let index = 0; index < update.removed.length; index++) {
+      const key = update.removed[index];
+      if (typeof key !== "string") throw derivedError("INVALID_DERIVED_TERRAIN", `derived residency removed[${index}] must be a chunk key`);
+      try {
+        parseTileKey(key);
+      } catch {
+        throw derivedError("INVALID_DERIVED_TERRAIN", `derived residency removed key '${key}' is not canonical`);
+      }
+      if (removedKeySet.has(key)) throw derivedError("INVALID_DERIVED_TERRAIN", `derived residency removed key '${key}' is duplicated`);
+      if (addedKeys.has(key)) throw derivedError("INVALID_DERIVED_TERRAIN", `derived residency key '${key}' is both added and removed`);
+      if (!active.colliders.has(key)) {
+        throw derivedError("INVALID_DERIVED_TERRAIN", `derived residency removed key '${key}' is not resident`);
+      }
+      removedKeySet.add(key);
+      removedKeys.push(key);
+    }
+    const residentAfter = active.colliders.size - removedKeys.length + added.length;
+    if (residentAfter < 1 || residentAfter > DERIVED_SIM_MAX_RESIDENT_TILES) {
+      throw derivedError("INVALID_DERIVED_TERRAIN", `derived residency update leaves ${residentAfter} resident tiles, outside 1-${DERIVED_SIM_MAX_RESIDENT_TILES}`);
+    }
+    const physicsSnapshot = this.world.ops.op_physics_snapshot();
+    const addedColliderIds = [];
+    try {
+      for (const key of removedKeys) this.world.ops.op_physics_remove_body(active.colliders.get(key));
+      for (const entry of added) {
+        const tile = entry.windowEntry.tile;
+        addedColliderIds.push(this.world.ops.op_physics_add_heightfield(
+          tile.origin[0],
+          tile.origin[1],
+          tile.origin[2],
+          tile.nrows,
+          tile.ncols,
+          tile.scale[0],
+          tile.scale[1],
+          tile.scale[2],
+          tile.heights
+        ));
+      }
+      for (const key of removedKeys) {
+        active.colliders.delete(key);
+        active.tiles.delete(key);
+      }
+      for (let index = 0; index < added.length; index++) {
+        active.colliders.set(added[index].windowEntry.key, addedColliderIds[index]);
+        active.tiles.set(added[index].windowEntry.key, added[index].indexEntry);
+      }
+      active.indexCell.current = new DerivedLod0TerrainIndex([...active.tiles.values()], active.grid);
+      this.activeDerived = Object.freeze({
+        ...active,
+        colliderIds: Object.freeze([...active.colliders.values()])
+      });
+    } catch (error51) {
+      try {
+        this.world.ops.op_physics_restore(physicsSnapshot);
+      } catch (restoreError) {
+        throw new AggregateError([error51, restoreError], "derived residency update failed and physics rollback also failed");
+      }
+      throw derivedError("DERIVED_RESIDENCY_UPDATE_FAILED", error51 instanceof Error ? error51.message : String(error51));
+    }
+    return Object.freeze({ requestId, manifestHash, added: added.length, removed: removedKeys.length, tick: this.ticks });
+  }
+  /** Content-delta (sculpt-on-derived): replace the heightfield colliders of EXACTLY
+   *  the resident chunks whose content hash moved between two manifests of one
+   *  window, then re-name the active revision to the new manifest. A replacement IS
+   *  remove+add for the same key inside ONE physics snapshot/rollback wrapper — a
+   *  tick never observes a half-applied delta. The contact sampler is untouched: it
+   *  reads indexCell, which swaps to an index built from the replaced tiles, so
+   *  contact queries see the new heights without a water rebind (the water artifact
+   *  is routing-guaranteed unchanged). Every semantic check runs BEFORE the wrapper,
+   *  so a rejected delta leaves physics, colliders, and the contact sampler
+   *  untouched (fail-closed; the render realm falls back to a full stage/commit). */
+  updateDerivedContent(requestIdValue, manifestHashValue, updateValue) {
+    if (this.disposed) throw derivedError("SIM_DISPOSED", "sim worker is disposed");
+    const requestId = derivedId(requestIdValue, "derived content update requestId");
+    const manifestHash = derivedHash(manifestHashValue, "derived content update manifestHash");
+    const active = this.activeDerived;
+    if (active === null || active.manifestHash !== manifestHash) {
+      throw derivedError("STALE_DERIVED_STAGE", "derived content update does not name the active revision");
+    }
+    if (this.stagedDerived !== null) {
+      throw derivedError("STALE_DERIVED_STAGE", "derived content update raced a staged full revision");
+    }
+    const update = exactPlainRecord(updateValue, ["nextManifestHash", "replaced"], [], "derived content update");
+    const nextManifestHash = derivedHash(update.nextManifestHash, "derived content update nextManifestHash");
+    if (nextManifestHash === manifestHash) {
+      throw derivedError("INVALID_DERIVED_TERRAIN", "derived content update requires a changed manifest");
+    }
+    if (!Array.isArray(update.replaced) || update.replaced.length < 1 || update.replaced.length > DERIVED_SIM_MAX_RESIDENT_TILES) {
+      throw derivedError("INVALID_DERIVED_TERRAIN", `derived content update must carry 1-${DERIVED_SIM_MAX_RESIDENT_TILES} replaced entries`);
+    }
+    const replaced = [];
+    const replacedKeys = /* @__PURE__ */ new Set();
+    for (let index = 0; index < update.replaced.length; index++) {
+      const parsed = parseDerivedSimWindowEntry(update.replaced[index], active.grid, nextManifestHash, `derived content replaced[${index}]`);
+      if (replacedKeys.has(parsed.windowEntry.key)) {
+        throw derivedError("INVALID_DERIVED_TERRAIN", `derived content replaced key '${parsed.windowEntry.key}' is duplicated`);
+      }
+      if (!active.colliders.has(parsed.windowEntry.key)) {
+        throw derivedError("INVALID_DERIVED_TERRAIN", `derived content replaced key '${parsed.windowEntry.key}' is not resident`);
+      }
+      replacedKeys.add(parsed.windowEntry.key);
+      replaced.push(parsed);
+    }
+    const physicsSnapshot = this.world.ops.op_physics_snapshot();
+    try {
+      const nextColliderIds = [];
+      for (const entry of replaced) this.world.ops.op_physics_remove_body(active.colliders.get(entry.windowEntry.key));
+      for (const entry of replaced) {
+        const tile = entry.windowEntry.tile;
+        nextColliderIds.push(this.world.ops.op_physics_add_heightfield(
+          tile.origin[0],
+          tile.origin[1],
+          tile.origin[2],
+          tile.nrows,
+          tile.ncols,
+          tile.scale[0],
+          tile.scale[1],
+          tile.scale[2],
+          tile.heights
+        ));
+      }
+      for (let index = 0; index < replaced.length; index++) {
+        active.colliders.set(replaced[index].windowEntry.key, nextColliderIds[index]);
+        active.tiles.set(replaced[index].windowEntry.key, replaced[index].indexEntry);
+      }
+      active.indexCell.current = new DerivedLod0TerrainIndex([...active.tiles.values()], active.grid);
+      this.activeDerived = Object.freeze({
+        ...active,
+        manifestHash: nextManifestHash,
+        colliderIds: Object.freeze([...active.colliders.values()])
+      });
+    } catch (error51) {
+      try {
+        this.world.ops.op_physics_restore(physicsSnapshot);
+      } catch (restoreError) {
+        throw new AggregateError([error51, restoreError], "derived content update failed and physics rollback also failed");
+      }
+      throw derivedError("DERIVED_CONTENT_UPDATE_FAILED", error51 instanceof Error ? error51.message : String(error51));
+    }
+    return Object.freeze({ requestId, manifestHash, replaced: replaced.length, tick: this.ticks });
   }
   /** Discard is idempotent only for the exact candidate most recently discarded. Replaced,
    *  committed, arbitrary or manifest-mismatched IDs are stale and are rejected. */
@@ -154632,20 +156433,26 @@ var FixedStepAccumulator = class {
   }
 };
 function parseDerivedRevisionShellMessage(value) {
-  const record11 = exactPlainRecord(value, ["type", "requestId", "manifestHash"], ["snapshot", "stagedRequestId"], "derived revision shell message");
+  const record11 = exactPlainRecord(value, ["type", "requestId", "manifestHash"], ["snapshot", "stagedRequestId", "update"], "derived revision shell message");
   const type = record11.type;
-  if (type !== "stageDerivedRevision" && type !== "commitDerivedRevision" && type !== "discardDerivedRevision") {
+  if (type !== "stageDerivedRevision" && type !== "commitDerivedRevision" && type !== "discardDerivedRevision" && type !== "updateDerivedResidency" && type !== "updateDerivedContent") {
     throw derivedError("INVALID_DERIVED_MESSAGE", "derived revision shell message type is invalid");
   }
   const requestId = derivedId(record11.requestId, `derived ${type} requestId`);
   const manifestHash = derivedHash(record11.manifestHash, `derived ${type} manifestHash`);
   if (type === "stageDerivedRevision") {
-    if (!Object.hasOwn(record11, "snapshot") || Object.hasOwn(record11, "stagedRequestId")) {
+    if (!Object.hasOwn(record11, "snapshot") || Object.hasOwn(record11, "stagedRequestId") || Object.hasOwn(record11, "update")) {
       throw derivedError("INVALID_DERIVED_MESSAGE", "derived stage message fields are invalid");
     }
     return Object.freeze({ type, requestId, manifestHash, snapshot: record11.snapshot });
   }
-  if (!Object.hasOwn(record11, "stagedRequestId") || Object.hasOwn(record11, "snapshot")) {
+  if (type === "updateDerivedResidency" || type === "updateDerivedContent") {
+    if (!Object.hasOwn(record11, "update") || Object.hasOwn(record11, "snapshot") || Object.hasOwn(record11, "stagedRequestId")) {
+      throw derivedError("INVALID_DERIVED_MESSAGE", "derived update message fields are invalid");
+    }
+    return type === "updateDerivedResidency" ? Object.freeze({ type, requestId, manifestHash, update: record11.update }) : Object.freeze({ type, requestId, manifestHash, update: record11.update });
+  }
+  if (!Object.hasOwn(record11, "stagedRequestId") || Object.hasOwn(record11, "snapshot") || Object.hasOwn(record11, "update")) {
     throw derivedError("INVALID_DERIVED_MESSAGE", `derived ${type} message fields are invalid`);
   }
   const stagedRequestId = derivedId(record11.stagedRequestId, `derived ${type} stagedRequestId`);
@@ -154800,8 +156607,8 @@ function installSimWorker(scope, dependencies = {}) {
       }
     } else if (msg.type === "streamTileColliders") {
       if (controller !== null) controller.applyStreamTileColliders(msg.add ?? [], msg.remove ?? []);
-    } else if (msg.type === "stageDerivedRevision" || msg.type === "commitDerivedRevision" || msg.type === "discardDerivedRevision") {
-      const operation = msg.type === "stageDerivedRevision" ? "stage" : msg.type === "commitDerivedRevision" ? "commit" : "discard";
+    } else if (msg.type === "stageDerivedRevision" || msg.type === "commitDerivedRevision" || msg.type === "discardDerivedRevision" || msg.type === "updateDerivedResidency" || msg.type === "updateDerivedContent") {
+      const operation = msg.type === "stageDerivedRevision" ? "stage" : msg.type === "commitDerivedRevision" ? "commit" : msg.type === "updateDerivedResidency" || msg.type === "updateDerivedContent" ? "update" : "discard";
       try {
         if (controller === null) throw derivedError("SIM_NOT_INITIALIZED", "sim worker is not initialized");
         const derived = parseDerivedRevisionShellMessage(msg);
@@ -154811,6 +156618,12 @@ function installSimWorker(scope, dependencies = {}) {
         } else if (derived.type === "commitDerivedRevision") {
           const result2 = controller.commitDerivedRevision(derived.requestId, derived.stagedRequestId, derived.manifestHash);
           scope.postMessage({ type: "derivedRevisionCommitted", ...result2 });
+        } else if (derived.type === "updateDerivedResidency") {
+          const result2 = controller.updateDerivedResidency(derived.requestId, derived.manifestHash, derived.update);
+          scope.postMessage({ type: "derivedRevisionUpdated", ...result2 });
+        } else if (derived.type === "updateDerivedContent") {
+          const result2 = controller.updateDerivedContent(derived.requestId, derived.manifestHash, derived.update);
+          scope.postMessage({ type: "derivedRevisionUpdated", ...result2 });
         } else {
           const result2 = controller.discardDerivedRevision(derived.requestId, derived.stagedRequestId, derived.manifestHash);
           scope.postMessage({ type: "derivedRevisionDiscarded", ...result2 });
@@ -154880,7 +156693,7 @@ function smoothRiverPresentationReach(reach, requestedIterations = 2) {
 // src/render/water/generated-water-renderer.ts
 var GENERATED_BASIN_ID = /^gen-b-[0-9a-z]+-[0-9a-z]+$/;
 var GENERATED_REACH_ID = /^gen-r-[0-9a-z]+-[0-9a-z]+$/;
-var CONTENT_HASH2 = /^sha256:[0-9a-f]{64}$/;
+var CONTENT_HASH4 = /^sha256:[0-9a-f]{64}$/;
 var WATER_COLOR = 1523523;
 var presentationReachCache = /* @__PURE__ */ new WeakMap();
 function presentationReach(reach) {
@@ -155013,12 +156826,12 @@ function generatedWaterCoversPoint(resource, x3, z4, marginM = 0) {
   }
   return false;
 }
-function finite15(value, label4) {
+function finite17(value, label4) {
   if (!Number.isFinite(value) || Object.is(value, -0)) throw new TypeError(`${label4} must be a canonical finite number`);
   return value;
 }
 function positive4(value, label4) {
-  finite15(value, label4);
+  finite17(value, label4);
   if (!(value > 0)) throw new RangeError(`${label4} must be positive`);
   return value;
 }
@@ -155030,8 +156843,8 @@ function integer4(value, minimum, maximum, label4) {
 }
 function inspectPoint(point3, label4) {
   if (!Array.isArray(point3) || point3.length !== 2) throw new TypeError(`${label4} must be a 2-tuple`);
-  finite15(point3[0], `${label4}[0]`);
-  finite15(point3[1], `${label4}[1]`);
+  finite17(point3[0], `${label4}[0]`);
+  finite17(point3[1], `${label4}[1]`);
   if (Math.abs(point3[0]) > WATER_LIMITS.absCoordinateM || Math.abs(point3[1]) > WATER_LIMITS.absCoordinateM) {
     throw new RangeError(`${label4} exceeds the generated-water coordinate limit`);
   }
@@ -155046,16 +156859,16 @@ function inspectRing(ring2, label4) {
 function inspectResource(resource, manager) {
   if (manager.disposed) throw new Error("generated-water renderer requires a live visible-water manager");
   if (resource === null || typeof resource !== "object") throw new TypeError("generated-water render resource must be an object");
-  if (!CONTENT_HASH2.test(resource.artifactHash)) throw new TypeError("generated-water artifactHash must be a canonical sha256 hash");
+  if (!CONTENT_HASH4.test(resource.artifactHash)) throw new TypeError("generated-water artifactHash must be a canonical sha256 hash");
   if (typeof resource.sampleTerrainHeight !== "function") throw new TypeError("generated-water terrain sampler must be a function");
   const field = resource.field;
   if (field === null || typeof field !== "object") throw new TypeError("generated-water field must be an object");
-  finite15(field.placement?.originX, "generated-water field originX");
-  finite15(field.placement?.originZ, "generated-water field originZ");
+  finite17(field.placement?.originX, "generated-water field originX");
+  finite17(field.placement?.originZ, "generated-water field originZ");
   integer4(field.rows, 2, 1025, "generated-water field rows");
   integer4(field.cols, 2, 1025, "generated-water field cols");
   positive4(field.cellSizeM, "generated-water field cellSizeM");
-  finite15(field.seaLevelM, "generated-water field seaLevelM");
+  finite17(field.seaLevelM, "generated-water field seaLevelM");
   if (!(field.oceanMask instanceof Uint8Array) || field.oceanMask.length !== field.rows * field.cols) {
     throw new RangeError("generated-water field ocean mask does not match its dimensions");
   }
@@ -155078,7 +156891,7 @@ function inspectResource(resource, manager) {
     const basin = topology.basins[basinIndex];
     if (basin.id.length > 64 || !GENERATED_BASIN_ID.test(basin.id) || ids.has(basin.id)) throw new TypeError(`generated-water basin ${basinIndex} id is invalid or duplicated`);
     ids.add(basin.id);
-    finite15(basin.spillLevelM, `generated-water basin ${basin.id} spillLevelM`);
+    finite17(basin.spillLevelM, `generated-water basin ${basin.id} spillLevelM`);
     positive4(basin.maxDepthM, `generated-water basin ${basin.id} maxDepthM`);
     basinPoints += inspectRing(basin.footprint.points, `generated-water basin ${basin.id} outer`);
     if (!Array.isArray(basin.footprint.holes) || basin.footprint.holes.length > WATER_LIMITS.holes) {
@@ -155106,8 +156919,8 @@ function inspectResource(resource, manager) {
       inspectPoint(reach.points[point3], `generated-water reach ${reach.id} point ${point3}`);
       const width = positive4(reach.widths[point3], `generated-water reach ${reach.id} width ${point3}`);
       if (width > WATER_LIMITS.widthM) throw new RangeError(`generated-water reach ${reach.id} width ${point3} exceeds the cap`);
-      const terrain = finite15(reach.terrainElevationsM[point3], `generated-water reach ${reach.id} terrain elevation ${point3}`);
-      const surface = finite15(reach.surfaceElevationsM[point3], `generated-water reach ${reach.id} surface elevation ${point3}`);
+      const terrain = finite17(reach.terrainElevationsM[point3], `generated-water reach ${reach.id} terrain elevation ${point3}`);
+      const surface = finite17(reach.surfaceElevationsM[point3], `generated-water reach ${reach.id} surface elevation ${point3}`);
       if (surface < terrain) throw new RangeError(`generated-water reach ${reach.id} surface is below terrain at point ${point3}`);
       if (point3 > 0) {
         const prior = reach.points[point3 - 1];
@@ -155741,6 +157554,14 @@ function derivedTerrainResidencyKey(input) {
   const residency = parseDerivedTerrainResidency(input);
   return `${residency.lod}:${residency.center[0]}:${residency.center[1]}:${residency.radius}`;
 }
+function planDerivedActivation(active, manifestHash, residencyKey, carriesPopulation, contentDeltaKeys = null) {
+  if (active === null) return "full";
+  if (active.manifestHash !== manifestHash) {
+    return active.residencyKey === residencyKey && !carriesPopulation && contentDeltaKeys !== null && contentDeltaKeys.length > 0 ? "content-delta" : "full";
+  }
+  if (active.residencyKey === residencyKey) return "duplicate";
+  return carriesPopulation ? "full" : "incremental";
+}
 function selectDerivedTerrainChunks(manifest, residencyInput) {
   const residency = parseDerivedTerrainResidency(residencyInput);
   const anchor2 = terrainWorldToChunk(manifest.grid, residency.center[0], residency.center[1]);
@@ -155750,6 +157571,193 @@ function selectDerivedTerrainChunks(manifest, residencyInput) {
     throw new RangeError("derived terrain residency exceeds its 225-chunk bound");
   }
   return Object.freeze([...chunks]);
+}
+
+// src/world/biome-surface-plan.mjs
+var BIOME_SURFACE_PLAN_LIMITS = Object.freeze({ rows: 1025, cols: 1025, cells: 1050625, roles: 32, slots: 16, bytes: 64 * 1024 * 1024 });
+
+// src/world/surface-composite-tile.mjs
+var SURFACE_COMPOSITE_TILE_SCHEMA = "limina.surface-composite-tile/v1";
+var SURFACE_COMPOSITE_POLICY_VERSION = 8;
+var SURFACE_COMPOSITE_LIMITS = Object.freeze({ interior: 256, gutter: 4, roles: 32, sourceDimension: 4096, outputBytes: 4 * 1024 * 1024 });
+
+// src/world/compiler/surface-composite-artifact.mjs
+var SURFACE_COMPOSITE_ARTIFACT_TYPE = "surface-composite-tile/v1";
+var SURFACE_COMPOSITE_ARTIFACT_MEDIA_TYPE = "application/vnd.limina.surface-composite-qoi-v1";
+var SURFACE_COMPOSITE_ARTIFACT_VERSION = 1;
+var MAX_SURFACE_COMPOSITE_ARTIFACT_BYTES = 4 * 1024 * 1024;
+var MAX_SURFACE_COMPOSITE_DECODED_BYTES = 4 * 1024 * 1024;
+var MAGIC3 = Object.freeze([76, 77, 83, 85, 82, 70, 1, 0]);
+var HEADER_BYTES = 32;
+var MAX_METADATA_BYTES = 16 * 1024;
+var HASH10 = /^sha256:[0-9a-f]{64}$/;
+var textEncoder = new TextEncoder();
+var textDecoder = new TextDecoder("utf-8", { fatal: true });
+function checkpoint5(control, index = 0) {
+  if ((index & 4095) === 0 && control?.shouldCancel?.() === true) {
+    const error51 = new Error("surface composite artifact operation cancelled");
+    error51.name = "AbortError";
+    throw error51;
+  }
+}
+function plain4(value, label4) {
+  if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
+    throw new TypeError(`${label4} must be a plain object`);
+  }
+  return value;
+}
+function exact5(value, keys2, label4) {
+  const names = Object.getOwnPropertyNames(value), expected = new Set(keys2);
+  if (Object.getOwnPropertySymbols(value).length !== 0 || names.length !== expected.size || names.some((name) => !expected.has(name))) {
+    throw new TypeError(`${label4} fields are invalid`);
+  }
+  for (const name of names) {
+    const descriptor3 = Object.getOwnPropertyDescriptor(value, name);
+    if (descriptor3?.enumerable !== true || descriptor3.get !== void 0 || descriptor3.set !== void 0) {
+      throw new TypeError(`${label4}.${name} must be an enumerable data field`);
+    }
+  }
+  return value;
+}
+function integer5(value, minimum, maximum, label4) {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new RangeError(`${label4} is out of bounds`);
+  return value;
+}
+function finite18(value, label4) {
+  if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0)) throw new RangeError(`${label4} must be a canonical finite number`);
+  return value;
+}
+function hash9(value, label4) {
+  if (typeof value !== "string" || !HASH10.test(value)) throw new TypeError(`${label4} must be a canonical content hash`);
+  return value;
+}
+function tuple2(value, label4) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length !== 2) throw new TypeError(`${label4} must be a two-number array`);
+  return Object.freeze([finite18(value[0], `${label4}[0]`), finite18(value[1], `${label4}[1]`)]);
+}
+function canonicalMetadata(input, verifyPixels = true) {
+  const root = exact5(plain4(input, "surface composite"), ["schema", "source", "coord", "placement", "resolution", "maps", "edgeHashes", "diagnostics"], "surface composite");
+  if (root.schema !== SURFACE_COMPOSITE_TILE_SCHEMA) throw new TypeError("surface composite schema is unsupported");
+  const sourceInput = plain4(root.source, "surface composite source");
+  const source = exact5(sourceInput, Object.hasOwn(sourceInput, "environmentHash") ? ["biomeFieldHash", "biomePackHash", "terrainChunkHash", "environmentHash", "policyVersion"] : ["biomeFieldHash", "biomePackHash", "terrainChunkHash", "policyVersion"], "surface composite source");
+  const coord = exact5(plain4(root.coord, "surface composite coord"), ["tx", "tz", "lod"], "surface composite coord");
+  const placement = exact5(plain4(root.placement, "surface composite placement"), ["origin", "sizeM", "featureOrigin"], "surface composite placement");
+  const resolution = exact5(plain4(root.resolution, "surface composite resolution"), ["interior", "gutter", "total"], "surface composite resolution");
+  const maps = exact5(plain4(root.maps, "surface composite maps"), ["albedo", "normal", "orm"], "surface composite maps");
+  const edges = exact5(plain4(root.edgeHashes, "surface composite edge hashes"), ["north", "east", "south", "west"], "surface composite edge hashes");
+  const diagnostics2 = exact5(plain4(root.diagnostics, "surface composite diagnostics"), ["roles", "runtimeTextureSamples", "outputBytes"], "surface composite diagnostics");
+  const interior = integer5(resolution.interior, 2, 256, "surface composite interior");
+  const gutter = integer5(resolution.gutter, 0, 4, "surface composite gutter");
+  const total = integer5(resolution.total, 2, 264, "surface composite total");
+  if (total !== interior + gutter * 2) throw new Error("surface composite resolution is inconsistent");
+  const decodedMapBytes = total * total * 4;
+  if (decodedMapBytes * 3 > MAX_SURFACE_COMPOSITE_DECODED_BYTES) throw new RangeError("surface composite decoded maps exceed budget");
+  const mapMeta = {};
+  for (const name of ["albedo", "normal", "orm"]) {
+    const entry = plain4(maps[name], `surface composite ${name}`);
+    const required2 = name === "albedo" ? ["data", "contentHash", "colorSpace"] : name === "normal" ? ["data", "contentHash", "colorSpace", "convention"] : ["data", "contentHash", "colorSpace", "channels"];
+    exact5(entry, required2, `surface composite ${name}`);
+    if (!(entry.data instanceof Uint8Array) || !(entry.data.buffer instanceof ArrayBuffer) || entry.data.length !== decodedMapBytes || entry.data.byteOffset !== 0 || entry.data.byteLength !== entry.data.buffer.byteLength) {
+      throw new TypeError(`surface composite ${name} must be owned exact RGBA8 data`);
+    }
+    const contentHash4 = hash9(entry.contentHash, `surface composite ${name} hash`);
+    if (verifyPixels && `sha256:${sha256(entry.data)}` !== contentHash4) throw new Error(`surface composite ${name} content hash mismatch`);
+    if (entry.colorSpace !== (name === "albedo" ? "srgb" : "none")) throw new Error(`surface composite ${name} color space is invalid`);
+    if (name === "normal" && entry.convention !== "opengl-y-plus") throw new Error("surface composite normal convention is invalid");
+    if (name === "orm" && entry.channels !== "ao-roughness-metalness-grass-density") throw new Error("surface composite ORM channels are invalid");
+    mapMeta[name] = Object.freeze({
+      contentHash: contentHash4,
+      colorSpace: entry.colorSpace,
+      ...name === "normal" ? { convention: entry.convention } : {},
+      ...name === "orm" ? { channels: entry.channels } : {}
+    });
+  }
+  const outputBytes = integer5(diagnostics2.outputBytes, 1, MAX_SURFACE_COMPOSITE_DECODED_BYTES, "surface composite output bytes");
+  if (outputBytes !== decodedMapBytes * 3 || diagnostics2.runtimeTextureSamples !== 3) throw new Error("surface composite diagnostics are inconsistent");
+  return Object.freeze({
+    schema: SURFACE_COMPOSITE_TILE_SCHEMA,
+    source: Object.freeze({
+      biomeFieldHash: hash9(source.biomeFieldHash, "surface composite biome field hash"),
+      biomePackHash: hash9(source.biomePackHash, "surface composite biome pack hash"),
+      terrainChunkHash: hash9(source.terrainChunkHash, "surface composite terrain chunk hash"),
+      environmentHash: hash9(source.environmentHash ?? source.terrainChunkHash, "surface composite environment hash"),
+      policyVersion: integer5(source.policyVersion, SURFACE_COMPOSITE_POLICY_VERSION, SURFACE_COMPOSITE_POLICY_VERSION, "surface composite policy version")
+    }),
+    coord: Object.freeze({ tx: integer5(coord.tx, -1e6, 1e6, "surface composite tx"), tz: integer5(coord.tz, -1e6, 1e6, "surface composite tz"), lod: integer5(coord.lod, 0, 16, "surface composite lod") }),
+    placement: Object.freeze({ origin: tuple2(placement.origin, "surface composite origin"), sizeM: (() => {
+      const size = finite18(placement.sizeM, "surface composite size");
+      if (!(size > 0) || size > 1e6) throw new RangeError("surface composite size is out of bounds");
+      return size;
+    })(), featureOrigin: tuple2(placement.featureOrigin, "surface composite feature origin") }),
+    resolution: Object.freeze({ interior, gutter, total }),
+    maps: Object.freeze(mapMeta),
+    edgeHashes: Object.freeze({ north: hash9(edges.north, "surface composite north edge"), east: hash9(edges.east, "surface composite east edge"), south: hash9(edges.south, "surface composite south edge"), west: hash9(edges.west, "surface composite west edge") }),
+    diagnostics: Object.freeze({ roles: integer5(diagnostics2.roles, 1, 32, "surface composite roles"), runtimeTextureSamples: 3, outputBytes }),
+    codec: "qoi-rgba-v1"
+  });
+}
+function pixelHash(r2, g4, b3, a2) {
+  return r2 * 3 + g4 * 5 + b3 * 7 + a2 * 11 & 63;
+}
+function qoiEncode(data, control) {
+  const output3 = [], index = new Uint8Array(64 * 4);
+  let pr = 0, pg2 = 0, pb = 0, pa = 255, run2 = 0;
+  const flush = () => {
+    if (run2 > 0) {
+      output3.push(192 | run2 - 1);
+      run2 = 0;
+    }
+  };
+  for (let offset = 0, pixel = 0; offset < data.length; offset += 4, pixel++) {
+    checkpoint5(control, pixel);
+    const r2 = data[offset], g4 = data[offset + 1], b3 = data[offset + 2], a2 = data[offset + 3];
+    if (r2 === pr && g4 === pg2 && b3 === pb && a2 === pa) {
+      run2++;
+      if (run2 === 62 || offset + 4 === data.length) flush();
+      continue;
+    }
+    flush();
+    const slot = pixelHash(r2, g4, b3, a2) * 4;
+    if (index[slot] === r2 && index[slot + 1] === g4 && index[slot + 2] === b3 && index[slot + 3] === a2) output3.push(slot / 4);
+    else {
+      index[slot] = r2;
+      index[slot + 1] = g4;
+      index[slot + 2] = b3;
+      index[slot + 3] = a2;
+      const dr = r2 - pr, dg2 = g4 - pg2, db = b3 - pb;
+      if (a2 === pa && dr >= -2 && dr <= 1 && dg2 >= -2 && dg2 <= 1 && db >= -2 && db <= 1) output3.push(64 | dr + 2 << 4 | dg2 + 2 << 2 | db + 2);
+      else if (a2 === pa && dg2 >= -32 && dg2 <= 31 && dr - dg2 >= -8 && dr - dg2 <= 7 && db - dg2 >= -8 && db - dg2 <= 7) output3.push(128 | dg2 + 32, dr - dg2 + 8 << 4 | db - dg2 + 8);
+      else if (a2 === pa) output3.push(254, r2, g4, b3);
+      else output3.push(255, r2, g4, b3, a2);
+    }
+    pr = r2;
+    pg2 = g4;
+    pb = b3;
+    pa = a2;
+  }
+  return Uint8Array.from(output3);
+}
+function encodeSurfaceCompositeArtifact(input, control = {}) {
+  checkpoint5(control);
+  const metadata = canonicalMetadata(input), metadataBytes = textEncoder.encode(JSON.stringify(metadata));
+  const streams = [input.maps.albedo.data, input.maps.normal.data, input.maps.orm.data].map((data) => qoiEncode(data, control));
+  const length3 = HEADER_BYTES + metadataBytes.length + streams.reduce((sum, stream) => sum + stream.length, 0);
+  if (length3 > MAX_SURFACE_COMPOSITE_ARTIFACT_BYTES) throw new RangeError("surface composite artifact exceeds encoded byte budget");
+  const bytes = new Uint8Array(length3);
+  bytes.set(MAGIC3);
+  const view = new DataView(bytes.buffer);
+  view.setUint16(8, SURFACE_COMPOSITE_ARTIFACT_VERSION, true);
+  view.setUint16(10, HEADER_BYTES, true);
+  view.setUint32(12, length3, true);
+  view.setUint32(16, metadataBytes.length, true);
+  streams.forEach((stream, index) => view.setUint32(20 + index * 4, stream.length, true));
+  bytes.set(metadataBytes, HEADER_BYTES);
+  let offset = HEADER_BYTES + metadataBytes.length;
+  for (const stream of streams) {
+    bytes.set(stream, offset);
+    offset += stream.length;
+  }
+  return bytes;
 }
 
 // src/world/compiler/navigation-index-artifact.mjs
@@ -155762,8 +157770,8 @@ var MAX_NAVIGATION_INDEX_SEARCH_KEYS_PER_ENTRY = 16;
 var MAX_NAVIGATION_INDEX_SEARCH_KEYS = MAX_NAVIGATION_INDEX_ENTRIES * 4;
 var MAX_NAVIGATION_INDEX_STRING_CHARS = 256;
 var MAX_NAVIGATION_INDEX_ARTIFACT_BYTES = 12 * 1024 * 1024;
-var MAGIC3 = Uint8Array.of(76, 78, 65, 86, 73, 68, 88, 49);
-var HEADER_BYTES = 96;
+var MAGIC4 = Uint8Array.of(76, 78, 65, 86, 73, 68, 88, 49);
+var HEADER_BYTES2 = 96;
 var ENTRY_BYTES = 56;
 var KEY_BYTES = 8;
 var STRING_DESCRIPTOR_BYTES = 8;
@@ -155874,17 +157882,17 @@ function checkedSectionEnd(offset, count, stride, label4) {
   return end;
 }
 function hasMagic(bytes) {
-  for (let index = 0; index < MAGIC3.length; index++) if (bytes[index] !== MAGIC3[index]) return false;
+  for (let index = 0; index < MAGIC4.length; index++) if (bytes[index] !== MAGIC4[index]) return false;
   return true;
 }
 function readHeader(bytes) {
-  if (!(bytes instanceof Uint8Array) || bytes.byteLength < HEADER_BYTES || bytes.byteLength > MAX_NAVIGATION_INDEX_ARTIFACT_BYTES) {
-    fail12(`navigation index artifact must contain ${HEADER_BYTES}-${MAX_NAVIGATION_INDEX_ARTIFACT_BYTES} bytes`);
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength < HEADER_BYTES2 || bytes.byteLength > MAX_NAVIGATION_INDEX_ARTIFACT_BYTES) {
+    fail12(`navigation index artifact must contain ${HEADER_BYTES2}-${MAX_NAVIGATION_INDEX_ARTIFACT_BYTES} bytes`);
   }
   const ownedBytes3 = Uint8Array.from(bytes);
   if (!hasMagic(ownedBytes3)) fail12("navigation index artifact magic is invalid");
   const view = new DataView(ownedBytes3.buffer);
-  if (view.getUint16(8, true) !== NAVIGATION_INDEX_ARTIFACT_VERSION || view.getUint16(10, true) !== HEADER_BYTES) fail12("navigation index artifact version is unsupported");
+  if (view.getUint16(8, true) !== NAVIGATION_INDEX_ARTIFACT_VERSION || view.getUint16(10, true) !== HEADER_BYTES2) fail12("navigation index artifact version is unsupported");
   if (view.getUint32(12, true) !== 0 || view.getUint32(28, true) !== 0 || view.getUint32(88, true) !== 0 || view.getUint32(92, true) !== 0) {
     fail12("navigation index artifact reserved header fields must be zero");
   }
@@ -155904,11 +157912,11 @@ function readHeader(bytes) {
   if (header.entryCount > MAX_NAVIGATION_INDEX_ENTRIES || header.keyCount > MAX_NAVIGATION_INDEX_SEARCH_KEYS || header.stringCount > header.entryCount * 5 + header.keyCount) {
     fail12("navigation index artifact counts exceed their production budgets");
   }
-  const expectedKeyOffset = checkedSectionEnd(HEADER_BYTES, header.entryCount, ENTRY_BYTES, "navigation entry table");
+  const expectedKeyOffset = checkedSectionEnd(HEADER_BYTES2, header.entryCount, ENTRY_BYTES, "navigation entry table");
   const expectedOrderOffset = checkedSectionEnd(expectedKeyOffset, header.keyCount, KEY_BYTES, "navigation key table");
   const expectedDescriptorOffset = checkedSectionEnd(expectedOrderOffset, header.keyCount, 4, "navigation key order");
   const expectedBlobOffset = checkedSectionEnd(expectedDescriptorOffset, header.stringCount, STRING_DESCRIPTOR_BYTES, "navigation string table");
-  if (header.entryOffset !== HEADER_BYTES || header.keyOffset !== expectedKeyOffset || header.orderOffset !== expectedOrderOffset || header.descriptorOffset !== expectedDescriptorOffset || header.blobOffset !== expectedBlobOffset || header.totalBytes !== ownedBytes3.byteLength) {
+  if (header.entryOffset !== HEADER_BYTES2 || header.keyOffset !== expectedKeyOffset || header.orderOffset !== expectedOrderOffset || header.descriptorOffset !== expectedDescriptorOffset || header.blobOffset !== expectedBlobOffset || header.totalBytes !== ownedBytes3.byteLength) {
     fail12("navigation index artifact section layout is invalid");
   }
   return header;
@@ -156242,7 +158250,7 @@ var BIOME_LIMITS = Object.freeze({
 var ID9 = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 var REF = /^[a-z][a-z0-9._/-]*$/;
 var SEMVER = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$/;
-var HASH10 = /^sha256:[0-9a-f]{64}$/;
+var HASH11 = /^sha256:[0-9a-f]{64}$/;
 var BiomeIrValidationError = class extends Error {
   constructor(message) {
     super(message);
@@ -156286,7 +158294,7 @@ function number4(value, minimum, maximum, label4) {
   if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || value < minimum || value > maximum) fail13(`${label4} must be a canonical number in [${minimum}, ${maximum}]`);
   return value;
 }
-function integer5(value, minimum, maximum, label4) {
+function integer6(value, minimum, maximum, label4) {
   const parsed = number4(value, minimum, maximum, label4);
   if (!Number.isSafeInteger(parsed)) fail13(`${label4} must be an integer`);
   return parsed;
@@ -156364,7 +158372,7 @@ function parseDefinition(value, label4) {
   const ambientAudioRefs = sortedUniqueStrings(d2.ambientAudioRefs.value, BIOME_LIMITS.ambientAudioRefs, `${label4}.ambientAudioRefs`);
   const tintInput = dense(d2.waterTintSrgb.value, 3, `${label4}.waterTintSrgb`);
   if (tintInput.length !== 3) fail13(`${label4}.waterTintSrgb must contain exactly 3 channels`);
-  const waterTintSrgb = Object.freeze(tintInput.map((entry, index) => integer5(entry, 0, 255, `${label4}.waterTintSrgb[${index}]`)));
+  const waterTintSrgb = Object.freeze(tintInput.map((entry, index) => integer6(entry, 0, 255, `${label4}.waterTintSrgb[${index}]`)));
   const fulfillmentInput = record6(d2.fulfillment.value, /* @__PURE__ */ new Set(["status", "bindings"]), `${label4}.fulfillment`);
   if (!BIOME_FULFILLMENT_STATES.includes(fulfillmentInput.status.value)) fail13(`${label4}.fulfillment.status is unsupported`);
   const declared = /* @__PURE__ */ new Set([
@@ -156388,7 +158396,7 @@ function parseDefinition(value, label4) {
       kind: e2.kind.value,
       ref,
       assetId: string7(e2.assetId.value, REF, BIOME_LIMITS.refChars, `${label4}.fulfillment.bindings[${index}].assetId`),
-      contentHash: string7(e2.contentHash.value, HASH10, 71, `${label4}.fulfillment.bindings[${index}].contentHash`),
+      contentHash: string7(e2.contentHash.value, HASH11, 71, `${label4}.fulfillment.bindings[${index}].contentHash`),
       licenseId: text4(e2.licenseId.value, BIOME_LIMITS.labelChars, `${label4}.fulfillment.bindings[${index}].licenseId`),
       sourceUri: text4(e2.sourceUri.value, BIOME_LIMITS.uriChars, `${label4}.fulfillment.bindings[${index}].sourceUri`)
     });
@@ -156522,7 +158530,7 @@ var BIOME_FIELD_ARTIFACT_TYPE = "biome-field/v1";
 var BIOME_FIELD_ARTIFACT_MEDIA_TYPE = "application/vnd.limina.biome-field-v1";
 var BIOME_FIELD_ARTIFACT_HEADER_BYTES = 112;
 var BIOME_FIELD_ARTIFACT_MAX_BYTES = BIOME_FIELD_LIMITS.outputBytes + 64 * 1024;
-var MAGIC4 = Object.freeze([76, 77, 66, 73, 79, 77, 69, 0]);
+var MAGIC5 = Object.freeze([76, 77, 66, 73, 79, 77, 69, 0]);
 var ID10 = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 var SEMVER2 = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$/;
 var FIELD_KEYS = /* @__PURE__ */ new Set(["schema", "version", "pack", "grid", "topN", "biomeIds", "indices", "weights", "diagnostics"]);
@@ -156584,7 +158592,7 @@ function canonicalNumber4(value, minimum, maximum, label4) {
   if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0) || value < minimum || value > maximum) fail15(`${label4} must be a canonical number in [${minimum}, ${maximum}]`);
   return value;
 }
-function integer6(value, minimum, maximum, label4) {
+function integer7(value, minimum, maximum, label4) {
   const result2 = canonicalNumber4(value, minimum, maximum, label4);
   if (!Number.isSafeInteger(result2)) fail15(`${label4} must be an integer`);
   return result2;
@@ -156626,8 +158634,8 @@ function parseField(input, meter) {
     version: string8(packInput.version.value, SEMVER2, 64, "biome field pack.version")
   });
   const gridInput = exactRecord4(d2.grid.value, GRID_KEYS, "biome field grid");
-  const rows = integer6(gridInput.rows.value, 1, BIOME_FIELD_LIMITS.rows, "biome field grid.rows");
-  const cols = integer6(gridInput.cols.value, 1, BIOME_FIELD_LIMITS.cols, "biome field grid.cols");
+  const rows = integer7(gridInput.rows.value, 1, BIOME_FIELD_LIMITS.rows, "biome field grid.rows");
+  const cols = integer7(gridInput.cols.value, 1, BIOME_FIELD_LIMITS.cols, "biome field grid.cols");
   const cells = rows * cols;
   if (!Number.isSafeInteger(cells) || cells > BIOME_FIELD_LIMITS.cells) fail15("biome field cell count exceeds the supported limit");
   const grid = Object.freeze({
@@ -156637,18 +158645,18 @@ function parseField(input, meter) {
     cellSizeM: canonicalNumber4(gridInput.cellSizeM.value, 0.01, 1e6, "biome field grid.cellSizeM")
   });
   const biomeIds = denseStrings(d2.biomeIds.value, "biome field biomeIds");
-  const topN = integer6(d2.topN.value, 2, Math.min(BIOME_FIELD_LIMITS.topN, biomeIds.length), "biome field topN");
+  const topN = integer7(d2.topN.value, 2, Math.min(BIOME_FIELD_LIMITS.topN, biomeIds.length), "biome field topN");
   const length3 = cells * topN;
   const indices = ownedUint16(d2.indices.value, length3, "biome field indices");
   const weights = ownedUint16(d2.weights.value, length3, "biome field weights");
   const diagnosticInput = exactRecord4(d2.diagnostics.value, DIAGNOSTIC_KEYS, "biome field diagnostics");
   const outputBytes = cells * topN * 4;
   const diagnostics2 = Object.freeze({
-    cells: integer6(diagnosticInput.cells.value, cells, cells, "biome field diagnostics.cells"),
-    workUnits: integer6(diagnosticInput.workUnits.value, 0, BIOME_FIELD_LIMITS.workUnits, "biome field diagnostics.workUnits"),
-    outputBytes: integer6(diagnosticInput.outputBytes.value, outputBytes, outputBytes, "biome field diagnostics.outputBytes"),
-    influences: integer6(diagnosticInput.influences.value, 0, BIOME_FIELD_LIMITS.influences, "biome field diagnostics.influences"),
-    modifiers: integer6(diagnosticInput.modifiers.value, 0, BIOME_FIELD_LIMITS.modifiers, "biome field diagnostics.modifiers")
+    cells: integer7(diagnosticInput.cells.value, cells, cells, "biome field diagnostics.cells"),
+    workUnits: integer7(diagnosticInput.workUnits.value, 0, BIOME_FIELD_LIMITS.workUnits, "biome field diagnostics.workUnits"),
+    outputBytes: integer7(diagnosticInput.outputBytes.value, outputBytes, outputBytes, "biome field diagnostics.outputBytes"),
+    influences: integer7(diagnosticInput.influences.value, 0, BIOME_FIELD_LIMITS.influences, "biome field diagnostics.influences"),
+    modifiers: integer7(diagnosticInput.modifiers.value, 0, BIOME_FIELD_LIMITS.modifiers, "biome field diagnostics.modifiers")
   });
   for (let cell = 0; cell < cells; cell++) {
     let sum = 0;
@@ -156694,7 +158702,7 @@ function layout2(field, stringTableBytes) {
   return Object.freeze({ stringTable, indices, weights, byteLength: byteLength2 });
 }
 function writeHeader2(view, field, table, offsets) {
-  for (let index = 0; index < MAGIC4.length; index++) view.setUint8(index, MAGIC4[index]);
+  for (let index = 0; index < MAGIC5.length; index++) view.setUint8(index, MAGIC5[index]);
   view.setUint16(8, BIOME_FIELD_ARTIFACT_VERSION, true);
   view.setUint16(10, BIOME_FIELD_ARTIFACT_HEADER_BYTES, true);
   view.setUint32(12, offsets.byteLength, true);
@@ -156768,7 +158776,7 @@ function decodeBiomeFieldArtifact(input, controlInput) {
   const meter = createMeter3(parseControl3(controlInput), BIOME_FIELD_LIMITS.cells * BIOME_FIELD_LIMITS.topN * 4 + 8192);
   meter.start();
   const view = new DataView(bytes.buffer);
-  for (let index = 0; index < MAGIC4.length; index++) if (view.getUint8(index) !== MAGIC4[index]) fail15("biome field artifact magic mismatch");
+  for (let index = 0; index < MAGIC5.length; index++) if (view.getUint8(index) !== MAGIC5[index]) fail15("biome field artifact magic mismatch");
   if (view.getUint16(8, true) !== BIOME_FIELD_ARTIFACT_VERSION) fail15("biome field artifact version is unsupported");
   if (view.getUint16(10, true) !== BIOME_FIELD_ARTIFACT_HEADER_BYTES) fail15("biome field artifact header length mismatch");
   if (view.getUint32(12, true) !== bytes.byteLength) fail15("biome field artifact byte length is non-canonical");
@@ -156848,14 +158856,6 @@ function decodeBiomeFieldArtifact(input, controlInput) {
 function biomeFieldArtifactContentHash(input) {
   return `sha256:${sha256(artifactBytes(input))}`;
 }
-
-// src/world/biome-surface-plan.mjs
-var BIOME_SURFACE_PLAN_LIMITS = Object.freeze({ rows: 1025, cols: 1025, cells: 1050625, roles: 32, slots: 16, bytes: 64 * 1024 * 1024 });
-
-// src/world/surface-composite-tile.mjs
-var SURFACE_COMPOSITE_TILE_SCHEMA = "limina.surface-composite-tile/v1";
-var SURFACE_COMPOSITE_POLICY_VERSION = 8;
-var SURFACE_COMPOSITE_LIMITS = Object.freeze({ interior: 256, gutter: 4, roles: 32, sourceDimension: 4096, outputBytes: 4 * 1024 * 1024 });
 
 // src/terrain/biome-surface-material.ts
 var T18 = three_tsl_exports;
@@ -156991,7 +158991,7 @@ function exactKeys4(value, expected, label4) {
     }
   }
 }
-function identifier(value, pattern, label4) {
+function identifier3(value, pattern, label4) {
   if (typeof value !== "string" || !pattern.test(value)) throw new Error(`${label4} is invalid`);
   return value;
 }
@@ -157049,8 +159049,8 @@ function parseSource(input) {
     exactKeys4(ref, /* @__PURE__ */ new Set(["refId", "refType", "scope", "assetId", "contentHash"]), `derived manifest source ref ${index}`);
     if (ref.scope !== "global" && ref.scope !== "chunk") throw new Error(`derived manifest source ref ${index} scope must be global or chunk`);
     return {
-      refId: identifier(ref.refId, REF_ID, `derived manifest source ref ${index} refId`),
-      refType: identifier(ref.refType, TYPED_ID, `derived manifest source ref ${index} refType`),
+      refId: identifier3(ref.refId, REF_ID, `derived manifest source ref ${index} refId`),
+      refType: identifier3(ref.refType, TYPED_ID, `derived manifest source ref ${index} refType`),
       scope: ref.scope,
       assetId: assetIdentifier(ref.assetId, `derived manifest source ref ${index} assetId`),
       contentHash: validateCompilerContentHash(ref.contentHash, `derived manifest source ref '${ref.refId}' hash`)
@@ -157067,7 +159067,7 @@ function parseCompiler(input) {
   const compiler = plainObject2(input, "derived manifest compiler");
   exactKeys4(compiler, /* @__PURE__ */ new Set(["version", "configHash", "graphHash", "snapshotHash"]), "derived manifest compiler");
   return {
-    version: identifier(compiler.version, VERSION, "derived manifest compiler version"),
+    version: identifier3(compiler.version, VERSION, "derived manifest compiler version"),
     configHash: validateCompilerContentHash(compiler.configHash, "derived manifest compiler configHash"),
     graphHash: validateCompilerContentHash(compiler.graphHash, "derived manifest compiler graphHash"),
     snapshotHash: validateCompilerContentHash(compiler.snapshotHash, "derived manifest compiler snapshotHash")
@@ -157085,10 +159085,10 @@ function parseArtifactDescriptor(input, label4, budget) {
     throw new Error("derived manifest artifact resources exceed publication bounds");
   }
   return {
-    artifactType: identifier(artifact.artifactType, TYPED_ID, `${label4} type`),
+    artifactType: identifier3(artifact.artifactType, TYPED_ID, `${label4} type`),
     contentHash: validateCompilerContentHash(artifact.contentHash, `${label4} hash`),
     byteLength: artifact.byteLength,
-    mediaType: identifier(artifact.mediaType, MEDIA_TYPE, `${label4} mediaType`)
+    mediaType: identifier3(artifact.mediaType, MEDIA_TYPE, `${label4} mediaType`)
   };
 }
 function parseGlobalArtifacts(input, budget) {
@@ -157106,7 +159106,7 @@ function parseArtifactAuthorities(input, artifactTypes) {
   const authorities = input.map((entry, index) => {
     const authority = plainObject2(entry, `derived manifest artifact authority ${index}`);
     exactKeys4(authority, /* @__PURE__ */ new Set(["artifactType", "compilerGraphHash"]), `derived manifest artifact authority ${index}`);
-    const artifactType = identifier(authority.artifactType, TYPED_ID, `derived manifest artifact authority ${index} type`);
+    const artifactType = identifier3(authority.artifactType, TYPED_ID, `derived manifest artifact authority ${index} type`);
     if (!artifactTypes.has(artifactType)) throw new Error(`derived manifest artifact authority '${artifactType}' has no published artifact`);
     return {
       artifactType,
@@ -157137,7 +159137,7 @@ function parseChunks(input, grid, sourceRefs, budget) {
       const parsed = plainObject2(slice, `derived manifest chunk '${chunk.chunkId}' source slice ${sliceIndex}`);
       exactKeys4(parsed, /* @__PURE__ */ new Set(["refId", "contentHash"]), `derived manifest chunk '${chunk.chunkId}' source slice ${sliceIndex}`);
       return {
-        refId: identifier(parsed.refId, REF_ID, `derived manifest chunk '${chunk.chunkId}' source slice refId`),
+        refId: identifier3(parsed.refId, REF_ID, `derived manifest chunk '${chunk.chunkId}' source slice refId`),
         contentHash: validateCompilerContentHash(parsed.contentHash, `derived manifest chunk '${chunk.chunkId}' source slice '${parsed.refId}' hash`)
       };
     });
@@ -157183,8 +159183,8 @@ function parseCore(input, includeHash) {
   if (isV3) keys2.add("artifactAuthorities");
   if (includeHash) keys2.add("manifestHash");
   exactKeys4(value, keys2, "derived revision manifest");
-  const projectId = identifier(value.projectId, PROJECT_ID2, "derived manifest projectId");
-  const branchId = identifier(value.branchId, BRANCH_ID, "derived manifest branchId");
+  const projectId = identifier3(value.projectId, PROJECT_ID2, "derived manifest projectId");
+  const branchId = identifier3(value.branchId, BRANCH_ID, "derived manifest branchId");
   const source = parseSource(value.source);
   const compiler = parseCompiler(value.compiler);
   const grid = parseGrid(value.grid);
@@ -157231,7 +159231,7 @@ function derivedArtifactCompilerGraphHash(manifest, artifactType) {
   if (!VERIFIED_DERIVED_MANIFESTS.has(manifest)) {
     throw new TypeError("derivedArtifactCompilerGraphHash requires a verified derived revision manifest");
   }
-  identifier(artifactType, TYPED_ID, "derived artifact authority type");
+  identifier3(artifactType, TYPED_ID, "derived artifact authority type");
   if (manifest.schema !== DERIVED_REVISION_MANIFEST_SCHEMA_V3) return manifest.compiler.graphHash;
   return manifest.artifactAuthorities.find((authority) => authority.artifactType === artifactType)?.compilerGraphHash ?? manifest.compiler.graphHash;
 }
@@ -157252,7 +159252,7 @@ var TERRAIN_ARTIFACT_FLAG_PAINT_WEIGHT = 1 << 1;
 var TERRAIN_ARTIFACT_FLAG_CLIMATE = 1 << 2;
 var TERRAIN_ARTIFACT_FLAG_BLIGHT = 1 << 3;
 var KNOWN_FLAGS = TERRAIN_ARTIFACT_FLAG_PAINT_MAT | TERRAIN_ARTIFACT_FLAG_PAINT_WEIGHT | TERRAIN_ARTIFACT_FLAG_CLIMATE | TERRAIN_ARTIFACT_FLAG_BLIGHT;
-var MAGIC5 = Object.freeze([76, 77, 84, 69, 82, 82, 78, 0]);
+var MAGIC6 = Object.freeze([76, 77, 84, 69, 82, 82, 78, 0]);
 var REQUIRED_FIELDS = Object.freeze(["nrows", "ncols", "origin", "scale", "heights"]);
 var ALLOWED_FIELDS = /* @__PURE__ */ new Set([...REQUIRED_FIELDS, "paintMat", "paintW", "climate", "climateChannels", "blight"]);
 
@@ -157269,7 +159269,7 @@ var WORLD_OVERVIEW_MAX_STEP_M = 1e6;
 var WORLD_OVERVIEW_MAX_HEIGHT_ABS_M = 1e5;
 var WORLD_OVERVIEW_MAX_PAINT_MATERIAL = 7;
 var WORLD_OVERVIEW_MAX_ARTIFACT_BYTES = WORLD_OVERVIEW_ARTIFACT_HEADER_BYTES + WORLD_OVERVIEW_MAX_CELLS * 6;
-var MAGIC6 = Object.freeze([76, 77, 87, 79, 86, 82, 49, 0]);
+var MAGIC7 = Object.freeze([76, 77, 87, 79, 86, 82, 49, 0]);
 var GRID_KEYS2 = /* @__PURE__ */ new Set(["rows", "cols", "origin", "stepM", "heights", "paintMaterial", "paintWeight"]);
 var CONTROL_KEYS4 = /* @__PURE__ */ new Set(["shouldCancel"]);
 var WorldOverviewArtifactValidationError = class extends Error {
@@ -157359,9 +159359,9 @@ function ownedTypedArray(value, prototype, cells, label4) {
 }
 function layout3(cells) {
   const heights = WORLD_OVERVIEW_ARTIFACT_HEADER_BYTES;
-  const paintMaterial = heights + cells * 4;
-  const paintWeight = paintMaterial + cells;
-  return Object.freeze({ heights, paintMaterial, paintWeight, byteLength: paintWeight + cells });
+  const paintMaterial2 = heights + cells * 4;
+  const paintWeight = paintMaterial2 + cells;
+  return Object.freeze({ heights, paintMaterial: paintMaterial2, paintWeight, byteLength: paintWeight + cells });
 }
 function parseGrid2(input, meter) {
   const descriptors2 = exactRecord5(input, GRID_KEYS2, "world overview grid");
@@ -157377,7 +159377,7 @@ function parseGrid2(input, meter) {
     fail16("world overview grid extent exceeds the supported world range");
   }
   const heights = ownedTypedArray(descriptors2.heights.value, Float32Array.prototype, cells, "world overview heights");
-  const paintMaterial = ownedTypedArray(descriptors2.paintMaterial.value, Uint8Array.prototype, cells, "world overview paintMaterial");
+  const paintMaterial2 = ownedTypedArray(descriptors2.paintMaterial.value, Uint8Array.prototype, cells, "world overview paintMaterial");
   const paintWeight = ownedTypedArray(descriptors2.paintWeight.value, Uint8Array.prototype, cells, "world overview paintWeight");
   for (let index = 0; index < cells; index++) {
     meter.work();
@@ -157385,14 +159385,14 @@ function parseGrid2(input, meter) {
     if (!Number.isFinite(height) || Object.is(height, -0) || Math.abs(height) > WORLD_OVERVIEW_MAX_HEIGHT_ABS_M) {
       fail16(`world overview heights[${index}] must be finite canonical metres within the supported range`);
     }
-    if (paintMaterial[index] > WORLD_OVERVIEW_MAX_PAINT_MATERIAL) {
+    if (paintMaterial2[index] > WORLD_OVERVIEW_MAX_PAINT_MATERIAL) {
       fail16(`world overview paintMaterial[${index}] exceeds ${WORLD_OVERVIEW_MAX_PAINT_MATERIAL}`);
     }
   }
-  return Object.freeze({ rows, cols, cells, origin, stepM, heights, paintMaterial, paintWeight });
+  return Object.freeze({ rows, cols, cells, origin, stepM, heights, paintMaterial: paintMaterial2, paintWeight });
 }
 function writeHeader3(view, grid, offsets) {
-  for (let index = 0; index < MAGIC6.length; index++) view.setUint8(index, MAGIC6[index]);
+  for (let index = 0; index < MAGIC7.length; index++) view.setUint8(index, MAGIC7[index]);
   view.setUint16(8, WORLD_OVERVIEW_ARTIFACT_VERSION, true);
   view.setUint16(10, WORLD_OVERVIEW_ARTIFACT_HEADER_BYTES, true);
   view.setUint32(12, offsets.byteLength, true);
@@ -157438,7 +159438,7 @@ function decodeWorldOverviewArtifact(input, controlInput) {
   const meter = createMeter4(parseControl4(controlInput), WORLD_OVERVIEW_MAX_CELLS * 2 + 4096);
   meter.start();
   const view = new DataView(bytes.buffer);
-  for (let index = 0; index < MAGIC6.length; index++) if (view.getUint8(index) !== MAGIC6[index]) fail16("world overview artifact magic mismatch");
+  for (let index = 0; index < MAGIC7.length; index++) if (view.getUint8(index) !== MAGIC7[index]) fail16("world overview artifact magic mismatch");
   if (view.getUint16(8, true) !== WORLD_OVERVIEW_ARTIFACT_VERSION) fail16("world overview artifact version is unsupported");
   if (view.getUint16(10, true) !== WORLD_OVERVIEW_ARTIFACT_HEADER_BYTES) fail16("world overview artifact header length mismatch");
   const rows = dimension2(view.getUint16(16, true), "world overview rows");
@@ -157452,17 +159452,17 @@ function decodeWorldOverviewArtifact(input, controlInput) {
   const origin = originTuple2([view.getFloat64(24, true), view.getFloat64(32, true)]);
   const stepM = canonicalFinite(view.getFloat64(40, true), "world overview stepM");
   const heights = new Float32Array(cells);
-  const paintMaterial = new Uint8Array(cells);
+  const paintMaterial2 = new Uint8Array(cells);
   const paintWeight = new Uint8Array(cells);
   for (let index = 0; index < cells; index++) {
     meter.work();
     heights[index] = view.getFloat32(offsets.heights + index * 4, true);
   }
-  paintMaterial.set(bytes.subarray(offsets.paintMaterial, offsets.paintWeight));
+  paintMaterial2.set(bytes.subarray(offsets.paintMaterial, offsets.paintWeight));
   paintWeight.set(bytes.subarray(offsets.paintWeight));
-  parseGrid2({ rows, cols, origin, stepM, heights, paintMaterial, paintWeight }, meter);
+  parseGrid2({ rows, cols, origin, stepM, heights, paintMaterial: paintMaterial2, paintWeight }, meter);
   meter.finish();
-  const grid = Object.freeze({ rows, cols, origin, stepM, heights, paintMaterial, paintWeight });
+  const grid = Object.freeze({ rows, cols, origin, stepM, heights, paintMaterial: paintMaterial2, paintWeight });
   const metadata = Object.freeze({
     artifactType: WORLD_OVERVIEW_ARTIFACT_TYPE,
     mediaType: WORLD_OVERVIEW_ARTIFACT_MEDIA_TYPE,
@@ -157549,185 +159549,6 @@ function createBiomeFieldSampler(input) {
       return Object.freeze({ dominantId: influences[0].biomeId, influences });
     }
   });
-}
-
-// src/world/compiler/surface-composite-artifact.mjs
-var SURFACE_COMPOSITE_ARTIFACT_TYPE = "surface-composite-tile/v1";
-var SURFACE_COMPOSITE_ARTIFACT_MEDIA_TYPE = "application/vnd.limina.surface-composite-qoi-v1";
-var SURFACE_COMPOSITE_ARTIFACT_VERSION = 1;
-var MAX_SURFACE_COMPOSITE_ARTIFACT_BYTES = 4 * 1024 * 1024;
-var MAX_SURFACE_COMPOSITE_DECODED_BYTES = 4 * 1024 * 1024;
-var MAGIC7 = Object.freeze([76, 77, 83, 85, 82, 70, 1, 0]);
-var HEADER_BYTES2 = 32;
-var MAX_METADATA_BYTES = 16 * 1024;
-var HASH11 = /^sha256:[0-9a-f]{64}$/;
-var textEncoder = new TextEncoder();
-var textDecoder = new TextDecoder("utf-8", { fatal: true });
-function checkpoint3(control, index = 0) {
-  if ((index & 4095) === 0 && control?.shouldCancel?.() === true) {
-    const error51 = new Error("surface composite artifact operation cancelled");
-    error51.name = "AbortError";
-    throw error51;
-  }
-}
-function plain4(value, label4) {
-  if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
-    throw new TypeError(`${label4} must be a plain object`);
-  }
-  return value;
-}
-function exact5(value, keys2, label4) {
-  const names = Object.getOwnPropertyNames(value), expected = new Set(keys2);
-  if (Object.getOwnPropertySymbols(value).length !== 0 || names.length !== expected.size || names.some((name) => !expected.has(name))) {
-    throw new TypeError(`${label4} fields are invalid`);
-  }
-  for (const name of names) {
-    const descriptor3 = Object.getOwnPropertyDescriptor(value, name);
-    if (descriptor3?.enumerable !== true || descriptor3.get !== void 0 || descriptor3.set !== void 0) {
-      throw new TypeError(`${label4}.${name} must be an enumerable data field`);
-    }
-  }
-  return value;
-}
-function integer7(value, minimum, maximum, label4) {
-  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new RangeError(`${label4} is out of bounds`);
-  return value;
-}
-function finite16(value, label4) {
-  if (typeof value !== "number" || !Number.isFinite(value) || Object.is(value, -0)) throw new RangeError(`${label4} must be a canonical finite number`);
-  return value;
-}
-function hash9(value, label4) {
-  if (typeof value !== "string" || !HASH11.test(value)) throw new TypeError(`${label4} must be a canonical content hash`);
-  return value;
-}
-function tuple2(value, label4) {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length !== 2) throw new TypeError(`${label4} must be a two-number array`);
-  return Object.freeze([finite16(value[0], `${label4}[0]`), finite16(value[1], `${label4}[1]`)]);
-}
-function canonicalMetadata(input, verifyPixels = true) {
-  const root = exact5(plain4(input, "surface composite"), ["schema", "source", "coord", "placement", "resolution", "maps", "edgeHashes", "diagnostics"], "surface composite");
-  if (root.schema !== SURFACE_COMPOSITE_TILE_SCHEMA) throw new TypeError("surface composite schema is unsupported");
-  const sourceInput = plain4(root.source, "surface composite source");
-  const source = exact5(sourceInput, Object.hasOwn(sourceInput, "environmentHash") ? ["biomeFieldHash", "biomePackHash", "terrainChunkHash", "environmentHash", "policyVersion"] : ["biomeFieldHash", "biomePackHash", "terrainChunkHash", "policyVersion"], "surface composite source");
-  const coord = exact5(plain4(root.coord, "surface composite coord"), ["tx", "tz", "lod"], "surface composite coord");
-  const placement = exact5(plain4(root.placement, "surface composite placement"), ["origin", "sizeM", "featureOrigin"], "surface composite placement");
-  const resolution = exact5(plain4(root.resolution, "surface composite resolution"), ["interior", "gutter", "total"], "surface composite resolution");
-  const maps = exact5(plain4(root.maps, "surface composite maps"), ["albedo", "normal", "orm"], "surface composite maps");
-  const edges = exact5(plain4(root.edgeHashes, "surface composite edge hashes"), ["north", "east", "south", "west"], "surface composite edge hashes");
-  const diagnostics2 = exact5(plain4(root.diagnostics, "surface composite diagnostics"), ["roles", "runtimeTextureSamples", "outputBytes"], "surface composite diagnostics");
-  const interior = integer7(resolution.interior, 2, 256, "surface composite interior");
-  const gutter = integer7(resolution.gutter, 0, 4, "surface composite gutter");
-  const total = integer7(resolution.total, 2, 264, "surface composite total");
-  if (total !== interior + gutter * 2) throw new Error("surface composite resolution is inconsistent");
-  const decodedMapBytes = total * total * 4;
-  if (decodedMapBytes * 3 > MAX_SURFACE_COMPOSITE_DECODED_BYTES) throw new RangeError("surface composite decoded maps exceed budget");
-  const mapMeta = {};
-  for (const name of ["albedo", "normal", "orm"]) {
-    const entry = plain4(maps[name], `surface composite ${name}`);
-    const required2 = name === "albedo" ? ["data", "contentHash", "colorSpace"] : name === "normal" ? ["data", "contentHash", "colorSpace", "convention"] : ["data", "contentHash", "colorSpace", "channels"];
-    exact5(entry, required2, `surface composite ${name}`);
-    if (!(entry.data instanceof Uint8Array) || !(entry.data.buffer instanceof ArrayBuffer) || entry.data.length !== decodedMapBytes || entry.data.byteOffset !== 0 || entry.data.byteLength !== entry.data.buffer.byteLength) {
-      throw new TypeError(`surface composite ${name} must be owned exact RGBA8 data`);
-    }
-    const contentHash3 = hash9(entry.contentHash, `surface composite ${name} hash`);
-    if (verifyPixels && `sha256:${sha256(entry.data)}` !== contentHash3) throw new Error(`surface composite ${name} content hash mismatch`);
-    if (entry.colorSpace !== (name === "albedo" ? "srgb" : "none")) throw new Error(`surface composite ${name} color space is invalid`);
-    if (name === "normal" && entry.convention !== "opengl-y-plus") throw new Error("surface composite normal convention is invalid");
-    if (name === "orm" && entry.channels !== "ao-roughness-metalness-grass-density") throw new Error("surface composite ORM channels are invalid");
-    mapMeta[name] = Object.freeze({
-      contentHash: contentHash3,
-      colorSpace: entry.colorSpace,
-      ...name === "normal" ? { convention: entry.convention } : {},
-      ...name === "orm" ? { channels: entry.channels } : {}
-    });
-  }
-  const outputBytes = integer7(diagnostics2.outputBytes, 1, MAX_SURFACE_COMPOSITE_DECODED_BYTES, "surface composite output bytes");
-  if (outputBytes !== decodedMapBytes * 3 || diagnostics2.runtimeTextureSamples !== 3) throw new Error("surface composite diagnostics are inconsistent");
-  return Object.freeze({
-    schema: SURFACE_COMPOSITE_TILE_SCHEMA,
-    source: Object.freeze({
-      biomeFieldHash: hash9(source.biomeFieldHash, "surface composite biome field hash"),
-      biomePackHash: hash9(source.biomePackHash, "surface composite biome pack hash"),
-      terrainChunkHash: hash9(source.terrainChunkHash, "surface composite terrain chunk hash"),
-      environmentHash: hash9(source.environmentHash ?? source.terrainChunkHash, "surface composite environment hash"),
-      policyVersion: integer7(source.policyVersion, SURFACE_COMPOSITE_POLICY_VERSION, SURFACE_COMPOSITE_POLICY_VERSION, "surface composite policy version")
-    }),
-    coord: Object.freeze({ tx: integer7(coord.tx, -1e6, 1e6, "surface composite tx"), tz: integer7(coord.tz, -1e6, 1e6, "surface composite tz"), lod: integer7(coord.lod, 0, 16, "surface composite lod") }),
-    placement: Object.freeze({ origin: tuple2(placement.origin, "surface composite origin"), sizeM: (() => {
-      const size = finite16(placement.sizeM, "surface composite size");
-      if (!(size > 0) || size > 1e6) throw new RangeError("surface composite size is out of bounds");
-      return size;
-    })(), featureOrigin: tuple2(placement.featureOrigin, "surface composite feature origin") }),
-    resolution: Object.freeze({ interior, gutter, total }),
-    maps: Object.freeze(mapMeta),
-    edgeHashes: Object.freeze({ north: hash9(edges.north, "surface composite north edge"), east: hash9(edges.east, "surface composite east edge"), south: hash9(edges.south, "surface composite south edge"), west: hash9(edges.west, "surface composite west edge") }),
-    diagnostics: Object.freeze({ roles: integer7(diagnostics2.roles, 1, 32, "surface composite roles"), runtimeTextureSamples: 3, outputBytes }),
-    codec: "qoi-rgba-v1"
-  });
-}
-function pixelHash(r2, g4, b3, a2) {
-  return r2 * 3 + g4 * 5 + b3 * 7 + a2 * 11 & 63;
-}
-function qoiEncode(data, control) {
-  const output3 = [], index = new Uint8Array(64 * 4);
-  let pr = 0, pg2 = 0, pb = 0, pa = 255, run2 = 0;
-  const flush = () => {
-    if (run2 > 0) {
-      output3.push(192 | run2 - 1);
-      run2 = 0;
-    }
-  };
-  for (let offset = 0, pixel = 0; offset < data.length; offset += 4, pixel++) {
-    checkpoint3(control, pixel);
-    const r2 = data[offset], g4 = data[offset + 1], b3 = data[offset + 2], a2 = data[offset + 3];
-    if (r2 === pr && g4 === pg2 && b3 === pb && a2 === pa) {
-      run2++;
-      if (run2 === 62 || offset + 4 === data.length) flush();
-      continue;
-    }
-    flush();
-    const slot = pixelHash(r2, g4, b3, a2) * 4;
-    if (index[slot] === r2 && index[slot + 1] === g4 && index[slot + 2] === b3 && index[slot + 3] === a2) output3.push(slot / 4);
-    else {
-      index[slot] = r2;
-      index[slot + 1] = g4;
-      index[slot + 2] = b3;
-      index[slot + 3] = a2;
-      const dr = r2 - pr, dg2 = g4 - pg2, db = b3 - pb;
-      if (a2 === pa && dr >= -2 && dr <= 1 && dg2 >= -2 && dg2 <= 1 && db >= -2 && db <= 1) output3.push(64 | dr + 2 << 4 | dg2 + 2 << 2 | db + 2);
-      else if (a2 === pa && dg2 >= -32 && dg2 <= 31 && dr - dg2 >= -8 && dr - dg2 <= 7 && db - dg2 >= -8 && db - dg2 <= 7) output3.push(128 | dg2 + 32, dr - dg2 + 8 << 4 | db - dg2 + 8);
-      else if (a2 === pa) output3.push(254, r2, g4, b3);
-      else output3.push(255, r2, g4, b3, a2);
-    }
-    pr = r2;
-    pg2 = g4;
-    pb = b3;
-    pa = a2;
-  }
-  return Uint8Array.from(output3);
-}
-function encodeSurfaceCompositeArtifact(input, control = {}) {
-  checkpoint3(control);
-  const metadata = canonicalMetadata(input), metadataBytes = textEncoder.encode(JSON.stringify(metadata));
-  const streams = [input.maps.albedo.data, input.maps.normal.data, input.maps.orm.data].map((data) => qoiEncode(data, control));
-  const length3 = HEADER_BYTES2 + metadataBytes.length + streams.reduce((sum, stream) => sum + stream.length, 0);
-  if (length3 > MAX_SURFACE_COMPOSITE_ARTIFACT_BYTES) throw new RangeError("surface composite artifact exceeds encoded byte budget");
-  const bytes = new Uint8Array(length3);
-  bytes.set(MAGIC7);
-  const view = new DataView(bytes.buffer);
-  view.setUint16(8, SURFACE_COMPOSITE_ARTIFACT_VERSION, true);
-  view.setUint16(10, HEADER_BYTES2, true);
-  view.setUint32(12, length3, true);
-  view.setUint32(16, metadataBytes.length, true);
-  streams.forEach((stream, index) => view.setUint32(20 + index * 4, stream.length, true));
-  bytes.set(metadataBytes, HEADER_BYTES2);
-  let offset = HEADER_BYTES2 + metadataBytes.length;
-  for (const stream of streams) {
-    bytes.set(stream, offset);
-    offset += stream.length;
-  }
-  return bytes;
 }
 
 // src/world/biome-population-asset.mjs
@@ -158056,7 +159877,7 @@ function exactRecord6(value, keys2, label4) {
   for (const key of keys2) if (!Object.hasOwn(value, key)) fail18(`${label4} is missing '${key}'`);
   return descriptors2;
 }
-function denseArray5(value, maximum, label4) {
+function denseArray7(value, maximum, label4) {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length > maximum || Object.getOwnPropertySymbols(value).length !== 0 || Object.getOwnPropertyNames(value).length !== value.length + 1) {
     fail18(`${label4} must be a dense standard array with at most ${maximum} entries`);
   }
@@ -158102,7 +159923,7 @@ function reference3(value, label4) {
   if (bytes.length > BIOME_POPULATION_ASSET_LIMITS.refChars) fail18(`${label4} UTF-8 encoding is too long`);
   return Object.freeze({ value, bytes });
 }
-function contentHash2(value, label4) {
+function contentHash3(value, label4) {
   if (typeof value !== "string" || !HASH13.test(value)) fail18(`${label4} must be a canonical content hash`);
   return value;
 }
@@ -158134,17 +159955,17 @@ function parsePlan(input, meter) {
   });
   const identityInput = exactRecord6(root.identity.value, IDENTITY_KEYS, "biome population artifact identity");
   const identity = Object.freeze({
-    fieldContentHash: contentHash2(identityInput.fieldContentHash.value, "biome population artifact identity.fieldContentHash"),
-    runtimePackContentHash: contentHash2(identityInput.runtimePackContentHash.value, "biome population artifact identity.runtimePackContentHash")
+    fieldContentHash: contentHash3(identityInput.fieldContentHash.value, "biome population artifact identity.fieldContentHash"),
+    runtimePackContentHash: contentHash3(identityInput.runtimePackContentHash.value, "biome population artifact identity.runtimePackContentHash")
   });
-  const source = denseArray5(root.placements.value, MAX_BIOME_POPULATION_ARTIFACT_PLACEMENTS, "biome population artifact placements");
+  const source = denseArray7(root.placements.value, MAX_BIOME_POPULATION_ARTIFACT_PLACEMENTS, "biome population artifact placements");
   const placements = new Array(source.length);
   for (let index = 0; index < source.length; index++) {
     meter.work();
     const d2 = exactRecord6(source[index], PLACEMENT_KEYS3, `biome population artifact placements[${index}]`);
     const role2 = reference3(d2.role.value, `biome population artifact placements[${index}].role`).value;
     const assetId2 = reference3(d2.assetId.value, `biome population artifact placements[${index}].assetId`).value;
-    const hash10 = contentHash2(d2.contentHash.value, `biome population artifact placements[${index}].contentHash`);
+    const hash10 = contentHash3(d2.contentHash.value, `biome population artifact placements[${index}].contentHash`);
     const scale2 = canonicalNumber5(d2.scale.value, Number.MIN_VALUE, MAX_SCALE2, `biome population artifact placements[${index}].scale`);
     if (scale2 === 0) fail18(`biome population artifact placements[${index}].scale must be positive`);
     placements[index] = Object.freeze({
@@ -158305,7 +160126,7 @@ function decodeBiomePopulationArtifact(input, controlInput) {
     cursor += assetIdLength;
     const checkedRole = reference3(role2, `biome population artifact descriptor ${index} role`).value;
     const checkedAssetId = reference3(assetId2, `biome population artifact descriptor ${index} assetId`).value;
-    contentHash2(hash10, `biome population artifact descriptor ${index} hash`);
+    contentHash3(hash10, `biome population artifact descriptor ${index} hash`);
     const key = descriptorKey(checkedRole, checkedAssetId, hash10);
     if (priorKey !== null && priorKey >= key) fail18("biome population artifact descriptors are not strictly sorted and unique");
     priorKey = key;
@@ -159296,6 +161117,7 @@ function verifyTransferredDerivedRuntimeSnapshot(input) {
   let worldOverview = null;
   let navigationIndexBytes = null;
   let biomeField = null;
+  let hydrologyFieldBytes = null;
   const overview = globals.get(WORLD_OVERVIEW_ARTIFACT_TYPE);
   if (overview !== void 0) {
     exact6(overview.resource, ["kind", "decoded"], "world overview resource");
@@ -159367,6 +161189,7 @@ function verifyTransferredDerivedRuntimeSnapshot(input) {
       throw new Error("hydrology field resource does not match its canonical descriptor");
     }
     const canonical = decodeHydrologyFieldArtifact(canonicalBytes);
+    hydrologyFieldBytes = canonicalBytes;
     renderField = Object.freeze({
       placement: Object.freeze({ originX: canonical.placement.originX, originZ: canonical.placement.originZ }),
       rows: canonical.topology.rows,
@@ -159421,12 +161244,14 @@ function verifyTransferredDerivedRuntimeSnapshot(input) {
     if (prepared2.artifactContentHash !== resourceArtifact.contentHash || compilerContentHash(prepared2.bindings) !== compilerContentHash(parsedBindings)) {
       throw new Error("generated water prepared identity does not match its canonical artifact");
     }
+    if (hydrologyFieldBytes === null) throw new Error("generated water is missing its verified hydrology field bytes");
     generatedWater = Object.freeze({
       artifact: resourceArtifact,
       bytes,
       bindings: parsedBindings,
       topology: generatedRenderTopology(prepared2.topology),
-      field: renderField
+      field: renderField,
+      fieldBytes: hydrologyFieldBytes
     });
   }
   return Object.freeze({
@@ -159490,6 +161315,7 @@ function hydrateVerifiedDerivedSnapshot(data) {
     artifact: Object.freeze({ ...data.generatedWater.artifact }),
     bytes: data.generatedWater.bytes,
     bindings: Object.freeze({ ...data.generatedWater.bindings }),
+    fieldBytes: data.generatedWater.fieldBytes,
     render: Object.freeze({
       artifactHash: data.generatedWater.artifact.contentHash,
       topology: data.generatedWater.topology,
@@ -159942,9 +161768,12 @@ var yieldToEventLoop = () => {
   }
   return new Promise((resolve) => setTimeout(resolve, 0));
 };
+var TERRAIN_CHUNK_ARTIFACT_TYPE_V1 = "terrain-chunk/v1";
 var deferTerrainMountForCreate = false;
 var DetachedDerivedRenderCandidate = class _DetachedDerivedRenderCandidate {
-  snapshot;
+  // Mutable behind a getter: an incremental residency swap (2.0-B) adopts the newer
+  // verified snapshot of the SAME manifest instead of rebuilding the candidate.
+  #snapshot;
   root = new Group();
   terrainRoot = new Group();
   waterRoot = new Group();
@@ -159960,6 +161789,8 @@ var DetachedDerivedRenderCandidate = class _DetachedDerivedRenderCandidate {
   #overviewBounds = null;
   #terrainWindow = Object.freeze([]);
   #pendingStage = null;
+  #pendingDelta = null;
+  #pendingContentDelta = null;
   #populationMount = null;
   #populationStage = "available";
   #presentationStatus = UNSTAGED_POPULATION_STATUS;
@@ -159984,7 +161815,7 @@ var DetachedDerivedRenderCandidate = class _DetachedDerivedRenderCandidate {
     const tier = options.quality ?? "balanced";
     const quality = DEFAULT_RENDER_QUALITY_PROFILES[tier];
     if (quality === void 0) throw new TypeError("derived render quality tier is invalid");
-    this.snapshot = assertVerifiedTransferredDerivedSnapshot(snapshotInput);
+    this.#snapshot = assertVerifiedTransferredDerivedSnapshot(snapshotInput);
     this.root.name = `limina:derived-revision:${this.snapshot.manifestHash}`;
     this.terrainRoot.name = "limina:derived-terrain";
     this.waterRoot.name = "limina:derived-water";
@@ -160016,16 +161847,43 @@ var DetachedDerivedRenderCandidate = class _DetachedDerivedRenderCandidate {
       throw error51;
     }
   }
-  /** Mount ONE resident chunk: geometry, optional surface material, window entry, scene attach. */
-  #mountTerrainChunk(chunk, tile, surfaceFrame, terrainWindow) {
+  get snapshot() {
+    return this.#snapshot;
+  }
+  /** Build ONE chunk mount (geometry, optional surface material, window entry) WITHOUT
+   *  touching the live maps or terrainRoot. The surface source is explicit so an
+   *  in-flight delta reads the NEWER verified snapshot while the candidate still
+   *  presents (and names) the prior one. */
+  #buildTerrainChunk(chunk, tile, surfaceFrame, snapshot = this.#snapshot) {
     const mesh = featureLocalTerrainMesh(tile, surfaceFrame);
     const key = tileKey(chunk.tx, chunk.tz);
-    const surface = this.snapshot.surfaceAt(chunk.tx, chunk.tz);
+    const surface = snapshot.surfaceAt(chunk.tx, chunk.tz);
     const surfaceMount = surface === void 0 ? null : installBiomeSurfaceMaterial(mesh, surface);
-    this.#terrainMeshes.set(key, mesh);
-    if (surfaceMount !== null) this.#surfaceMounts.set(key, surfaceMount);
-    terrainWindow.push(Object.freeze({ key, tx: chunk.tx, tz: chunk.tz, tile, ...surface === void 0 ? {} : { surface } }));
-    this.terrainRoot.add(mesh);
+    return Object.freeze({
+      entry: Object.freeze({ key, tx: chunk.tx, tz: chunk.tz, tile, ...surface === void 0 ? {} : { surface } }),
+      mesh,
+      surfaceMount
+    });
+  }
+  /** Attach one built chunk to the live maps and terrainRoot. */
+  #attachTerrainChunk(build) {
+    this.#terrainMeshes.set(build.entry.key, build.mesh);
+    if (build.surfaceMount !== null) this.#surfaceMounts.set(build.entry.key, build.surfaceMount);
+    this.terrainRoot.add(build.mesh);
+  }
+  /** Dispose one chunk's GPU resources (mesh + surface mount); no map/root touching. */
+  #disposeChunkResources(mesh, surfaceMount) {
+    if (surfaceMount === null) disposeTerrainMesh(mesh);
+    else {
+      mesh.geometry.dispose();
+      surfaceMount.dispose();
+    }
+  }
+  /** Mount ONE resident chunk: build, record the window entry, attach. */
+  #mountTerrainChunk(chunk, tile, surfaceFrame, terrainWindow, snapshot = this.#snapshot) {
+    const build = this.#buildTerrainChunk(chunk, tile, surfaceFrame, snapshot);
+    this.#attachTerrainChunk(build);
+    terrainWindow.push(build.entry);
   }
   /** Overview mount — its 129x129 grid build is the single largest non-chunk step, so
    *  the frame-budgeted path gives it a slice of its own. */
@@ -160097,6 +161955,432 @@ var DetachedDerivedRenderCandidate = class _DetachedDerivedRenderCandidate {
   }
   get overviewBounds() {
     return this.#overviewBounds;
+  }
+  /** Dispose one mounted chunk's mesh (+ surface mount) and detach it from terrainRoot.
+   *  Mirrors the per-chunk block of dispose(); shared by delta rollback and commit. */
+  #unmountTerrainChunk(key) {
+    const mesh = this.#terrainMeshes.get(key);
+    if (mesh === void 0) throw new Error(`derived terrain chunk '${key}' is not mounted`);
+    this.#terrainMeshes.delete(key);
+    this.terrainRoot.remove(mesh);
+    const surfaceMount = this.#surfaceMounts.get(key);
+    this.#surfaceMounts.delete(key);
+    this.#disposeChunkResources(mesh, surfaceMount ?? null);
+  }
+  /** Roll back exactly the chunks a delta mounted (its `added` keys), leaving the
+   *  prior window fully live; plus the detached overview build, if any. */
+  #rollbackDeltaMounts(delta) {
+    const errors = [];
+    for (const entry of delta.added) {
+      try {
+        this.#unmountTerrainChunk(entry.key);
+      } catch (error51) {
+        errors.push(error51);
+      }
+    }
+    if (delta.overview !== null) {
+      try {
+        delta.overview.mesh.geometry.dispose();
+      } catch (error51) {
+        errors.push(error51);
+      }
+      try {
+        delta.overview.mesh.material.dispose();
+      } catch (error51) {
+        errors.push(error51);
+      }
+    }
+    if (errors.length > 0) throw new AggregateError(errors, "derived residency delta rollback failed");
+  }
+  /** Water re-mount against a newer verified snapshot of the SAME window: the artifact
+   *  is identical, but the render resource's terrain sampler is rebuilt per snapshot,
+   *  so presented water depth must re-read the newer heights. A mount failure rolls
+   *  back to the prior water resource before throwing — the candidate never presents
+   *  without its verified water. Shared by the residency and content delta commits. */
+  #swapWaterMount(newSnapshot) {
+    const priorWaterMount = this.#waterMount;
+    this.#waterMount = null;
+    if (priorWaterMount !== null) priorWaterMount.dispose();
+    if (newSnapshot.generatedWater !== null) {
+      try {
+        this.#waterMount = mountGeneratedWaterResource(newSnapshot.generatedWater.render, this.#waterManager);
+      } catch (error51) {
+        try {
+          this.#waterMount = mountGeneratedWaterResource(this.#snapshot.generatedWater.render, this.#waterManager);
+        } catch (rollbackError) {
+          throw new AggregateError([error51, rollbackError], "derived delta water re-mount and rollback both failed");
+        }
+        throw error51;
+      }
+    }
+  }
+  /** 2.0-B incremental residency swap, commit phase. Synchronous and non-cancellable:
+   *  the caller runs it only after the simulation realm acknowledged the SAME delta,
+   *  so render and sim cross to the new window together. Water re-mounts against the
+   *  new snapshot, the prebuilt overview swaps in, and only the leaving chunks
+   *  unmount. */
+  commitResidencyDelta(delta) {
+    if (this.#disposed) throw new Error("detached derived render candidate is disposed");
+    const prepared2 = this.#pendingDelta;
+    if (prepared2 === null || prepared2.added !== delta.added || prepared2.removedKeys !== delta.removed) {
+      throw new Error("derived residency commit does not name the in-flight delta");
+    }
+    this.#pendingDelta = null;
+    this.#swapWaterMount(prepared2.newSnapshot);
+    const priorOverview = this.#overviewMesh;
+    this.#overviewMesh = prepared2.overview?.mesh ?? null;
+    this.#overviewBounds = prepared2.overview?.bounds ?? null;
+    if (prepared2.overview !== null) this.overviewRoot.add(prepared2.overview.mesh);
+    if (priorOverview !== null) {
+      this.overviewRoot.remove(priorOverview);
+      priorOverview.geometry.dispose();
+      priorOverview.material.dispose();
+    }
+    const errors = [];
+    for (const key of prepared2.removedKeys) {
+      try {
+        this.#unmountTerrainChunk(key);
+      } catch (error51) {
+        errors.push(error51);
+      }
+    }
+    this.#terrainWindow = prepared2.newWindow;
+    this.#snapshot = prepared2.newSnapshot;
+    if (errors.length > 0) throw new AggregateError(errors, "derived residency delta commit failed");
+  }
+  /** Abandon an in-flight residency delta: dispose ONLY what beginResidencyDelta
+   *  mounted/built. The prior window keeps presenting untouched. */
+  abortResidencyDelta(delta) {
+    const prepared2 = this.#pendingDelta;
+    if (prepared2 === null || prepared2.added !== delta.added || prepared2.removedKeys !== delta.removed) {
+      throw new Error("derived residency abort does not name the in-flight delta");
+    }
+    this.#pendingDelta = null;
+    this.#rollbackDeltaMounts(prepared2);
+  }
+  /** 2.0-B incremental residency swap, mount phase. `snapshotInput` must be a verified
+   *  snapshot of the SAME manifest with a DIFFERENT residency — anything else is a
+   *  full-activation job and is rejected here (fail-closed routing). Mounts ONLY the
+   *  entering chunks, in the same ~8 ms slices as createWithFrameBudget, and builds the
+   *  replacement overview mesh unattached. The prior window stays live and authoritative
+   *  until commitResidencyDelta; onSlice may throw to cancel, and any failure rolls back
+   *  exactly what this phase mounted. Population-carrying snapshots are excluded by
+   *  routing (their GLTF/texture decode is the full-path presentation gate's reason to
+   *  exist); this method refuses them defensively. */
+  async beginResidencyDelta(snapshotInput, slicing = {}) {
+    if (this.#disposed) throw new Error("detached derived render candidate is disposed");
+    if (this.#pendingStage !== null) throw new Error("detached derived render candidate is still mounting its initial window");
+    if (this.#pendingDelta !== null) throw new Error("detached derived render candidate already has a residency delta in flight");
+    if (this.#pendingContentDelta !== null) throw new Error("detached derived render candidate already has a content delta in flight");
+    const budgetMs = slicing.frameBudgetMs ?? DERIVED_MOUNT_FRAME_BUDGET_MS;
+    if (typeof budgetMs !== "number" || !Number.isFinite(budgetMs) || budgetMs <= 0) {
+      throw new RangeError("derived mount frameBudgetMs must be a positive finite number of milliseconds");
+    }
+    if (slicing.onSlice !== void 0 && typeof slicing.onSlice !== "function") {
+      throw new TypeError("derived mount onSlice must be a function");
+    }
+    const nextSnapshot = assertVerifiedTransferredDerivedSnapshot(snapshotInput);
+    if (nextSnapshot.manifestHash !== this.#snapshot.manifestHash) {
+      throw new Error("derived residency delta requires the active manifest; route a manifest change through full activation");
+    }
+    if (derivedTerrainResidencyKey(nextSnapshot.residency) === derivedTerrainResidencyKey(this.#snapshot.residency)) {
+      throw new Error("derived residency delta requires a changed residency");
+    }
+    if (nextSnapshot.populationPlan !== null) {
+      throw new Error("derived residency delta does not carry biome population; route it through full activation");
+    }
+    const selection = selectDerivedTerrainChunks(nextSnapshot.manifest, nextSnapshot.residency);
+    const retained = new Map(this.#terrainWindow.map((entry) => [entry.key, entry]));
+    const nextKeys = selection.map((chunk) => tileKey(chunk.tx, chunk.tz));
+    const nextKeySet = new Set(nextKeys);
+    const removedKeys = [...this.#terrainMeshes.keys()].filter((key) => !nextKeySet.has(key));
+    const addedChunks = selection.filter((chunk) => !retained.has(tileKey(chunk.tx, chunk.tz)));
+    const surfaceFrame = terrainWindowSurfaceFrame(
+      selection.map((chunk) => nextSnapshot.terrain.tile(chunk.tx, chunk.tz)),
+      nextSnapshot.generatedWater?.render.field.seaLevelM
+    );
+    const mounted = [];
+    let overview = null;
+    try {
+      const nextSlice = async () => {
+        await yieldToEventLoop();
+        slicing.onSlice?.();
+        if (this.#disposed) throw new Error("detached derived render candidate was disposed during a residency delta");
+      };
+      await nextSlice();
+      let sliceStart = mountNow();
+      for (const chunk of addedChunks) {
+        if (mountNow() - sliceStart >= budgetMs) {
+          await nextSlice();
+          sliceStart = mountNow();
+        }
+        const before = mounted.length;
+        this.#mountTerrainChunk(chunk, nextSnapshot.terrain.tile(chunk.tx, chunk.tz), surfaceFrame, mounted, nextSnapshot);
+        if (mounted.length !== before + 1) throw new Error("derived residency delta chunk mount did not append its window entry");
+      }
+      await nextSlice();
+      const merged = new Map([
+        ...this.#terrainWindow.map((entry) => [entry.key, entry]),
+        ...mounted.map((entry) => [entry.key, entry])
+      ]);
+      const newWindow = nextKeys.map((key) => merged.get(key));
+      if (nextSnapshot.worldOverview !== null) overview = buildWorldOverviewMesh(nextSnapshot.worldOverview, newWindow);
+      const prepared2 = Object.freeze({
+        newSnapshot: nextSnapshot,
+        added: Object.freeze(mounted),
+        removedKeys: Object.freeze(removedKeys),
+        newWindow: Object.freeze(newWindow),
+        overview
+      });
+      this.#pendingDelta = prepared2;
+      return Object.freeze({ added: prepared2.added, removed: prepared2.removedKeys });
+    } catch (error51) {
+      try {
+        this.#rollbackDeltaMounts(Object.freeze({
+          newSnapshot: nextSnapshot,
+          added: Object.freeze(mounted),
+          removedKeys: Object.freeze(removedKeys),
+          newWindow: Object.freeze([]),
+          overview
+        }));
+      } catch {
+      }
+      throw error51;
+    }
+  }
+  /** Pure content-delta evaluation (sculpt-on-derived). A content delta is eligible iff
+   *  the newer verified snapshot has a CHANGED manifest but an unchanged residency
+   *  window, grid topology, resident chunk key set, generated-water artifact, biome
+   *  population (none on either side), and terrain surface frame — and at least one
+   *  resident chunk's terrain or surface content hash moved. The surface frame check
+   *  is load-bearing: it feeds every chunk material's elevation/sea uniforms, so a
+   *  frame move would leave retained chunks presenting the PRIOR frame, never
+   *  byte-equal to a full activation. Returns the plan or a fail-closed reason. */
+  #evaluateContentDelta(nextSnapshot) {
+    if (nextSnapshot.manifestHash === this.#snapshot.manifestHash) {
+      return "derived content delta requires a changed manifest";
+    }
+    if (derivedTerrainResidencyKey(nextSnapshot.residency) !== derivedTerrainResidencyKey(this.#snapshot.residency)) {
+      return "derived content delta requires the active residency window";
+    }
+    if (nextSnapshot.populationPlan !== null || this.#snapshot.populationPlan !== null) {
+      return "derived content delta does not carry biome population; route it through full activation";
+    }
+    const waterHash = (snapshot) => snapshot.generatedWater?.artifact.contentHash ?? null;
+    if (waterHash(nextSnapshot) !== waterHash(this.#snapshot)) {
+      return "derived content delta requires an unchanged generated-water artifact";
+    }
+    const priorGrid = this.#snapshot.manifest.grid;
+    const nextGrid = nextSnapshot.manifest.grid;
+    if (priorGrid.schema !== nextGrid.schema || priorGrid.gridId !== nextGrid.gridId || priorGrid.origin[0] !== nextGrid.origin[0] || priorGrid.origin[1] !== nextGrid.origin[1] || priorGrid.chunkSizeM !== nextGrid.chunkSizeM || priorGrid.defaultSamples !== nextGrid.defaultSamples) {
+      return "derived content delta requires an unchanged grid topology";
+    }
+    const contentOf = (chunk) => {
+      let chunkHash;
+      let surfaceHash = null;
+      for (const artifact of chunk.artifacts) {
+        if (artifact.artifactType === TERRAIN_CHUNK_ARTIFACT_TYPE_V1) chunkHash = artifact.contentHash;
+        else if (artifact.artifactType === SURFACE_COMPOSITE_ARTIFACT_TYPE) surfaceHash = artifact.contentHash;
+      }
+      return Object.freeze({ chunkHash, surfaceHash });
+    };
+    const selection = selectDerivedTerrainChunks(nextSnapshot.manifest, nextSnapshot.residency);
+    const activeChunks = new Map(
+      selectDerivedTerrainChunks(this.#snapshot.manifest, this.#snapshot.residency).map((chunk) => [tileKey(chunk.tx, chunk.tz), chunk])
+    );
+    if (selection.length !== activeChunks.size) {
+      return "derived content delta requires an unchanged resident chunk key set";
+    }
+    const changedKeys = [];
+    for (const chunk of selection) {
+      const key = tileKey(chunk.tx, chunk.tz);
+      const prior = activeChunks.get(key);
+      if (prior === void 0) return "derived content delta requires an unchanged resident chunk key set";
+      if (chunk.topologyHash !== prior.topologyHash) {
+        return "derived content delta requires an unchanged grid topology";
+      }
+      const nextContent = contentOf(chunk);
+      if (nextContent.chunkHash === void 0) {
+        return "derived content delta requires a terrain artifact on every resident chunk";
+      }
+      const priorContent = contentOf(prior);
+      if (nextContent.chunkHash !== priorContent.chunkHash || nextContent.surfaceHash !== priorContent.surfaceHash) {
+        changedKeys.push(key);
+      }
+    }
+    if (changedKeys.length === 0) return "derived content delta requires at least one changed chunk";
+    const surfaceFrame = terrainWindowSurfaceFrame(
+      selection.map((chunk) => nextSnapshot.terrain.tile(chunk.tx, chunk.tz)),
+      nextSnapshot.generatedWater?.render.field.seaLevelM
+    );
+    const priorFrame = terrainWindowSurfaceFrame(
+      this.#terrainWindow.map((entry) => entry.tile),
+      this.#snapshot.generatedWater?.render.field.seaLevelM
+    );
+    if (surfaceFrame.seaLevelM !== priorFrame.seaLevelM || surfaceFrame.minY !== priorFrame.minY || surfaceFrame.maxY !== priorFrame.maxY || surfaceFrame.source !== priorFrame.source) {
+      return "derived content delta requires an unchanged terrain surface frame";
+    }
+    return Object.freeze({
+      changedKeys: Object.freeze(changedKeys),
+      selection,
+      nextKeys: Object.freeze(selection.map((chunk) => tileKey(chunk.tx, chunk.tz))),
+      surfaceFrame
+    });
+  }
+  /** Routing seam (sculpt-on-derived): the changed resident chunk keys, or null when
+   *  ANY content-delta invariant fails — the caller routes full. Pure; no mutation. */
+  planContentDelta(snapshotInput) {
+    if (this.#disposed || this.#pendingStage !== null) return null;
+    const nextSnapshot = assertVerifiedTransferredDerivedSnapshot(snapshotInput);
+    const evaluation = this.#evaluateContentDelta(nextSnapshot);
+    return typeof evaluation === "string" ? null : evaluation.changedKeys;
+  }
+  /** Dispose the detached content-delta builds (abort/rollback and dispose paths). */
+  #rollbackContentBuilds(builds, overview) {
+    const errors = [];
+    for (const build of builds) {
+      try {
+        this.#disposeChunkResources(build.mesh, build.surfaceMount);
+      } catch (error51) {
+        errors.push(error51);
+      }
+    }
+    if (overview !== null) {
+      try {
+        overview.mesh.geometry.dispose();
+      } catch (error51) {
+        errors.push(error51);
+      }
+      try {
+        overview.mesh.material.dispose();
+      } catch (error51) {
+        errors.push(error51);
+      }
+    }
+    if (errors.length > 0) throw new AggregateError(errors, "derived content delta rollback failed");
+  }
+  /** Content-delta mount phase (sculpt-on-derived). `snapshotInput` must be a verified
+   *  snapshot eligible under #evaluateContentDelta and `changedKeys` must name EXACTLY
+   *  the evaluated delta — a disagreement fails closed (the caller falls back to a
+   *  full activation). Builds ONLY the changed chunks' replacements, DETACHED, in the
+   *  same ~8 ms slices as createWithFrameBudget, plus the replacement overview mesh
+   *  (its grid read the newer snapshot). The live window stays authoritative until
+   *  commitContentDelta; onSlice may throw to cancel, and any failure rolls back
+   *  exactly what this phase built. */
+  async beginContentDelta(snapshotInput, changedKeys, slicing = {}) {
+    if (this.#disposed) throw new Error("detached derived render candidate is disposed");
+    if (this.#pendingStage !== null) throw new Error("detached derived render candidate is still mounting its initial window");
+    if (this.#pendingDelta !== null) throw new Error("detached derived render candidate already has a residency delta in flight");
+    if (this.#pendingContentDelta !== null) throw new Error("detached derived render candidate already has a content delta in flight");
+    const budgetMs = slicing.frameBudgetMs ?? DERIVED_MOUNT_FRAME_BUDGET_MS;
+    if (typeof budgetMs !== "number" || !Number.isFinite(budgetMs) || budgetMs <= 0) {
+      throw new RangeError("derived mount frameBudgetMs must be a positive finite number of milliseconds");
+    }
+    if (slicing.onSlice !== void 0 && typeof slicing.onSlice !== "function") {
+      throw new TypeError("derived mount onSlice must be a function");
+    }
+    if (!Array.isArray(changedKeys) || changedKeys.some((key) => typeof key !== "string")) {
+      throw new TypeError("derived content delta changed keys must be chunk key strings");
+    }
+    const nextSnapshot = assertVerifiedTransferredDerivedSnapshot(snapshotInput);
+    const evaluation = this.#evaluateContentDelta(nextSnapshot);
+    if (typeof evaluation === "string") throw new Error(evaluation);
+    if (changedKeys.length !== evaluation.changedKeys.length || evaluation.changedKeys.some((key, index) => changedKeys[index] !== key)) {
+      throw new Error("derived content delta does not name the evaluated changed chunk set");
+    }
+    const chunksByKey = new Map(evaluation.selection.map((chunk) => [tileKey(chunk.tx, chunk.tz), chunk]));
+    const builds = [];
+    let overview = null;
+    try {
+      const nextSlice = async () => {
+        await yieldToEventLoop();
+        slicing.onSlice?.();
+        if (this.#disposed) throw new Error("detached derived render candidate was disposed during a content delta");
+      };
+      await nextSlice();
+      let sliceStart = mountNow();
+      for (const key of evaluation.changedKeys) {
+        if (mountNow() - sliceStart >= budgetMs) {
+          await nextSlice();
+          sliceStart = mountNow();
+        }
+        const chunk = chunksByKey.get(key);
+        builds.push(this.#buildTerrainChunk(
+          chunk,
+          nextSnapshot.terrain.tile(chunk.tx, chunk.tz),
+          evaluation.surfaceFrame,
+          nextSnapshot
+        ));
+      }
+      await nextSlice();
+      const merged = new Map([
+        ...this.#terrainWindow.map((entry) => [entry.key, entry]),
+        ...builds.map((build) => [build.entry.key, build.entry])
+      ]);
+      const newWindow = evaluation.nextKeys.map((key) => merged.get(key));
+      if (nextSnapshot.worldOverview !== null) overview = buildWorldOverviewMesh(nextSnapshot.worldOverview, newWindow);
+      const prepared2 = Object.freeze({
+        newSnapshot: nextSnapshot,
+        builds: Object.freeze(builds),
+        newWindow: Object.freeze(newWindow),
+        overview
+      });
+      this.#pendingContentDelta = prepared2;
+      return Object.freeze({ replaced: Object.freeze(prepared2.builds.map((build) => build.entry)) });
+    } catch (error51) {
+      try {
+        this.#rollbackContentBuilds(builds, overview);
+      } catch {
+      }
+      throw error51;
+    }
+  }
+  /** Content-delta commit phase. Synchronous and non-cancellable: the caller runs it
+   *  only after the simulation realm acknowledged the SAME replacement, so render and
+   *  sim cross to the new revision together. Water re-mounts against the new snapshot
+   *  (its terrain sampler must read the newer heights; the artifact itself is
+   *  identical), the prebuilt overview swaps in, and each changed chunk's prior mount
+   *  is replaced IN PLACE under terrainRoot — unchanged chunks keep their exact mesh
+   *  objects. */
+  commitContentDelta(delta) {
+    if (this.#disposed) throw new Error("detached derived render candidate is disposed");
+    const prepared2 = this.#pendingContentDelta;
+    if (prepared2 === null || prepared2.builds.length !== delta.replaced.length || prepared2.builds.some((build, index) => build.entry !== delta.replaced[index])) {
+      throw new Error("derived content commit does not name the in-flight delta");
+    }
+    this.#pendingContentDelta = null;
+    this.#swapWaterMount(prepared2.newSnapshot);
+    const priorOverview = this.#overviewMesh;
+    this.#overviewMesh = prepared2.overview?.mesh ?? null;
+    this.#overviewBounds = prepared2.overview?.bounds ?? null;
+    if (prepared2.overview !== null) this.overviewRoot.add(prepared2.overview.mesh);
+    if (priorOverview !== null) {
+      this.overviewRoot.remove(priorOverview);
+      priorOverview.geometry.dispose();
+      priorOverview.material.dispose();
+    }
+    const errors = [];
+    for (const build of prepared2.builds) {
+      try {
+        this.#unmountTerrainChunk(build.entry.key);
+        this.#attachTerrainChunk(build);
+      } catch (error51) {
+        errors.push(error51);
+      }
+    }
+    this.#terrainWindow = prepared2.newWindow;
+    this.#snapshot = prepared2.newSnapshot;
+    if (errors.length > 0) throw new AggregateError(errors, "derived content delta commit failed");
+  }
+  /** Abandon an in-flight content delta: dispose ONLY what beginContentDelta built.
+   *  The live window keeps presenting untouched. */
+  abortContentDelta(delta) {
+    const prepared2 = this.#pendingContentDelta;
+    if (prepared2 === null || prepared2.builds.length !== delta.replaced.length || prepared2.builds.some((build, index) => build.entry !== delta.replaced[index])) {
+      throw new Error("derived content abort does not name the in-flight delta");
+    }
+    this.#pendingContentDelta = null;
+    this.#rollbackContentBuilds(prepared2.builds, prepared2.overview);
   }
   get disposed() {
     return this.#disposed;
@@ -160209,6 +162493,29 @@ var DetachedDerivedRenderCandidate = class _DetachedDerivedRenderCandidate {
     if (this.#disposed) return;
     this.#disposed = true;
     const errors = [];
+    const pendingDelta = this.#pendingDelta;
+    this.#pendingDelta = null;
+    if (pendingDelta?.overview != null) {
+      try {
+        pendingDelta.overview.mesh.geometry.dispose();
+      } catch (error51) {
+        errors.push(error51);
+      }
+      try {
+        pendingDelta.overview.mesh.material.dispose();
+      } catch (error51) {
+        errors.push(error51);
+      }
+    }
+    const pendingContentDelta = this.#pendingContentDelta;
+    this.#pendingContentDelta = null;
+    if (pendingContentDelta !== null) {
+      try {
+        this.#rollbackContentBuilds(pendingContentDelta.builds, pendingContentDelta.overview);
+      } catch (error51) {
+        errors.push(error51);
+      }
+    }
     const populationMount = this.#populationMount;
     this.#populationMount = null;
     if (populationMount !== null) try {
@@ -160510,7 +162817,7 @@ var BIOME_GRASS_POPULATION_MAX_PAGE_INSTANCES = 1024;
 var BIOME_GRASS_POPULATION_MAX_RESIDENT_DRAWS = 128;
 var BIOME_GRASS_POPULATION_LOD_HYSTERESIS = 0.1;
 var BIOME_GRASS_POPULATION_MAX_RECYCLED_GEOMETRIES_PER_LOD = 8;
-function finite17(value, label4) {
+function finite19(value, label4) {
   if (!Number.isFinite(value) || Object.is(value, -0)) throw new RangeError(`${label4} must be a canonical finite number`);
   return value;
 }
@@ -160607,7 +162914,7 @@ function buildPages(placements) {
   const groups = /* @__PURE__ */ new Map();
   for (const [index, placement] of placements.entries()) {
     for (const [axis, value] of [["x", placement.x], ["y", placement.y], ["z", placement.z], ["yaw", placement.yaw], ["scale", placement.scale]]) {
-      finite17(value, `biome grass placement ${index}.${axis}`);
+      finite19(value, `biome grass placement ${index}.${axis}`);
     }
     if (!(placement.scale > 0)) throw new RangeError(`biome grass placement ${index}.scale must be positive`);
     if (!Number.isSafeInteger(placement.pageX) || !Number.isSafeInteger(placement.pageZ)) {
@@ -161311,7 +163618,7 @@ var BiomePopulationMount = class _BiomePopulationMount {
 };
 
 // src/render/continuous-grass-density-variation.ts
-function finite18(value, label4) {
+function finite20(value, label4) {
   if (!Number.isFinite(value)) throw new RangeError(`${label4} must be finite`);
   return Object.is(value, -0) ? 0 : value;
 }
@@ -161332,8 +163639,8 @@ function valueNoise4(x3, z4, seed) {
   return top + (bottom - top) * tz;
 }
 function continuousGrassDensityVariation(densityInput, xInput, zInput) {
-  const density = finite18(densityInput, "continuous grass density");
-  const x3 = finite18(xInput, "continuous grass x"), z4 = finite18(zInput, "continuous grass z");
+  const density = finite20(densityInput, "continuous grass density");
+  const x3 = finite20(xInput, "continuous grass x"), z4 = finite20(zInput, "continuous grass z");
   if (density < 0 || density > 1) throw new RangeError("continuous grass density must be in [0,1]");
   if (density === 0 || density === 1) return density;
   const diagonalX = (x3 + z4) * 0.7071067811865476;
@@ -161385,12 +163692,12 @@ var BiomeGrassDensitySampler = class {
     }
     return continuousGrassDensityVariation(Math.max(0, Math.min(1, density)), x3, z4);
   }
-  sampleBinding(x3, z4, assetId2, contentHash3) {
+  sampleBinding(x3, z4, assetId2, contentHash4) {
     const sample3 = this.vegetationAt(x3, z4);
     if (sample3 === null) return 0;
     let density = 0;
     for (const entry of sample3.vegetation) {
-      if (entry.binding.assetId !== assetId2 || entry.binding.contentHash !== contentHash3) continue;
+      if (entry.binding.assetId !== assetId2 || entry.binding.contentHash !== contentHash4) continue;
       const descriptor3 = this.descriptor(entry);
       if (descriptor3.backend === "continuous-grass-field") {
         density += sample3.vegetationDensity01 * entry.weight01 * descriptor3.densityScale;
@@ -161914,8 +164221,8 @@ function descriptorSet(manifest) {
   for (const chunk of manifest.chunks) for (const descriptor3 of chunk.artifacts) descriptors2.add(descriptorKey2(descriptor3));
   return descriptors2;
 }
-function contentEtag(contentHash3) {
-  return `"${contentHash3}"`;
+function contentEtag(contentHash4) {
+  return `"${contentHash4}"`;
 }
 function currentPublicationEtag(generation, manifestHash) {
   return `"g${generation}-${manifestHash}"`;
@@ -162050,18 +164357,18 @@ var DerivedRuntimeTransport = class {
     const manifestHash = requireHash(manifestHashInput, "derived content manifestHash");
     const descriptor3 = plainObject3(descriptorInput, "derived content descriptor");
     exactKeys5(descriptor3, ["contentHash", "byteLength"], "derived content descriptor");
-    const contentHash3 = requireHash(descriptor3.contentHash, "derived content descriptor.contentHash");
+    const contentHash4 = requireHash(descriptor3.contentHash, "derived content descriptor.contentHash");
     if (!Number.isSafeInteger(descriptor3.byteLength) || descriptor3.byteLength < 1 || descriptor3.byteLength > MAX_DERIVED_ARTIFACT_BYTES) {
       throw fatal("PROTOCOL_ERROR", "derived content descriptor.byteLength exceeds the server cap");
     }
     const response = await this.#request(
-      `${this.#config.baseUrl}/v1/derived/manifests/${manifestHash.slice(7)}/content/${contentHash3.slice(7)}`,
+      `${this.#config.baseUrl}/v1/derived/manifests/${manifestHash.slice(7)}/content/${contentHash4.slice(7)}`,
       { signal: options.signal }
     );
     if (response.status !== 200) await this.#throwResponseError(response, options.signal);
     try {
-      exactHeader(response.headers, "etag", contentEtag(contentHash3), "derived content");
-      exactHeader(response.headers, "x-limina-content-hash", contentHash3, "derived content");
+      exactHeader(response.headers, "etag", contentEtag(contentHash4), "derived content");
+      exactHeader(response.headers, "x-limina-content-hash", contentHash4, "derived content");
       exactHeader(response.headers, "x-limina-manifest-hash", manifestHash, "derived content");
       exactHeader(response.headers, "content-type", "application/octet-stream", "derived content");
       if (parseLength(response.headers, MAX_DERIVED_ARTIFACT_BYTES, "derived content") !== descriptor3.byteLength) {
@@ -162082,11 +164389,11 @@ var DerivedRuntimeTransport = class {
       options.signal
     );
     throwIfAborted(options.signal);
-    if (portableAssetContentHash(bytes) !== contentHash3) {
+    if (portableAssetContentHash(bytes) !== contentHash4) {
       throw fatal("INTEGRITY_ERROR", "derived content portable engine hash does not match its closure entry");
     }
     throwIfAborted(options.signal);
-    return Object.freeze({ contentHash: contentHash3, bytes });
+    return Object.freeze({ contentHash: contentHash4, bytes });
   }
   async #request(url2, options) {
     throwIfAborted(options.signal);
@@ -162171,6 +164478,112 @@ var DerivedRuntimeTransport = class {
   }
 };
 
+// src/browser/derived-artifact-cache.ts
+var DERIVED_ARTIFACT_CACHE_SCHEMA = 1;
+var DERIVED_ARTIFACT_CACHE_MAX_BYTES = 512 * 1024 * 1024;
+var DB_NAME = "limina-derived-artifact-cache";
+var ARTIFACT_STORE = "artifacts";
+var META_STORE = "meta";
+var META_KEY = "state";
+var SEQ_INDEX2 = "seq";
+function hashLookup(hashBytes, contentHash4, bytes) {
+  try {
+    return hashBytes(bytes) === contentHash4;
+  } catch {
+    return false;
+  }
+}
+function requestToPromise(request) {
+  return new Promise((resolve, reject3) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject3(request.error ?? new Error("derived artifact cache request failed"));
+  });
+}
+function transactionDone(transaction) {
+  return new Promise((resolve, reject3) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject3(transaction.error ?? new Error("derived artifact cache transaction failed"));
+    transaction.onabort = () => reject3(transaction.error ?? new Error("derived artifact cache transaction aborted"));
+  });
+}
+function openDatabase() {
+  return new Promise((resolve, reject3) => {
+    const request = indexedDB.open(DB_NAME, DERIVED_ARTIFACT_CACHE_SCHEMA);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (database.objectStoreNames.contains(ARTIFACT_STORE)) database.deleteObjectStore(ARTIFACT_STORE);
+      if (database.objectStoreNames.contains(META_STORE)) database.deleteObjectStore(META_STORE);
+      const store2 = database.createObjectStore(ARTIFACT_STORE, { keyPath: "contentHash" });
+      store2.createIndex(SEQ_INDEX2, SEQ_INDEX2, { unique: true });
+      database.createObjectStore(META_STORE, { keyPath: "key" });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject3(request.error ?? new Error("derived artifact cache open failed"));
+    request.onblocked = () => reject3(new Error("derived artifact cache open was blocked"));
+  });
+}
+function createIndexedDbDerivedArtifactCache(hashBytes) {
+  if (typeof hashBytes !== "function") throw new TypeError("derived artifact cache requires a hash function");
+  if (typeof indexedDB === "undefined") return null;
+  let database = null;
+  const ready = () => {
+    database ??= openDatabase();
+    return database;
+  };
+  return Object.freeze({
+    async get(contentHash4) {
+      try {
+        const db = await ready();
+        const transaction = db.transaction([ARTIFACT_STORE, META_STORE], "readwrite");
+        const store2 = transaction.objectStore(ARTIFACT_STORE);
+        const record11 = await requestToPromise(store2.get(contentHash4));
+        if (record11 === void 0) {
+          await transactionDone(transaction);
+          return void 0;
+        }
+        const bytes = record11.bytes instanceof Uint8Array ? record11.bytes : new Uint8Array(record11.bytes);
+        if (bytes.byteLength !== record11.byteLength || !hashLookup(hashBytes, contentHash4, bytes)) {
+          const meta4 = await requestToPromise(transaction.objectStore(META_STORE).get(META_KEY)) ?? { key: META_KEY, totalBytes: 0, nextSeq: 0 };
+          meta4.totalBytes = Math.max(0, meta4.totalBytes - record11.byteLength);
+          store2.delete(contentHash4);
+          transaction.objectStore(META_STORE).put(meta4);
+          await transactionDone(transaction);
+          return void 0;
+        }
+        await transactionDone(transaction);
+        return bytes;
+      } catch {
+        return void 0;
+      }
+    },
+    async put(contentHash4, bytes) {
+      try {
+        const db = await ready();
+        const transaction = db.transaction([ARTIFACT_STORE, META_STORE], "readwrite");
+        const store2 = transaction.objectStore(ARTIFACT_STORE);
+        const metaStore = transaction.objectStore(META_STORE);
+        const prior = await requestToPromise(store2.get(contentHash4));
+        const meta4 = await requestToPromise(metaStore.get(META_KEY)) ?? { key: META_KEY, totalBytes: 0, nextSeq: 0 };
+        if (prior !== void 0) meta4.totalBytes = Math.max(0, meta4.totalBytes - prior.byteLength);
+        meta4.totalBytes += bytes.byteLength;
+        meta4.nextSeq += 1;
+        store2.put({ contentHash: contentHash4, byteLength: bytes.byteLength, seq: meta4.nextSeq, bytes });
+        metaStore.put(meta4);
+        while (meta4.totalBytes > DERIVED_ARTIFACT_CACHE_MAX_BYTES) {
+          const cursor = await requestToPromise(store2.index(SEQ_INDEX2).openCursor());
+          if (cursor === null) break;
+          const oldest = cursor.value;
+          meta4.totalBytes = Math.max(0, meta4.totalBytes - oldest.byteLength);
+          store2.delete(oldest.contentHash);
+          metaStore.put(meta4);
+        }
+        await transactionDone(transaction);
+      } catch {
+      }
+    }
+  });
+}
+
 // src/browser/derived-biome-population-mount.ts
 var DERIVED_CONTENT_FETCH_CONCURRENCY = 4;
 function derivedPopulationPlacementSurvives(input) {
@@ -162208,10 +164621,10 @@ async function boundedMap(values, concurrency, callerSignal, map2) {
     callerSignal?.removeEventListener("abort", forwardAbort);
   }
 }
-function closureEntry(content, assetId2, contentHash3) {
+function closureEntry(content, assetId2, contentHash4) {
   const entry = content.entries.find((candidate) => candidate.assetId === assetId2);
-  if (entry === void 0 || entry.contentHash !== contentHash3) {
-    throw new Error(`derived biome content closure does not authorize '${assetId2}' at ${contentHash3}`);
+  if (entry === void 0 || entry.contentHash !== contentHash4) {
+    throw new Error(`derived biome content closure does not authorize '${assetId2}' at ${contentHash4}`);
   }
   return entry;
 }
@@ -162220,8 +164633,8 @@ async function mountDerivedBiomePopulation(input) {
     `${placement.assetId}\0${placement.contentHash}`,
     Object.freeze({ assetId: placement.assetId, contentHash: placement.contentHash })
   ])).values()];
-  const descriptorEntries = descriptorIdentities.map(({ assetId: assetId2, contentHash: contentHash3 }) => {
-    const entry = closureEntry(input.content, assetId2, contentHash3);
+  const descriptorEntries = descriptorIdentities.map(({ assetId: assetId2, contentHash: contentHash4 }) => {
+    const entry = closureEntry(input.content, assetId2, contentHash4);
     if (entry.kind !== "population-descriptor") {
       throw new Error(`derived biome population descriptor '${assetId2}' has closure kind '${entry.kind}'`);
     }
@@ -162243,13 +164656,13 @@ async function mountDerivedBiomePopulation(input) {
       throw new Error(`derived biome population descriptor '${entry.assetId}' is invalid: ${error51 instanceof Error ? error51.message : String(error51)}`);
     }
     descriptorBackends.set(`${entry.assetId}\0${entry.contentHash}`, descriptor3.backend);
-    const requireLeaf = (assetId2, contentHash3, expectedKind) => {
-      const leaf = closureEntry(input.content, assetId2, contentHash3);
+    const requireLeaf = (assetId2, contentHash4, expectedKind) => {
+      const leaf = closureEntry(input.content, assetId2, contentHash4);
       if (leaf.kind !== expectedKind) {
         throw new Error(`derived biome content '${assetId2}' has closure kind '${leaf.kind}', expected '${expectedKind}'`);
       }
       const prior = requiredLeaves.get(assetId2);
-      if (prior !== void 0 && prior.contentHash !== contentHash3) {
+      if (prior !== void 0 && prior.contentHash !== contentHash4) {
         throw new Error(`derived biome content closure assigns conflicting hashes to '${assetId2}'`);
       }
       requiredLeaves.set(assetId2, leaf);
@@ -162390,12 +164803,19 @@ async function mountDerivedBiomePopulation(input) {
 }
 async function mountTransportDerivedBiomePopulation(input) {
   const transport = new DerivedRuntimeTransport(input.contentAccess);
+  const cache3 = input.contentCache === void 0 ? createIndexedDbDerivedArtifactCache(portableAssetContentHash) : input.contentCache;
   return mountDerivedBiomePopulation({
     ...input,
-    loadContent: async (entry, signal) => transport.fetchContent(input.manifestHash, {
-      contentHash: entry.contentHash,
-      byteLength: entry.byteLength
-    }, { signal })
+    loadContent: async (entry, signal) => {
+      const cached2 = await cache3?.get(entry.contentHash);
+      if (cached2 !== void 0 && cached2.byteLength === entry.byteLength) return { bytes: cached2 };
+      const result2 = await transport.fetchContent(input.manifestHash, {
+        contentHash: entry.contentHash,
+        byteLength: entry.byteLength
+      }, { signal });
+      await cache3?.put(entry.contentHash, result2.bytes);
+      return result2;
+    }
   });
 }
 
@@ -162416,7 +164836,7 @@ function clamp5(value, minimum, maximum) {
 function plain7(value) {
   return value !== null && !Array.isArray(value) && typeof value === "object" ? value : null;
 }
-function finite19(value, fallback) {
+function finite21(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 function deriveCommandCameraFrame(commands) {
@@ -162426,11 +164846,11 @@ function deriveCommandCameraFrame(commands) {
     const input = plain7(command.input);
     const generate = plain7(input?.generate);
     if (input === null || generate?.source !== "map") continue;
-    const size = finite19(input.size, 256);
+    const size = finite21(input.size, 256);
     if (!(size > 0) || size > 1e6) continue;
     const rawOrigin = input.origin;
     const origin = Array.isArray(rawOrigin) && rawOrigin.length === 3 && rawOrigin.every((value) => typeof value === "number" && Number.isFinite(value)) ? [rawOrigin[0], rawOrigin[1], rawOrigin[2]] : [0, 0, 0];
-    const amplitude = Math.max(1, finite19(generate.amplitude, 12));
+    const amplitude = Math.max(1, finite21(generate.amplitude, 12));
     if (selected === null || size > selected.size) selected = { size, origin, amplitude };
   }
   if (selected === null) return DEFAULT_FRAME;
@@ -164548,7 +166968,7 @@ async function runLive(opts) {
         if (!(error51 instanceof GltfSceneParseError)) throw error51;
       }
     }));
-    const HANDSHAKE_TIMEOUT_MS = 3e4;
+    const HANDSHAKE_TIMEOUT_MS = 24e4;
     const handshake = createWorkerHandshake();
     const handshakeDeadline = setTimeout(
       () => handshake.fail(`sim worker init did not reply ready within ${HANDSHAKE_TIMEOUT_MS / 1e3}s`),
@@ -164608,7 +167028,7 @@ async function runLive(opts) {
     };
     worker.onmessage = (ev) => {
       const msg = ev.data;
-      if (typeof msg.requestId === "string" && (msg.type === "derivedRevisionStaged" || msg.type === "derivedRevisionCommitted" || msg.type === "derivedRevisionDiscarded" || msg.type === "derivedRevisionRejected")) {
+      if (typeof msg.requestId === "string" && (msg.type === "derivedRevisionStaged" || msg.type === "derivedRevisionCommitted" || msg.type === "derivedRevisionDiscarded" || msg.type === "derivedRevisionUpdated" || msg.type === "derivedRevisionRejected")) {
         const waiter = derivedControlWaiters.get(msg.requestId);
         if (waiter === void 0) return;
         clearTimeout(waiter.timer);
@@ -164716,7 +167136,7 @@ async function runLive(opts) {
     };
     const requestDerivedWorker = (type, manifestHash, payload, transfer = []) => {
       const requestId = `derived-sim-${++derivedControlRequestId}`;
-      const expected = type === "stageDerivedRevision" ? "derivedRevisionStaged" : type === "commitDerivedRevision" ? "derivedRevisionCommitted" : "derivedRevisionDiscarded";
+      const expected = type === "stageDerivedRevision" ? "derivedRevisionStaged" : type === "commitDerivedRevision" ? "derivedRevisionCommitted" : type === "updateDerivedResidency" || type === "updateDerivedContent" ? "derivedRevisionUpdated" : "derivedRevisionDiscarded";
       return new Promise((resolve, reject3) => {
         const timer = setTimeout(() => {
           derivedControlWaiters.delete(requestId);
@@ -164789,7 +167209,8 @@ async function runLive(opts) {
     core.water.setQuality(renderSession.quality().water);
     cleanupWater = core.water;
     const authoringBinding = new AuthoringProjectBinding((projectId) => {
-      registerBrowserAuthoringRuntime(registry2, world, projectId);
+      const runtime = registerBrowserAuthoringRuntime(registry2, world, projectId);
+      core.terrainEdit.derived.projectState = runtime.projectState;
     }, initialAuthoringProjectId);
     const permissions = resolveProfile(opts.profile ?? REALM_DEFAULT_PROFILE);
     const applyOne = (cmd) => {
@@ -164975,6 +167396,7 @@ async function runLive(opts) {
     let activeDerivedRevision = null;
     let stagingDerivedCandidate = null;
     let derivedActivationInProgress = false;
+    const derivedActivationStats = { full: 0, incremental: 0, contentDelta: 0 };
     const suppressedAuthoredTerrainBodies = /* @__PURE__ */ new Set();
     const configureAuthoredTerrainFarField = (input) => {
       if (!(input instanceof Mesh)) return;
@@ -165198,10 +167620,18 @@ async function runLive(opts) {
     if (editorNavigation !== void 0) editorNavigation.writeAnchor(navigationAnchor);
     const residencyStartX = editorNavigation !== void 0 ? navigationAnchor.x : playerCameraActive ? Position.x[playerEid] : cameraControls !== void 0 ? cameraControls.target.x : camera.position.x;
     const residencyStartZ = editorNavigation !== void 0 ? navigationAnchor.z : playerCameraActive ? Position.z[playerEid] : cameraControls !== void 0 ? cameraControls.target.z : camera.position.z;
+    const residencyRadius = opts.derivedResidency?.radius ?? 7;
+    if (!Number.isSafeInteger(residencyRadius) || residencyRadius < 2 || residencyRadius > 7) {
+      throw new RangeError("runLive derivedResidency.radius must be an integer in [2, 7]");
+    }
+    const residencyThreshold = opts.derivedResidency?.thresholdChunks ?? 2;
+    if (!Number.isSafeInteger(residencyThreshold) || residencyThreshold < 1 || residencyThreshold > residencyRadius) {
+      throw new RangeError("runLive derivedResidency.thresholdChunks must be an integer in [1, radius]");
+    }
     const derivedTerrainResidencyTracker = new DerivedTerrainResidencyTracker({
       center: [residencyStartX, residencyStartZ],
-      radius: 7,
-      thresholdChunks: 2,
+      radius: residencyRadius,
+      thresholdChunks: residencyThreshold,
       onListenerError: (error51) => console.warn("derived terrain residency listener failed", error51)
     });
     cleanupDerivedTerrainResidency = () => derivedTerrainResidencyTracker.dispose();
@@ -165378,6 +167808,199 @@ async function runLive(opts) {
       }
       if (errors.length > 0) throw new AggregateError(errors, `${errors.length} derived collider removal operation(s) failed`);
     };
+    const updateDerivedResidencyWindow = async (active, verifiedSnapshot, identity, residencyKey, signal, cancelled2) => {
+      derivedActivationStats.incremental++;
+      let releaseActivationPause;
+      let failClosed = false;
+      let simApplied = false;
+      const prepared2 = await active.candidate.beginResidencyDelta(verifiedSnapshot, { onSlice: cancelled2 });
+      try {
+        const transfer = [];
+        const added = prepared2.added.map((entry) => {
+          const heights = entry.tile.heights.slice();
+          transfer.push(heights.buffer);
+          return {
+            key: entry.key,
+            tx: entry.tx,
+            tz: entry.tz,
+            tile: {
+              nrows: entry.tile.nrows,
+              ncols: entry.tile.ncols,
+              origin: [entry.tile.origin[0], entry.tile.origin[1], entry.tile.origin[2]],
+              scale: [entry.tile.scale[0], entry.tile.scale[1], entry.tile.scale[2]],
+              heights
+            }
+          };
+        });
+        releaseActivationPause = await acquireActivationPause();
+        cancelled2();
+        const updateAck = requestDerivedWorker(
+          "updateDerivedResidency",
+          identity.manifestHash,
+          { update: { added, removed: [...prepared2.removed] } },
+          transfer
+        );
+        if (signal === void 0) await updateAck;
+        else {
+          let onAbort;
+          try {
+            await Promise.race([
+              updateAck,
+              new Promise((_resolve, reject3) => {
+                onAbort = () => reject3(signal.reason instanceof Error ? signal.reason : new Error("derived revision activation was cancelled"));
+                signal.addEventListener("abort", onAbort, { once: true });
+              })
+            ]);
+          } finally {
+            if (onAbort !== void 0) signal.removeEventListener("abort", onAbort);
+          }
+        }
+        simApplied = true;
+        cancelled2();
+        for (const key of prepared2.removed) {
+          const bodyId = active.bodyIds.get(key);
+          if (bodyId === void 0) throw new Error(`derived residency render collider '${key}' is not mounted`);
+          ops2.op_physics_remove_body(bodyId);
+          active.bodyIds.delete(key);
+        }
+        for (const entry of prepared2.added) {
+          const tile = entry.tile;
+          active.bodyIds.set(entry.key, ops2.op_physics_add_heightfield(
+            tile.origin[0],
+            tile.origin[1],
+            tile.origin[2],
+            tile.nrows,
+            tile.ncols,
+            tile.scale[0],
+            tile.scale[1],
+            tile.scale[2],
+            tile.heights
+          ));
+        }
+        active.candidate.commitResidencyDelta(prepared2);
+        active.residencyKey = residencyKey;
+        return active.identity;
+      } catch (error51) {
+        if (simApplied) {
+          failClosed = true;
+          failLive(
+            `derived residency update outcome is indeterminate for ${identity.manifestHash}: ${error51 instanceof Error ? error51.message : String(error51)}`
+          );
+        } else {
+          try {
+            active.candidate.abortResidencyDelta(prepared2);
+          } catch (abortError) {
+            console.warn("derived residency delta abort failed", abortError);
+          }
+        }
+        throw error51;
+      } finally {
+        if (!failClosed && releaseActivationPause !== void 0) {
+          try {
+            await releaseActivationPause();
+          } catch (error51) {
+            failLive(`sim worker resume after derived residency update failed: ${error51 instanceof Error ? error51.message : String(error51)}`);
+            throw error51;
+          }
+        }
+      }
+    };
+    const applyDerivedContentDelta = async (active, verifiedSnapshot, identity, changedKeys, signal, cancelled2) => {
+      derivedActivationStats.contentDelta++;
+      let releaseActivationPause;
+      let failClosed = false;
+      let simApplied = false;
+      const prepared2 = await active.candidate.beginContentDelta(verifiedSnapshot, changedKeys, { onSlice: cancelled2 });
+      try {
+        const transfer = [];
+        const replaced = prepared2.replaced.map((entry) => {
+          const heights = entry.tile.heights.slice();
+          transfer.push(heights.buffer);
+          return {
+            key: entry.key,
+            tx: entry.tx,
+            tz: entry.tz,
+            tile: {
+              nrows: entry.tile.nrows,
+              ncols: entry.tile.ncols,
+              origin: [entry.tile.origin[0], entry.tile.origin[1], entry.tile.origin[2]],
+              scale: [entry.tile.scale[0], entry.tile.scale[1], entry.tile.scale[2]],
+              heights
+            }
+          };
+        });
+        releaseActivationPause = await acquireActivationPause();
+        cancelled2();
+        const updateAck = requestDerivedWorker(
+          "updateDerivedContent",
+          active.identity.manifestHash,
+          { update: { nextManifestHash: identity.manifestHash, replaced } },
+          transfer
+        );
+        if (signal === void 0) await updateAck;
+        else {
+          let onAbort;
+          try {
+            await Promise.race([
+              updateAck,
+              new Promise((_resolve, reject3) => {
+                onAbort = () => reject3(signal.reason instanceof Error ? signal.reason : new Error("derived revision activation was cancelled"));
+                signal.addEventListener("abort", onAbort, { once: true });
+              })
+            ]);
+          } finally {
+            if (onAbort !== void 0) signal.removeEventListener("abort", onAbort);
+          }
+        }
+        simApplied = true;
+        cancelled2();
+        for (const entry of prepared2.replaced) {
+          const bodyId = active.bodyIds.get(entry.key);
+          if (bodyId === void 0) throw new Error(`derived content render collider '${entry.key}' is not mounted`);
+          ops2.op_physics_remove_body(bodyId);
+        }
+        for (const entry of prepared2.replaced) {
+          const tile = entry.tile;
+          active.bodyIds.set(entry.key, ops2.op_physics_add_heightfield(
+            tile.origin[0],
+            tile.origin[1],
+            tile.origin[2],
+            tile.nrows,
+            tile.ncols,
+            tile.scale[0],
+            tile.scale[1],
+            tile.scale[2],
+            tile.heights
+          ));
+        }
+        active.candidate.commitContentDelta(prepared2);
+        active.identity = identity;
+        return identity;
+      } catch (error51) {
+        if (simApplied) {
+          failClosed = true;
+          failLive(
+            `derived content update outcome is indeterminate for ${identity.manifestHash}: ${error51 instanceof Error ? error51.message : String(error51)}`
+          );
+        } else {
+          try {
+            active.candidate.abortContentDelta(prepared2);
+          } catch (abortError) {
+            console.warn("derived content delta abort failed", abortError);
+          }
+        }
+        throw error51;
+      } finally {
+        if (!failClosed && releaseActivationPause !== void 0) {
+          try {
+            await releaseActivationPause();
+          } catch (error51) {
+            failLive(`sim worker resume after derived content update failed: ${error51 instanceof Error ? error51.message : String(error51)}`);
+            throw error51;
+          }
+        }
+      }
+    };
     const activateDerivedRevision = (snapshot, options = {}) => {
       const work = async () => {
         if (stopped) throw new Error("live runtime is stopped");
@@ -165393,9 +168016,22 @@ async function runLive(opts) {
         cancelled2();
         const identity = derivedIdentity(verifiedSnapshot);
         const residencyKey = derivedTerrainResidencyKey(verifiedSnapshot.residency);
-        if (activeDerivedRevision?.identity.manifestHash === identity.manifestHash && activeDerivedRevision.residencyKey === residencyKey) {
-          return activeDerivedRevision.identity;
+        const contentDeltaKeys = activeDerivedRevision !== null && activeDerivedRevision.identity.manifestHash !== identity.manifestHash && activeDerivedRevision.residencyKey === residencyKey && verifiedSnapshot.populationPlan === null ? activeDerivedRevision.candidate.planContentDelta(verifiedSnapshot) : null;
+        const activationPlan = planDerivedActivation(
+          activeDerivedRevision === null ? null : { manifestHash: activeDerivedRevision.identity.manifestHash, residencyKey: activeDerivedRevision.residencyKey },
+          identity.manifestHash,
+          residencyKey,
+          verifiedSnapshot.populationPlan !== null,
+          contentDeltaKeys
+        );
+        if (activationPlan === "duplicate") return activeDerivedRevision.identity;
+        if (activationPlan === "incremental") {
+          return updateDerivedResidencyWindow(activeDerivedRevision, verifiedSnapshot, identity, residencyKey, signal, cancelled2);
         }
+        if (activationPlan === "content-delta") {
+          return applyDerivedContentDelta(activeDerivedRevision, verifiedSnapshot, identity, contentDeltaKeys, signal, cancelled2);
+        }
+        derivedActivationStats.full++;
         let builtCandidate;
         let stagedRequestId;
         let candidateBodies = [];
@@ -165457,6 +168093,8 @@ async function runLive(opts) {
           const generated = candidate.snapshot.generatedWater;
           const generatedBytes = generated?.bytes.slice();
           if (generatedBytes !== void 0) transfer.push(generatedBytes.buffer);
+          const generatedFieldBytes = generated?.fieldBytes.slice();
+          if (generatedFieldBytes !== void 0) transfer.push(generatedFieldBytes.buffer);
           const stageSnapshot = {
             schema: DERIVED_SIM_STAGE_SCHEMA,
             projectId: candidate.snapshot.projectId,
@@ -165469,7 +168107,8 @@ async function runLive(opts) {
               generatedWater: {
                 artifact: generated.artifact,
                 bytes: generatedBytes,
-                bindings: generated.bindings
+                bindings: generated.bindings,
+                fieldBytes: generatedFieldBytes
               }
             }
           };
@@ -165524,7 +168163,12 @@ async function runLive(opts) {
           editorNavigation?.constrainToResidencyGrid(candidate.snapshot.manifest.grid.chunkSizeM, 7, 2);
           derivedTerrainResidencyTracker.setGrid(candidate.snapshot.manifest.grid);
           const prior = activeDerivedRevision;
-          activeDerivedRevision = { candidate, bodyIds: candidateBodies, identity, residencyKey };
+          activeDerivedRevision = {
+            candidate,
+            bodyIds: new Map(candidate.terrainWindow().map((entry, index) => [entry.key, candidateBodies[index]])),
+            identity,
+            residencyKey
+          };
           cleanupDerivedRevision = () => {
             const active = activeDerivedRevision;
             if (active === null) return;
@@ -165536,7 +168180,7 @@ async function runLive(opts) {
               errors.push(error51);
             }
             try {
-              removeDerivedBodies(active.bodyIds);
+              removeDerivedBodies(active.bodyIds.values());
             } catch (error51) {
               errors.push(error51);
             }
@@ -165557,7 +168201,7 @@ async function runLive(opts) {
               errors.push(error51);
             }
             try {
-              removeDerivedBodies(prior.bodyIds);
+              removeDerivedBodies(prior.bodyIds.values());
             } catch (error51) {
               errors.push(error51);
             }
@@ -165802,6 +168446,8 @@ async function runLive(opts) {
       playerWaterState: () => readSimStatus(statusView),
       activateDerivedRevision,
       derivedRevision: () => activeDerivedRevision?.identity ?? null,
+      /** 2.0-B activation routing evidence: full window swaps vs incremental chunk deltas. */
+      derivedActivationStats: () => Object.freeze({ ...derivedActivationStats }),
       derivedTerrainResidency: () => derivedTerrainResidencyTracker.current(),
       derivedTerrainHeightAt: (worldX, worldZ) => {
         if (!Number.isFinite(worldX) || !Number.isFinite(worldZ)) {
@@ -165924,7 +168570,8 @@ export {
   partitionQuarantined,
   run,
   runLive,
-  snapshotBootProgram
+  snapshotBootProgram,
+  brush_kernel_exports as terrainBrushKernel
 };
 /*! Bundled license information:
 

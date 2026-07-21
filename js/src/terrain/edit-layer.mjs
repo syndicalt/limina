@@ -558,6 +558,163 @@ export function composeTerrainEditLayers(input, options = {}) {
   }, options);
 }
 
+/** World-metre lattice geometry of a base topology: sample bounds plus the LOD0 sample
+ *  spacing and the world position of the first sample. Stroke materialization maps
+ *  brush circles onto this lattice; it is a pure function of the base topology. */
+export function terrainEditLatticeGeometry(baseInput) {
+  const base = parseTerrainEditBaseTopology(baseInput);
+  const intervals = base.grid.defaultSamples - 1;
+  const stepM = base.grid.chunkSizeM / intervals;
+  const bounds = sampleBounds(base);
+  return Object.freeze({
+    base,
+    intervals,
+    stepM,
+    minGx: bounds.minGx,
+    minGz: bounds.minGz,
+    maxGx: bounds.maxGx,
+    maxGz: bounds.maxGz,
+    minX: base.grid.origin[0] + bounds.minGx * stepM,
+    minZ: base.grid.origin[1] + bounds.minGz * stepM,
+  });
+}
+
+const STROKE_OPERATION_ID = /^op-\d{6}$/;
+const FOLD_OPERATION_ID = /^fold-\d{6}$/;
+
+/** Chunk one stroke's canonical sparse deltas into cap-respecting operations. Ids are
+ *  derived from the layer's current operation count, so a replayed stroke sequence
+ *  re-derives identical ids; uniqueness is required only within one layer. */
+export function splitTerrainEditStrokeDeltas(deltas, firstOperationIndex) {
+  denseArray(deltas, MAX_TERRAIN_EDIT_DELTAS, "terrain edit stroke deltas");
+  if (deltas.length === 0) throw new Error("terrain edit stroke must contain at least one delta");
+  if (!Number.isSafeInteger(firstOperationIndex) || firstOperationIndex < 0) {
+    throw new Error("terrain edit stroke first operation index must be a non-negative safe integer");
+  }
+  const operations = [];
+  for (let offset = 0; offset < deltas.length; offset += MAX_TERRAIN_EDIT_DELTAS_PER_OPERATION) {
+    operations.push({
+      operationId: `op-${String(firstOperationIndex + operations.length).padStart(6, "0")}`,
+      kind: TERRAIN_EDIT_OPERATION_KIND,
+      deltas: deltas.slice(offset, offset + MAX_TERRAIN_EDIT_DELTAS_PER_OPERATION),
+    });
+  }
+  return operations;
+}
+
+/** Fold many ordered operations into the fewest equivalent ones: deltas sharing one
+ *  lattice key merge in operation order into their exact double sum. Composition applies
+ *  each op with a float32 rounding per application, so the fold is height-equivalent
+ *  within one rounding per overlapping sample — deterministic, never resampled. */
+export function compactTerrainEditOperations(operationsInput) {
+  denseArray(operationsInput, MAX_TERRAIN_EDIT_OPERATIONS + MAX_TERRAIN_EDIT_DELTAS_PER_OPERATION, "terrain edit fold operations");
+  const sums = new Map();
+  let deltaCount = 0;
+  // Fold input is bounded by one full layer plus one full stroke (the append path folds
+  // existing+incoming in one pass); the MERGED output must still fit the layer caps.
+  const maxInput = MAX_TERRAIN_EDIT_DELTAS * 2;
+  for (const operation of operationsInput) {
+    ownDataObject(operation, ["operationId", "kind", "deltas"], "terrain edit fold operation");
+    denseArray(operation.deltas, maxInput, "terrain edit fold operation deltas");
+    for (const delta of operation.deltas) {
+      ownDataObject(delta, ["gx", "gz", "deltaM"], "terrain edit fold delta");
+      if (!Number.isSafeInteger(delta.gx) || !Number.isSafeInteger(delta.gz)) throw new Error("terrain edit fold delta coordinates must be safe integers");
+      const deltaM = finite(delta.deltaM, "terrain edit fold deltaM");
+      deltaCount++;
+      if (deltaCount > maxInput) throw new Error(`terrain edit fold exceeds ${maxInput} input deltas`);
+      const key = `${delta.gz}:${delta.gx}`;
+      sums.set(key, (sums.get(key) ?? 0) + deltaM);
+    }
+  }
+  const merged = [];
+  for (const [key, deltaM] of sums) {
+    if (deltaM === 0) continue;
+    if (!Number.isFinite(deltaM) || Math.abs(deltaM) > MAX_TERRAIN_EDIT_DELTA_M) {
+      throw new Error(`terrain edit fold merged deltaM must be non-zero and within +/-${MAX_TERRAIN_EDIT_DELTA_M}m`);
+    }
+    const separator = key.indexOf(":");
+    merged.push({ gz: Number(key.slice(0, separator)), gx: Number(key.slice(separator + 1)), deltaM });
+  }
+  merged.sort(compareDeltas);
+  if (merged.length === 0) throw new Error("terrain edit fold cancelled every delta; refusing an empty layer");
+  const operations = [];
+  for (let offset = 0; offset < merged.length; offset += MAX_TERRAIN_EDIT_DELTAS_PER_OPERATION) {
+    operations.push({
+      operationId: `fold-${String(operations.length).padStart(6, "0")}`,
+      kind: TERRAIN_EDIT_OPERATION_KIND,
+      deltas: merged.slice(offset, offset + MAX_TERRAIN_EDIT_DELTAS_PER_OPERATION),
+    });
+  }
+  return operations;
+}
+
+/** Append one materialized stroke to a layer (or create it). When the result would
+ *  exceed the operation OR delta cap, all operations fold into merged-delta operations
+ *  first (ordered overlap semantics; overlapping brushes merge onto one lattice key).
+ *  The layer is rebound to `stroke.baseTopology` — callers rebase first when the
+ *  mounted base changed, so an append never silently migrates topology. */
+export function appendTerrainEditStroke(layerInput, stroke) {
+  ownDataObject(stroke, ["layerId", "baseTopology", "deltas"], "terrain edit stroke");
+  const layerId = identifier(stroke.layerId, "terrain edit stroke layer id");
+  const base = parseTerrainEditBaseTopology(stroke.baseTopology);
+  let existing = [];
+  if (layerInput !== undefined) {
+    const layer = parseTerrainEditLayer(layerInput);
+    if (layer.baseTopology.topologyHash !== base.topologyHash) {
+      throw new TerrainEditBaseMismatchError(base.topologyHash, layer.baseTopology.topologyHash);
+    }
+    existing = layer.operations.map((operation) => ({
+      operationId: operation.operationId,
+      kind: TERRAIN_EDIT_OPERATION_KIND,
+      deltas: operation.deltas.map((delta) => ({ ...delta })),
+    }));
+  }
+  let operations = [...existing, ...splitTerrainEditStrokeDeltas(stroke.deltas, existing.length)];
+  let deltaCount = 0;
+  for (const operation of operations) deltaCount += operation.deltas.length;
+  let folded = false;
+  if (operations.length > MAX_TERRAIN_EDIT_OPERATIONS || deltaCount > MAX_TERRAIN_EDIT_DELTAS) {
+    operations = compactTerrainEditOperations(operations);
+    folded = true;
+  }
+  const layer = createTerrainEditLayer({ layerId, baseTopology: base, operations });
+  return Object.freeze({
+    layer,
+    folded,
+    operationIds: Object.freeze(layer.operations.map((operation) => operation.operationId)),
+    deltaCount: layer.operations.reduce((total, operation) => total + operation.deltas.length, 0),
+  });
+}
+
+/** Rebase every layer whose base topology drifted from the mounted one. Layers already
+ *  on the target pass through untouched. Any conflict is returned structured — callers
+ *  surface it, never drop a layer silently. */
+export function rebaseTerrainEditLayersToBase(layersInput, targetBaseInput, options = {}) {
+  const target = parseTerrainEditBaseTopology(targetBaseInput);
+  denseArray(layersInput, MAX_TERRAIN_EDIT_COMPOSE_LAYERS, "terrain edit rebase layers");
+  const layers = [];
+  const reports = [];
+  const failures = [];
+  for (const layerInput of layersInput) {
+    const layer = parseTerrainEditLayer(layerInput);
+    if (layer.baseTopology.topologyHash === target.topologyHash) {
+      layers.push(layer);
+      continue;
+    }
+    const rebase = rebaseTerrainEditLayer(layer, target, options);
+    if (rebase.ok) {
+      layers.push(rebase.layer);
+      reports.push(Object.freeze({ layerId: layer.layerId, report: rebase.report }));
+    } else {
+      failures.push(Object.freeze({ layerId: layer.layerId, conflicts: rebase.conflicts, report: rebase.report }));
+    }
+  }
+  if (failures.length > 0) return Object.freeze({ ok: false, failures: Object.freeze(failures) });
+  return Object.freeze({ ok: true, layers: Object.freeze(layers), reports: Object.freeze(reports) });
+}
+
+export const TERRAIN_EDIT_OPERATION_ID_PATTERNS = Object.freeze({ stroke: STROKE_OPERATION_ID, fold: FOLD_OPERATION_ID });
+
 function sameGridGeometry(source, target) {
   return source.grid.origin[0] === target.grid.origin[0]
     && source.grid.origin[1] === target.grid.origin[1]

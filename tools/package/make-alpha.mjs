@@ -85,7 +85,6 @@ mkdirSync(join(OUT, "tools/design"), { recursive: true });
 mkdirSync(join(OUT, "tools/map"), { recursive: true });
 copy("tools/scaffold/scripts/serve.mjs", "tools/serve.mjs");
 copy("tools/design/serve-design.mjs");
-copy("tools/design/frontend", "tools/design/frontend");
 copy("tools/design/build-world.mjs");
 copy("tools/design/compile-vault.mjs");
 copy("tools/map/compile-designmap.mjs");

@@ -21,6 +21,7 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -451,10 +452,106 @@ pub async fn op_net_connect(
 }
 
 async fn net_connect_impl(state: Rc<RefCell<OpState>>, url: String) -> Result<u32, JsErrorBox> {
+    validate_ws_connect_url(&url)?;
     let (ws, _resp) = connect_async_with_config(&url, Some(websocket_config()), false)
         .await
         .map_err(|e| JsErrorBox::generic(format!("net connect: {e}")))?;
     with_net(&state, |net| net.register(ws))
+}
+
+/// Reject a client WebSocket connect to any non-loopback host unless it is
+/// explicitly allowed. `op_net_connect` exists for headless loopback socket tests
+/// and the local editor bridge; without this gate an isolate could open an
+/// arbitrary `ws://` channel to the LAN (SSRF / port scan / credential exfil) —
+/// the exact hole `op_http_post` in limina-ops is hardened against, which this op
+/// had not received. TLS is not compiled in, so this is plaintext-only, but the
+/// reachability is what matters. Loopback (127.0.0.0/8, ::1, localhost) is always
+/// allowed; widen with `LIMINA_NET_CONNECT_ALLOW` (comma-separated host or
+/// host:port entries, e.g. `game.example.com,10.0.0.5:6000`).
+fn validate_ws_connect_url(raw: &str) -> Result<(), JsErrorBox> {
+    let rest = raw
+        .strip_prefix("ws://")
+        .or_else(|| raw.strip_prefix("wss://"))
+        .ok_or_else(|| JsErrorBox::generic("net connect: URL scheme must be ws or wss"))?;
+    // authority = everything up to the first path/query/fragment delimiter.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() {
+        return Err(JsErrorBox::generic("net connect: URL host is required"));
+    }
+    if authority.contains('@') {
+        return Err(JsErrorBox::generic(
+            "net connect: URL credentials are not allowed",
+        ));
+    }
+    let (host, port) = split_host_port(authority)?;
+    let host_lc = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    if host_lc.is_empty() {
+        return Err(JsErrorBox::generic("net connect: URL host is required"));
+    }
+    if host_is_loopback(&host_lc) || ws_connect_host_allowed(&host_lc, port) {
+        return Ok(());
+    }
+    Err(JsErrorBox::generic(format!(
+        "net connect: host '{host_lc}' is not allowed (loopback only; widen with LIMINA_NET_CONNECT_ALLOW)"
+    )))
+}
+
+/// Split a URL authority into (host, optional port), handling the `[::1]:port`
+/// bracketed IPv6 form and a bare `::1` (which contains ':' but no port).
+fn split_host_port(authority: &str) -> Result<(String, Option<u16>), JsErrorBox> {
+    if let Some(after_open) = authority.strip_prefix('[') {
+        let close = after_open
+            .find(']')
+            .ok_or_else(|| JsErrorBox::generic("net connect: malformed IPv6 host"))?;
+        let host = &after_open[..close];
+        let port = match after_open[close + 1..].strip_prefix(':') {
+            Some(p) => Some(
+                p.parse::<u16>()
+                    .map_err(|_| JsErrorBox::generic("net connect: invalid port"))?,
+            ),
+            None => None,
+        };
+        return Ok((host.to_string(), port));
+    }
+    // Only treat a trailing :N as a port when the left side has no ':' — a bare
+    // IPv6 literal (`::1`, `fe80::1`) has colons and no bracketed port.
+    if let Some((h, p)) = authority.rsplit_once(':') {
+        if !h.contains(':') {
+            let port = p
+                .parse::<u16>()
+                .map_err(|_| JsErrorBox::generic("net connect: invalid port"))?;
+            return Ok((h.to_string(), Some(port)));
+        }
+    }
+    Ok((authority.to_string(), None))
+}
+
+fn host_is_loopback(host_lc: &str) -> bool {
+    if host_lc == "localhost" {
+        return true;
+    }
+    host_lc
+        .parse::<IpAddr>()
+        .map(|ip| match ip {
+            IpAddr::V4(v4) => v4.is_loopback(),
+            IpAddr::V6(v6) => v6
+                .to_ipv4_mapped()
+                .map_or_else(|| v6.is_loopback(), |mapped| mapped.is_loopback()),
+        })
+        .unwrap_or(false)
+}
+
+fn ws_connect_host_allowed(host_lc: &str, port: Option<u16>) -> bool {
+    let host_port = port.map(|p| format!("{host_lc}:{p}"));
+    std::env::var("LIMINA_NET_CONNECT_ALLOW")
+        .ok()
+        .map(|allow| {
+            allow.split(',').any(|entry| {
+                let entry = entry.trim().to_ascii_lowercase();
+                !entry.is_empty() && (entry == host_lc || Some(entry) == host_port)
+            })
+        })
+        .unwrap_or(false)
 }
 
 // ---- per-connection read / write / close ----------------------------------
@@ -600,6 +697,40 @@ mod tests {
     use tokio::net::TcpStream;
     use tokio::time::timeout;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    #[test]
+    fn ws_connect_allows_loopback_forms() {
+        for url in [
+            "ws://127.0.0.1:7777/",
+            "ws://localhost:5173/mcp",
+            "ws://[::1]:8080/",
+            "wss://127.0.0.1/",
+            "ws://127.5.5.5:9/",
+        ] {
+            assert!(
+                validate_ws_connect_url(url).is_ok(),
+                "loopback url must be allowed: {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn ws_connect_rejects_non_loopback_by_default() {
+        // Falsifiability: these MUST fail, or op_net_connect is an open SSRF channel.
+        for url in [
+            "ws://10.0.0.5:6379/",
+            "ws://169.254.169.254/latest/meta-data/",
+            "ws://example.com/",
+            "ws://[2606:4700:4700::1111]:443/",
+            "ws://user:pass@127.0.0.1:80/", // credentials rejected even on loopback
+            "http://127.0.0.1/",            // wrong scheme
+        ] {
+            assert!(
+                validate_ws_connect_url(url).is_err(),
+                "non-loopback / malformed url must be rejected: {url}"
+            );
+        }
+    }
 
     struct PendingSink;
 

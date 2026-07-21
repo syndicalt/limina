@@ -23,9 +23,29 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 import { createServer, request as httpRequest } from "node:http";
-import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import { createReadStream, existsSync, statSync } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+// A loopback bind is not an HTTP trust boundary: DNS rebinding can deliver a
+// hostile Host header to 127.0.0.1. Accept only exact loopback hosts on the
+// connection's actual local port (mirrors tools/design/loopback-request-host.mjs;
+// inlined because projects receive a COPY of this file, not the repo tree).
+function isAllowedLoopbackRequestHost(rawHost, localPort) {
+  if (typeof rawHost !== "string" || !Number.isInteger(localPort)) return false;
+  let parsed;
+  try { parsed = new URL(`http://${rawHost}`); }
+  catch { return false; }
+  return parsed.username === ""
+    && parsed.password === ""
+    && parsed.pathname === "/"
+    && parsed.search === ""
+    && parsed.hash === ""
+    && parsed.port === String(localPort)
+    && LOOPBACK_HOSTS.has(parsed.hostname);
+}
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -81,15 +101,12 @@ export function atlasProxyPath(requestUrl) {
   const queryAt = requestUrl.indexOf("?");
   const pathname = queryAt < 0 ? requestUrl : requestUrl.slice(0, queryAt);
   const query = queryAt < 0 ? "" : requestUrl.slice(queryAt);
-  if (pathname === "/atlas" || pathname === "/atlas/") return `/${query}`;
-  if (pathname.startsWith("/atlas/")) return `${pathname.slice("/atlas".length)}${query}`;
   if (pathname.startsWith("/api/") || pathname.startsWith("/shared/") || pathname.startsWith("/assets/qc/")) {
     return `${pathname}${query}`;
   }
-  // Engine-shared validator modules (serve-design SHARED_MODULES): the embedded
-  // Atlas frontend imports them via ../../../js/src/world/*.mjs, which the browser
-  // resolves OUT of the /atlas/ prefix onto this origin — so the dock proxy must
-  // carry the family or the SPA's module graph 404s and the map never renders.
+  // Engine-shared validator modules (serve-design SHARED_MODULES): the native Atlas
+  // surface imports them via /js/src/world/*.mjs on this origin — so the proxy must
+  // carry the family or the surface's module graph 404s and the map never renders.
   // One flat .mjs segment only (no traversal shapes); serve-design's own explicit
   // allow-list 404s anything it doesn't declare, and this origin serves nothing
   // of its own under /js/.
@@ -99,33 +116,6 @@ export function atlasProxyPath(requestUrl) {
   return undefined;
 }
 
-export function parseEditorHandoffServerConfig({ atlasOrigin, editorUrl, editorServerUrl } = {}) {
-  if (editorUrl === undefined && editorServerUrl === undefined) return undefined;
-  const atlas = parseAtlasOrigin(atlasOrigin instanceof URL ? atlasOrigin.origin : atlasOrigin);
-  if (!atlas || typeof editorUrl !== "string" || typeof editorServerUrl !== "string") {
-    throw new Error("Atlas origin, editor URL, and editor server URL are all required for handoff");
-  }
-  let editor;
-  let server;
-  try { editor = new URL(editorUrl); server = new URL(editorServerUrl); }
-  catch (error) { throw new Error(`editor handoff URL is invalid: ${error.message}`); }
-  if (editor.protocol !== "http:" || !["localhost", "127.0.0.1"].includes(editor.hostname)
-      || editor.port === "" || editor.pathname !== "/" || editor.search !== "" || editor.hash !== ""
-      || editor.username !== "" || editor.password !== "" || editor.href !== editorUrl) {
-    throw new Error("LIMINA_EDITOR_PUBLIC_URL must be an exact loopback http origin URL");
-  }
-  if (!['ws:', 'wss:'].includes(server.protocol) || !["localhost", "127.0.0.1"].includes(server.hostname)
-      || server.port === "" || server.pathname !== "/" || server.search !== "" || server.hash !== ""
-      || server.username !== "" || server.password !== "" || server.href !== editorServerUrl) {
-    throw new Error("LIMINA_EDITOR_SERVER_URL must be an exact loopback WebSocket URL");
-  }
-  return Object.freeze({
-    atlasOrigin: atlas.origin,
-    editorUrl: editor.href,
-    editorServerUrl: server.href,
-  });
-}
-
 function withoutHopByHopHeaders(input) {
   const headers = { ...input };
   const connectionTokens = String(headers.connection ?? "").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean);
@@ -133,9 +123,12 @@ function withoutHopByHopHeaders(input) {
   return headers;
 }
 
-function proxyAtlasRequest(req, res, atlasOrigin, targetPath) {
+function proxyAtlasRequest(req, res, atlasOrigin, targetPath, designToken) {
   const headers = withoutHopByHopHeaders(req.headers);
   headers.host = atlasOrigin.host;
+  // The launcher-issued design token attaches HERE, server-side: the browser is
+  // never a direct sidecar client and never holds it (studio-unification U0b).
+  if (typeof designToken === "string" && designToken.length > 0) headers["x-limina-design-token"] = designToken;
   const upstream = httpRequest({
     protocol: atlasOrigin.protocol,
     hostname: atlasOrigin.hostname,
@@ -161,46 +154,38 @@ function proxyAtlasRequest(req, res, atlasOrigin, targetPath) {
   req.pipe(upstream);
 }
 
-export function createEditorStaticServer({ root, assetRoot, atlasOrigin, editorUrl, editorServerUrl } = {}) {
+export function createEditorStaticServer({ root, assetRoot, atlasOrigin, editorServerUrl, editorToken, designToken } = {}) {
   const ROOT = resolve(root ?? "dist");
   const ASSETS_ROOT = resolve(assetRoot ?? resolve(ROOT, "..", "assets"));
   const ATLAS_ORIGIN = parseAtlasOrigin(atlasOrigin instanceof URL ? atlasOrigin.origin : atlasOrigin);
-  const HANDOFF_CONFIG = parseEditorHandoffServerConfig({ atlasOrigin: ATLAS_ORIGIN, editorUrl, editorServerUrl });
+  // Runtime capability handoff: the launcher-supervised server vends the session
+  // capability to the page it serves, so the browser connect bar needs no pasted
+  // token. Host-validated on every route (below) — without that, DNS rebinding
+  // would make this endpoint a token leak. Same-origin only: no CORS headers.
+  const BOOTSTRAP_CONFIG = typeof editorToken === "string" && typeof editorServerUrl === "string"
+    ? Object.freeze({ schema: "limina.editor-bootstrap/v1", serverUrl: editorServerUrl, token: editorToken })
+    : undefined;
   return createServer((req, res) => {
     try {
-      const requestPath = (req.url ?? "/").split("?")[0];
-      const isRelayDocument = HANDOFF_CONFIG && req.method === "GET" && req.url === "/atlas-handoff.html";
-      const isRelayConfig = HANDOFF_CONFIG && req.method === "GET" && req.url === "/atlas-handoff-config";
-      if (isRelayDocument || isRelayConfig) {
-        const handoffHeaders = {
-          "cache-control": "no-store",
-          "referrer-policy": "no-referrer",
-          "x-content-type-options": "nosniff",
-          "content-security-policy": "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-        };
-        if (isRelayConfig) {
-          res.writeHead(200, { ...handoffHeaders, ...COOP_COEP, "content-type": "application/json; charset=utf-8" });
-          res.end(JSON.stringify(HANDOFF_CONFIG));
-        } else {
-          // This single transient document must retain its cross-origin Atlas opener. Every other
-          // editor-origin response remains cross-origin isolated.
-          res.writeHead(200, { ...handoffHeaders, "content-type": "text/html; charset=utf-8" });
-          res.end(readFileSync(join(ROOT, "atlas-handoff.html")));
-        }
+      if (!isAllowedLoopbackRequestHost(req.headers.host, req.socket.localPort)) {
+        res.writeHead(403, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", ...COOP_COEP });
+        res.end("request host is not allowed");
         return;
       }
-      if (requestPath.startsWith("/atlas-handoff")) {
-        res.writeHead(404, {
-          "content-type": "text/plain; charset=utf-8",
+      if (BOOTSTRAP_CONFIG !== undefined && req.method === "GET" && (req.url ?? "").split("?")[0] === "/editor-bootstrap") {
+        res.writeHead(200, {
+          "content-type": "application/json; charset=utf-8",
           "cache-control": "no-store",
           "x-content-type-options": "nosniff",
           ...COOP_COEP,
-        }).end("404 Not Found");
+        });
+        res.end(JSON.stringify(BOOTSTRAP_CONFIG));
         return;
       }
-      const proxyPath = ATLAS_ORIGIN === undefined ? undefined : atlasProxyPath(req.url ?? "/");
-      if (proxyPath !== undefined) {
-        proxyAtlasRequest(req, res, ATLAS_ORIGIN, proxyPath);
+      const mappedPath = ATLAS_ORIGIN === undefined ? undefined : atlasProxyPath(req.url ?? "/");
+      if (mappedPath !== undefined) {
+        // API families proxy upstream (with the launcher token attached).
+        proxyAtlasRequest(req, res, ATLAS_ORIGIN, mappedPath, designToken);
         return;
       }
       // Strip query/hash; decode; block path traversal by normalizing under ROOT.
@@ -258,23 +243,13 @@ function main() {
   // The repo asset root (repo/assets), served at /assets/** so the LIVE editor's op_read_asset
   // can fetch GLB/texture bytes (asset.place, vegetation.scatter) from the same origin.
   const assetRoot = resolve(process.env.LIMINA_ASSETS_ROOT || resolve(root, "..", "assets"));
-  let handoffConfig;
-  try {
-    handoffConfig = parseEditorHandoffServerConfig({
-      atlasOrigin,
-      editorUrl: process.env.LIMINA_EDITOR_PUBLIC_URL,
-      editorServerUrl: process.env.LIMINA_EDITOR_SERVER_URL,
-    });
-  } catch (error) {
-    console.error(`\n  serve: ${error instanceof Error ? error.message : String(error)}\n`);
-    process.exit(1);
-  }
   const server = createEditorStaticServer({
     root,
     assetRoot,
     atlasOrigin,
-    editorUrl: handoffConfig?.editorUrl,
-    editorServerUrl: handoffConfig?.editorServerUrl,
+    editorServerUrl: process.env.LIMINA_EDITOR_SERVER_URL,
+    editorToken: process.env.LIMINA_EDITOR_TOKEN,
+    designToken: process.env.LIMINA_DESIGN_TOKEN,
   });
 
   server.listen(port, "127.0.0.1", () => {

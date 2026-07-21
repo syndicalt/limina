@@ -257,6 +257,11 @@ Each chunk is its own vertical-slice commit (implementation + gate + evidence).
   (`map-driven-worlds-shipped.md`, `kernel-plan.md`); three completed plans still say
   "Status: not started"; `docs/mvp-spec.md:298` ends with an unanswered assistant prompt.
 
+> **2026-07-19 — U2–U4 are superseded by `plans/design-space-editor-2.0.md`**
+> (phases 2.0-A/B/D/E), which reimagines the same unification as one studio with
+> two live surfaces instead of a port of the bridge-era seams. Chunks U0/U1 and the
+> prerequisites remain landed and load-bearing.
+
 ## Status & outcomes
 
 **2026-07-18 — PROPOSED.** Written after a four-track exploration (Design Space/editor
@@ -299,14 +304,12 @@ file ownership was split to avoid collisions, verified by gates on both sides.
   `map-driven-worlds-shipped.md` / `kernel-plan.md` refs removed; stale "Status: not
   started" headers corrected on the phase-7/8/10 plans; `docs/mvp-spec.md` marked
   HISTORICAL and its trailing chat artifact removed.
-- **Integration debt recorded:** (1) register `p_studio_recorder_seam` and
-  `p_studio_trace_append_replay` in `run-gates.sh` `QUICK_DETERMINISM_GLOBS` (the file was
-  mid-edit by the audit lane; deferred to avoid a mid-air collision — full sweep
-  auto-discovers `js/test/*.ts` regardless); (2) review note: a commit-back `cloneInput`
-  throw after a successful handler rejects the invoke yet leaves the command recorded +
-  finalized without its commit fields — live==log holds, but the caller-visible contract
-  deserves a decision; (3) P5 completion check and U0a `--headless` + U0b proxy resume
-  once `editor.mjs`/`editor_host.ts` settle.
+- **Integration debt recorded:** (1) ~~register `p_studio_recorder_seam` and
+  `p_studio_trace_append_replay` in `run-gates.sh`~~ DONE 2026-07-19 (both in
+  `QUICK_DETERMINISM_GLOBS`); (2) review note: a commit-back `cloneInput` throw after a
+  successful handler rejects the invoke yet leaves the command recorded + finalized
+  without its commit fields — live==log holds, but the caller-visible contract deserves a
+  decision (carried in the handoff as owner decision #4); (3) ~~P5 completion check~~ DONE.
 - **U1 shell foundations landed ahead of sequence (collision-free paths only).**
   `editor/src/keyed-render.js` (keyed DOM reconciliation replacing innerHTML rebuilds;
   per-container WeakMap registry; O(n) with call-count proofs) and
@@ -315,3 +318,79 @@ file ownership was split to avoid collisions, verified by gates on both sides.
   dependency-injected storage). Each with a `node:test` suite (11+11 green) and a
   studio-lane integration review on record. The mechanical resume checklist for U0/U1
   lives in `plans/handoffs/studio-u0-u1-resume.md`.
+
+**2026-07-19 — Chunk U0 LANDED (studio lane, after the audit lane's omnibus commit
+`a986c59` closed remediation).** P5 closeout + U0a + U0b, all gated:
+
+- **P5 token broker closeout.** `tools/bridge/editor-client.mjs`: `readEditorCapability`
+  (strict schema/token validation + 0600 privacy enforcement — a world-readable
+  capability is rejected as a leak) and `editorClientConfigFromEnvironment` fallback
+  (env token wins; `LIMINA_EDITOR_CAPABILITY` overrides the default
+  `.limina/editor-runtime/editor-capability.json` path). `build-world.mjs` resolves
+  token env → arg → capability. `propose-asset.mjs` rewritten from a minified
+  hand-rolled ws client onto `EditorBridgeClient` (HELD-for-approval behavior
+  preserved). 5 new bridge tests.
+- **U0a headless sidecar.** `serve-design.mjs --headless`: no SPA; `/api/session`
+  answers a documented **placeholder** (`limina-proxy-attached-design-token`) — the
+  embedded SPA's boot requires a ≥32-char token string, and the placeholder boots it
+  while authenticating NOTHING (direct mutation with it → 403; the proxy attaches the
+  real capability). Mutations are gated solely on launcher-issued `LIMINA_DESIGN_TOKEN`
+  (fail closed without it). NEW `tools/design/serve-design-headless.test.mjs` (3 legs
+  incl. standalone-mode falsifiability + placeholder-not-a-credential leg).
+- **U0b single HTTP entry.** `tools/scaffold/scripts/serve.mjs`: Atlas SPA files serve
+  LOCALLY (`LIMINA_DESIGN_FRONTEND_DIR`, containment-preserving) while `/api/*`,
+  `/shared/*`, `/assets/qc/*`, `/js/src/world/*` proxy upstream with the design token
+  attached server-side. `editor.mjs` issues the design capability per boot and supervises
+  the sidecar `--headless`. NEW `tools/scaffold/scripts/serve.studio-proxy.test.mjs`
+  (the `p_studio_proxy` gate: local SPA, traversal containment, injected mutation passes,
+  direct sidecar 403, tokenless-proxy falsifiability leg).
+- **Verification:** 41/41 determinism-subset gates (38 native + 3 bun-dispatched),
+  10 bridge tests, 23 editor/bridge suites, 3 headless + 1 proxy + 14 scaffold tests,
+  tsc + lints + 500-byte line ceiling clean. Full `run-gates.sh --quick` (host/browser
+  suites) deferred to a quiet window — a live dev stack holds ports 4321/5173/8787;
+  it runs pre-U0 code and should be restarted to pick up the headless sidecar.
+
+**2026-07-19 — Chunk U1 first slice LANDED (studio lane).** Shell foundations +
+Docs panel, all gated, plus a U0 integration fix discovered by the sweep:
+
+- **U0 integration fix (found by `run-gates.sh --quick` going red on
+  `generated_water_workflow_browser`).** The headless sidecar broke the embedded
+  SPA's boot (net.js requires a ≥32-char token) and any out-of-band tooling that
+  mimicked browser-direct auth. Resolution: `/api/session` now answers a documented
+  placeholder (boots the SPA, authenticates nothing — the proxy attaches the real
+  token), and the generated-water fixture provisions through the production proxy
+  path. Gate green standalone (exact hydrology globals, pixel verification, teardown).
+- **Shell.** `studio-shell.js` — one panel manifest (existing chrome + design
+  panels) over `panel-registry` with `studio`/`design` profiles, `applyVisibility`
+  toggling `hidden` on manifest elements; wired in `app.js` with localStorage
+  persistence and strict-restore fallback. 4 tests.
+- **Docs panel.** `design-api.js` (frozen client, abort-race timeouts with no
+  leaked timers, DesignApiError taxonomy, 404="unavailable" flavor; 6 tests),
+  `design-markdown.js` (pure dialect port — 12-case byte-identical differential vs
+  the original, one deliberate href-scheme hardening; 7 tests),
+  `panels/design-docs.js` (nav via `keyedList`, view, split editor + live preview,
+  create/delete, retryable unavailable state, cascade hook),
+  `panels/design-cascade.js`, `styles-studio.css` (scoped; editor/styles.css is
+  FB-lane), accordion + bootstrap in `index.html`/`app.js` (no existing behavior
+  repurposed; accordions bind via the generic windows.js handler).
+- **Behavioral twin.** NEW `editor/test/studio_docs_panel_browser.test.cjs` — real
+  scaffold + launcher + CPU Chromium: proxy `/api/state`, keyed nav render, doc
+  markdown view, affordances. Auto-discovered by the sweep's `*_browser.test.cjs` glob.
+- Remaining U1: Places/Graph/Packs/Build panels, chat router (expert personas onto
+  `runBoundedMultiTurn` + context packs + streaming), `design.review` gate.
+
+**2026-07-19 — Runtime capability handoff (studio lane).** The audit lane removed
+the console-banner token but left the browser connect bar manual (capability file
++ paste). Closed: the launcher-supervised static server vends
+`GET /editor-bootstrap` (`{schema, serverUrl, token}`) to the page it serves —
+and because that endpoint is a credential leak if rebound, **every route** on the
+static server now validates the loopback `Host` header (inline port of
+`loopback-request-host.mjs`; serve.mjs is copied into projects without the repo
+tree). `app.js` prefills EMPTY connect fields only (explicit ?server= / Atlas
+handoff / typed values always win). editor.mjs passes LIMINA_EDITOR_TOKEN to the
+static server. `p_studio_proxy` gate gained 4 legs (bootstrap contract, rebinding
+403 on bootstrap + static, no-endpoint-without-capability). Live-verified on the
+limina-world stack: prefill OK (32-char capability into the password field),
+hostile-Host 403 on bootstrap and static, Atlas proxy unaffected. Project
+scripts were stale template copies — synced (`limina-world/scripts/`); the
+scaffold-copy model is why the Host validator is inlined.

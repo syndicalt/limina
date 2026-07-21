@@ -197,6 +197,9 @@ export interface ParsedGeneratedWaterResource {
     erosionStageKey: string;
     compilerGraphHash: string;
   }>;
+  /** Canonical hash-verified hydrology-field artifact bytes (pinned by bindings.hydrologyFieldContentHash);
+   *  the sim realm re-hashes + re-decodes them to self-bind generated water with no authored map. */
+  readonly fieldBytes: Uint8Array;
   readonly render: VerifiedGeneratedWaterRenderResource;
 }
 
@@ -312,6 +315,7 @@ export interface VerifiedTransferredDerivedSnapshot {
     bindings: ParsedGeneratedWaterResource["bindings"];
     topology: GeneratedWaterTopologyView;
     field: GeneratedWaterFieldView;
+    fieldBytes: Uint8Array;
   }> | null;
 }
 
@@ -596,6 +600,7 @@ export function verifyTransferredDerivedRuntimeSnapshot(input: unknown): Verifie
   let worldOverview: ReturnType<typeof decodeWorldOverviewArtifact> | null = null;
   let navigationIndexBytes: Uint8Array | null = null;
   let biomeField: ReturnType<typeof decodeBiomeFieldArtifact> | null = null;
+  let hydrologyFieldBytes: Uint8Array | null = null;
   const overview = globals.get(WORLD_OVERVIEW_ARTIFACT_TYPE);
   if (overview !== undefined) {
     exact(overview.resource, ["kind", "decoded"], "world overview resource");
@@ -684,6 +689,7 @@ export function verifyTransferredDerivedRuntimeSnapshot(input: unknown): Verifie
       placement: Readonly<{ originX: number; originZ: number }>;
       topology: Readonly<{ rows: number; cols: number; cellSizeM: number; seaLevelM: number; oceanMask: Uint8Array }>;
     }>;
+    hydrologyFieldBytes = canonicalBytes;
     renderField = Object.freeze({
       placement: Object.freeze({ originX: canonical.placement.originX, originZ: canonical.placement.originZ }),
       rows: canonical.topology.rows,
@@ -744,12 +750,14 @@ export function verifyTransferredDerivedRuntimeSnapshot(input: unknown): Verifie
         || compilerContentHash(prepared.bindings) !== compilerContentHash(parsedBindings)) {
       throw new Error("generated water prepared identity does not match its canonical artifact");
     }
+    if (hydrologyFieldBytes === null) throw new Error("generated water is missing its verified hydrology field bytes");
     generatedWater = Object.freeze({
       artifact: resourceArtifact,
       bytes,
       bindings: parsedBindings,
       topology: generatedRenderTopology(prepared.topology),
       field: renderField!,
+      fieldBytes: hydrologyFieldBytes,
     });
   }
 
@@ -829,6 +837,7 @@ function hydrateVerifiedDerivedSnapshot(data: VerifiedTransferredDerivedSnapshot
     artifact: Object.freeze({ ...data.generatedWater.artifact }),
     bytes: data.generatedWater.bytes,
     bindings: Object.freeze({ ...data.generatedWater.bindings }),
+    fieldBytes: data.generatedWater.fieldBytes,
     render: Object.freeze({
       artifactHash: data.generatedWater.artifact.contentHash,
       topology: data.generatedWater.topology,

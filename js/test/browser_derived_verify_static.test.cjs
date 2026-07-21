@@ -106,7 +106,7 @@ test("falsifiability: the checker flags the three-importing render candidate", (
 
 test("mounting no longer verifies: the candidate constructor asserts the brand", () => {
   const source = fs.readFileSync(path.join(SRC_ROOT, "browser/derived-runtime-render-candidate.ts"), "utf8");
-  assert.match(source, /this\.snapshot = assertVerifiedTransferredDerivedSnapshot\(snapshotInput\);/);
+  assert.match(source, /this\.#snapshot = assertVerifiedTransferredDerivedSnapshot\(snapshotInput\);/);
   assert.ok(!/function parseTransferredDerivedRuntimeSnapshot\(/.test(source),
     "a second verifier body exists in the render candidate — validation logic forked");
 });

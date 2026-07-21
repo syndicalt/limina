@@ -371,7 +371,9 @@ function renderInspector() {
   form.className = "take-form";
   const title = document.createElement("div");
   title.className = "take-entity mono";
-  title.textContent = state.entity;
+  // 2.0-C: multi-select edits the PRIMARY only — say so by counting the rest.
+  const extraCount = editorSelection.getMany().length - 1;
+  title.textContent = extraCount > 0 ? `${state.entity} (+${extraCount} more)` : state.entity;
   form.appendChild(title);
 
   renderTransformSection(form);

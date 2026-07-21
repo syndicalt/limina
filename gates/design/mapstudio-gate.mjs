@@ -6,7 +6,7 @@
 //   1. v1 -> v2 migration round-trip: a version-less doc (the eastern-watch shape) migrates to a
 //      valid v2 doc with every feature preserved byte-identically; migration is idempotent;
 //      garbage input yields the default doc; a v2 save re-reads unchanged.
-//   2. Undo inversion property: for EVERY command type in map-commands.js, apply -> undo restores
+//   2. Undo inversion property: for EVERY command type in tools/design/map-commands.js, apply -> undo restores
 //      the exact original map state (deep-equal), and undo -> redo restores the post-apply state.
 //      Also a mixed 6-command sequence, fully unwound and replayed.
 //   3. The compile bridge: a serialized v2 doc still compiles through the REAL design-map compiler
@@ -23,8 +23,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
 
 const { migrateMapDoc, serializeMapDoc, MAPDOC_VERSION } = await import(join(ROOT, "tools/design/map-doc.mjs"));
-const H = await import(join(ROOT, "tools/design/frontend/map-commands.js"));
-const EL = await import(join(ROOT, "tools/design/frontend/map-elevation.js"));
+// The old Atlas SPA (tools/design/frontend/) is retired; its PURE, DOM-free undo + elevation
+// contract modules now live beside map-doc.mjs so this gate keeps locking them in Node.
+const H = await import(join(ROOT, "tools/design/map-commands.js"));
+const EL = await import(join(ROOT, "tools/design/map-elevation.js"));
 const { compileDesignMap } = await import(join(ROOT, "js/src/world/design-map-compile.mjs"));
 const { worldMapContentHash } = await import(join(ROOT, "js/src/world/worldmap-hash.mjs"));
 const { rasterizeWorldMap, reliefGridSampler } = await import(join(ROOT, "js/src/world/pipeline/map-raster.mjs"));
@@ -645,7 +647,7 @@ console.log("biome raster (painter P2):");
   const editSrc = readFileSync(join(ROOT, "js/src/skills/terrain-edit.ts"), "utf8");
   check("sync: canonical paint palette has a 6-indexed murk entry", /\/\/ 6 murk/.test(paletteSrc));
   check("sync: canonical paint palette has a 7-indexed tundra entry", /\/\/ 7 tundra/.test(paletteSrc));
-  check("sync: PAINT_MATERIALS maps murk: 6 (terrain-edit.ts)", /murk: 6/.test(editSrc));
+  check("sync: PAINT_MATERIALS maps murk: 6 (canonical paint-layer table)", /murk: 6/.test(readFileSync(join(ROOT, "js/src/terrain/paint-layer.mjs"), "utf8")));
   // Falsifiability: an all-grass raster must produce ZERO tundra at the same sampler.
   const flatCells = new Uint8Array(BW * BW).fill(BIOME_CLASSES.indexOf("grass") + 1);
   const { worldMap: gm } = compileDesignMap({

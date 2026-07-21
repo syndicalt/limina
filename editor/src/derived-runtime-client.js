@@ -559,6 +559,15 @@ export class DerivedRuntimeClient {
         }
         return;
       }
+      if (message.type === "fetch-progress") {
+        exactDataKeys(message, ["schema", "type", "fetched", "total"], [], "derived runtime fetch progress");
+        safeInteger(message.fetched, "derived runtime fetch progress.fetched");
+        safeInteger(message.total, "derived runtime fetch progress.total");
+        if (message.fetched > message.total) throw protocolError("derived runtime fetch progress exceeds its total");
+        // Loading-screen contract: exactly { phase, fetched, total } — no mode/revision fields.
+        this.#emit({ phase: "fetch", fetched: message.fetched, total: message.total });
+        return;
+      }
       if (message.type === "revision") {
         exactDataKeys(message, ["schema", "type", "status", "manifestHash", "revision"], ["requestId"], "derived runtime revision");
         if (this.#phase !== "ready" || this.#activationId !== undefined || !REVISION_STATUSES.has(message.status)) {

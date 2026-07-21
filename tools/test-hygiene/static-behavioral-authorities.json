@@ -31,13 +31,10 @@
       ]
     },
     {
-      "staticTest": "editor/test/atlas_bridge_wiring_static.test.mjs",
+      "staticTest": "editor/test/viewport_box_select_static.test.mjs",
       "authorities": [
-        { "kind": "node-test", "path": "editor/test/atlas_editor_protocol.test.mjs" },
-        { "kind": "node-test", "path": "editor/test/atlas_workspace_state.test.mjs" },
-        { "kind": "node-test", "path": "editor/test/atlas_handoff.test.mjs" },
-        { "kind": "chromium-live", "path": "editor/test/atlas_bridge_browser.test.cjs" },
-        { "kind": "chromium-live", "path": "editor/test/atlas_standalone_handoff_browser.test.cjs" }
+        { "kind": "node-test", "path": "editor/test/selection_store.test.mjs" },
+        { "kind": "chromium-live", "path": "editor/test/atlas_native_water_browser.test.cjs" }
       ]
     },
     {

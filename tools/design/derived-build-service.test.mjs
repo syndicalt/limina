@@ -6,6 +6,7 @@ import test from "node:test";
 import { compilerContentHash } from "../../js/src/world/compiler/canonical.mjs";
 import { createTerrainGridSpec, terrainChunkId } from "../../js/src/terrain/grid.mjs";
 import { createTerrainEditBaseTopology, createTerrainEditLayer } from "../../js/src/terrain/edit-layer.mjs";
+import { terrainEditBaseTopologyForWorldMap } from "../../js/src/terrain/edit-topology.mjs";
 import {
   COMPILER_SNAPSHOT_SCHEMA,
   DERIVED_REVISION_MANIFEST_SCHEMA,
@@ -345,7 +346,14 @@ function service(fx, overrides = {}) {
   let coordinator;
   const authority = overrides.authority ?? {
     closed: false,
-    async callTool(name) { assert.equal(name, "authoring.sourceSnapshot"); return fx.snapshot; },
+    // An authority without the D5.1 live layer store answers not_found, which is the
+    // one fallthrough that sends ingestion to the fs-backed asset store.
+    async callTool(name) {
+      if (name === "authoring.sourceSnapshot") return fx.snapshot;
+      const error = new Error(`unknown tool: ${name}`);
+      error.code = "not_found";
+      throw error;
+    },
     close() { this.closed = true; },
   };
   const compiler = overrides.compiler ?? {
@@ -374,7 +382,7 @@ function service(fx, overrides = {}) {
     publish: overrides.publish,
     verifyReusableArtifacts: overrides.verifyReusableArtifacts ?? (() => {}),
     loadPrevious: overrides.loadPrevious,
-    logger: { info() {}, error() {} },
+    logger: overrides.logger ?? { info() {}, error() {} },
     setTimer: overrides.setTimer,
     clearTimer: overrides.clearTimer,
   });
@@ -863,11 +871,28 @@ test("malformed compiler bundles and profile selectors fail before queueing with
   });
 });
 
+function fixtureWorldMap() {
+  return {
+    version: 1,
+    id: "primary",
+    unitsPerMeter: 1,
+    origin: [0, 0],
+    extent: { w: 16, h: 16 },
+    seaLevel: 0,
+    land: [{ points: [[-8, -8], [8, -8], [8, 8], [-8, 8]] }],
+    relief: [],
+    biomes: [],
+    waterways: [],
+    routes: [],
+    anchors: [],
+  };
+}
+
 test("reads terrain edit layers by validated domain hash rather than an impossible raw self-hash", async () => {
   const fx = fixture();
   try {
-    const grid = createTerrainGridSpec({ gridId: `${fx.projectId}.surface`, origin: [0, 0], chunkSizeM: 48, defaultSamples: 33 });
-    const baseTopology = createTerrainEditBaseTopology({ grid, domain: { minTx: 0, minTz: 0, maxTx: 0, maxTz: 0 } });
+    const worldMap = fixtureWorldMap();
+    const baseTopology = terrainEditBaseTopologyForWorldMap(worldMap, {});
     const layer = createTerrainEditLayer({
       layerId: "sculpt",
       baseTopology,
@@ -883,6 +908,7 @@ test("reads terrain edit layers by validated domain hash rather than an impossib
     fx.snapshot = sourceSnapshot(fx.projectId, fx.mapRef, 1, [layerRef]);
     const manifestHash = compilerContentHash({ manifest: "terrain-layer" });
     const created = service(fx, {
+      compileAtlasMapDoc: () => ({ worldMap, warnings: [] }),
       compileWorldTerrain(input) {
         assert.equal(input.terrainEditLayers.length, 1);
         assert.equal(input.terrainEditLayers[0].contentHash, layer.contentHash);
@@ -892,6 +918,126 @@ test("reads terrain edit layers by validated domain hash rather than an impossib
       publish: async (input) => { await input.readHead(); return { published: true, manifestHash }; },
     });
     await created.instance.reconcileOnce({ waitForBuild: true });
+    await created.instance.stop();
+  } finally { fx.cleanup(); }
+});
+
+test("reads terrain edit layer content from the authority live store without fs bytes", async () => {
+  const fx = fixture();
+  try {
+    const worldMap = fixtureWorldMap();
+    const baseTopology = terrainEditBaseTopologyForWorldMap(worldMap, {});
+    const layer = createTerrainEditLayer({
+      layerId: "derived-primary.surface",
+      baseTopology,
+      operations: [{ operationId: "op-000000", kind: "add", deltas: [{ gx: 1, gz: 1, deltaM: 2 }] }],
+    });
+    const layerRef = {
+      layerId: layer.layerId,
+      assetId: `assets/sources/terrain-edit-layer/${layer.contentHash.slice(7)}.layer.json`,
+      hash: layer.contentHash,
+      baseTopologyHash: layer.baseTopology.topologyHash,
+    };
+    fx.snapshot = sourceSnapshot(fx.projectId, fx.mapRef, 1, [layerRef]);
+    let reads = 0;
+    const authority = {
+      closed: false,
+      async callTool(name, args, options) {
+        if (name === "authoring.sourceSnapshot") return fx.snapshot;
+        assert.equal(name, "authoring.terrainEditLayer");
+        assert.deepEqual(options, { retryTransport: true });
+        assert.deepEqual(args, { assetId: layerRef.assetId, hash: layerRef.hash });
+        reads++;
+        return { layer: JSON.parse(canonicalCompilerJson(layer)) };
+      },
+      close() { this.closed = true; },
+    };
+    const manifestHash = compilerContentHash({ manifest: "authority-layer" });
+    const created = service(fx, {
+      authority,
+      compileAtlasMapDoc: () => ({ worldMap, warnings: [] }),
+      compileWorldTerrain(input) {
+        assert.equal(input.terrainEditLayers.length, 1);
+        assert.equal(input.terrainEditLayers[0].contentHash, layer.contentHash);
+        return { manifest: { manifestHash }, artifacts: [], reusedArtifacts: [], snapshot: {}, invalidation: {}, diagnostics: [] };
+      },
+      publish: async (input) => { await input.readHead(); return { published: true, manifestHash }; },
+    });
+    await created.instance.reconcileOnce({ waitForBuild: true });
+    assert.equal(reads, 1, "ingestion must resolve the layer through the authority once");
+    await created.instance.stop();
+  } finally { fx.cleanup(); }
+});
+
+test("rebases an edit layer onto a moved compile domain, binding the compile to the rebased content", async () => {
+  const fx = fixture();
+  try {
+    const worldMap = fixtureWorldMap();
+    const targetBase = terrainEditBaseTopologyForWorldMap(worldMap, {});
+    const grid = createTerrainGridSpec({ gridId: targetBase.grid.gridId, origin: [0, 0], chunkSizeM: 48, defaultSamples: 33 });
+    const oldBase = createTerrainEditBaseTopology({ grid, domain: { minTx: 0, minTz: 0, maxTx: 0, maxTz: 0 } });
+    assert.notEqual(oldBase.topologyHash, targetBase.topologyHash, "fixture must bind the layer to a stale topology");
+    const layer = createTerrainEditLayer({
+      layerId: "sculpt",
+      baseTopology: oldBase,
+      operations: [{ operationId: "raise", kind: "add", deltas: [{ gx: 1, gz: 1, deltaM: 2 }] }],
+    });
+    const assetId = "assets/terrain/sculpt.layer.json";
+    const path = join(fx.projectRoot, ...assetId.split("/"));
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, Buffer.from(`${canonicalCompilerJson(layer)}\n`));
+    const layerRef = { layerId: layer.layerId, assetId, hash: layer.contentHash, baseTopologyHash: oldBase.topologyHash };
+    fx.snapshot = sourceSnapshot(fx.projectId, fx.mapRef, 1, [layerRef]);
+    const manifestHash = compilerContentHash({ manifest: "rebased" });
+    const created = service(fx, {
+      compileAtlasMapDoc: () => ({ worldMap, warnings: [] }),
+      compileWorldTerrain(input) {
+        assert.equal(input.terrainEditLayers.length, 1);
+        const compiled = input.terrainEditLayers[0];
+        assert.notEqual(compiled.contentHash, layer.contentHash, "stale topology content reached the compiler");
+        assert.equal(compiled.baseTopology.topologyHash, targetBase.topologyHash);
+        assert.equal(input.terrainEditLayerRefs[0].contentHash, compiled.contentHash, "ref must bind the rebased content");
+        return { manifest: { manifestHash }, artifacts: [], reusedArtifacts: [], snapshot: {}, invalidation: {}, diagnostics: [] };
+      },
+      publish: async (input) => { await input.readHead(); return { published: true, manifestHash }; },
+    });
+    await created.instance.reconcileOnce({ waitForBuild: true });
+    await created.instance.stop();
+  } finally { fx.cleanup(); }
+});
+
+test("an unrebasable edit layer fails the build with structured conflicts, never a silent drop", async () => {
+  const fx = fixture();
+  try {
+    const worldMap = fixtureWorldMap();
+    const grid = createTerrainGridSpec({ gridId: "other-grid", origin: [0, 0], chunkSizeM: 48, defaultSamples: 33 });
+    const oldBase = createTerrainEditBaseTopology({ grid, domain: { minTx: 0, minTz: 0, maxTx: 0, maxTz: 0 } });
+    const layer = createTerrainEditLayer({
+      layerId: "sculpt",
+      baseTopology: oldBase,
+      operations: [{ operationId: "raise", kind: "add", deltas: [{ gx: 1, gz: 1, deltaM: 2 }] }],
+    });
+    const assetId = "assets/terrain/sculpt.layer.json";
+    const path = join(fx.projectRoot, ...assetId.split("/"));
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, Buffer.from(`${canonicalCompilerJson(layer)}\n`));
+    const layerRef = { layerId: layer.layerId, assetId, hash: layer.contentHash, baseTopologyHash: oldBase.topologyHash };
+    fx.snapshot = sourceSnapshot(fx.projectId, fx.mapRef, 1, [layerRef]);
+    const errors = [];
+    let compiled = false;
+    const created = service(fx, {
+      compileAtlasMapDoc: () => ({ worldMap, warnings: [] }),
+      compileWorldTerrain() { compiled = true; throw new Error("an unrebasable layer reached the compiler"); },
+      publish: async () => { throw new Error("an unrebasable layer reached publication"); },
+      logger: { info() {}, error(message) { errors.push(message); } },
+    });
+    await assert.rejects(created.instance.reconcileOnce({ waitForBuild: true }), (error) => (
+      error instanceof DerivedBuildServiceError && error.code === "TERRAIN_EDIT_REBASE_CONFLICT" && error.message.includes("grid_mismatch")
+    ));
+    assert.equal(compiled, false);
+    const conflictLines = errors.filter((line) => line.includes("rebase conflicts"));
+    assert.equal(conflictLines.length, 1, "rebase conflicts must surface in the build log");
+    assert.match(conflictLines[0], /grid_mismatch/);
     await created.instance.stop();
   } finally { fx.cleanup(); }
 });

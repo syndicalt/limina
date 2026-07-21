@@ -269,6 +269,7 @@ export class DerivedRevisionManager {
   #activateRevision;
   #disposeChunk;
   #disposeGlobal;
+  #onProgress;
   #now;
   #diagnosticsLimit;
   #diagnostics = [];
@@ -283,7 +284,7 @@ export class DerivedRevisionManager {
   constructor(input) {
     const options = assertOptions(input, new Set([
       "projectId", "branchId", "getAuthoritativeSource", "loadArtifact", "stageChunk",
-      "selectChunks", "stageGlobal", "activateRevision", "disposeChunk", "disposeGlobal", "diagnosticsLimit", "now",
+      "selectChunks", "stageGlobal", "activateRevision", "disposeChunk", "disposeGlobal", "diagnosticsLimit", "now", "onProgress",
     ]), "derived revision manager options");
     this.#projectId = assertIdentifier(options.projectId, PROJECT_ID, "derived revision manager projectId");
     this.#branchId = assertIdentifier(options.branchId, BRANCH_ID, "derived revision manager branchId");
@@ -297,6 +298,9 @@ export class DerivedRevisionManager {
     this.#activateRevision = assertFunction(options.activateRevision, "activateRevision");
     this.#disposeChunk = assertFunction(options.disposeChunk, "disposeChunk");
     this.#disposeGlobal = options.disposeGlobal === undefined ? undefined : assertFunction(options.disposeGlobal, "disposeGlobal");
+    // Load-progress observer (loading screens): (fetched, total) verified-artifact counts,
+    // emitted in deterministic load order. Diagnostics only — never gates the activation.
+    this.#onProgress = options.onProgress === undefined ? null : assertFunction(options.onProgress, "onProgress");
     if (typeof globalThis.AbortController !== "function") {
       throw new Error("DerivedRevisionManager requires the platform AbortController API");
     }
@@ -523,7 +527,7 @@ export class DerivedRevisionManager {
     }
   }
 
-  async #loadVerifiedArtifact(request, artifact, loaderInput, cache, timings, counts) {
+  async #loadVerifiedArtifact(request, artifact, loaderInput, cache, timings, counts, progress = null) {
     let pending = cache.get(artifact.contentHash);
     if (pending === undefined) {
       pending = (async () => {
@@ -551,6 +555,10 @@ export class DerivedRevisionManager {
     }
     counts.artifacts++;
     counts.artifactBytes += bytes.byteLength;
+    if (progress !== null) {
+      progress.fetched += 1;
+      this.#onProgress(progress.fetched, progress.total);
+    }
     return bytes;
   }
 
@@ -644,6 +652,16 @@ export class DerivedRevisionManager {
       const removedChunks = [...priorChunks.values()].filter((entry) => !nextChunks.has(entry.chunk.chunkId) && !changedChunkIds.has(entry.chunk.chunkId));
       counts.removed = removedChunks.length;
 
+      // Load-progress accounting: exactly the artifact loads this activation will perform
+      // (changed globals + every artifact of every changed chunk), so a consumer can render
+      // a bounded fetch phase. Occurrences, not distinct hashes — the dedupe cache below still
+      // resolves every occurrence, and each resolution is reported exactly once.
+      const progress = this.#onProgress === null ? null : {
+        fetched: 0,
+        total: changedGlobals.length + changedChunks.reduce((count, changed) => count + changed.chunk.artifacts.length, 0),
+      };
+      if (progress !== null && progress.total > 0) this.#onProgress(0, progress.total);
+
       for (const changed of changedGlobals) {
         throwIfCancelled(request.signal);
         failurePhase = "load";
@@ -659,6 +677,7 @@ export class DerivedRevisionManager {
           artifactCache,
           timingsMs,
           counts,
+          progress,
         );
         failurePhase = "stage";
         phaseAt = this.#now();
@@ -691,6 +710,7 @@ export class DerivedRevisionManager {
             artifactCache,
             timingsMs,
             counts,
+            progress,
           );
           artifactPayloads.push(Object.freeze({ artifact, bytes }));
         }

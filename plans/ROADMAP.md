@@ -174,3 +174,47 @@ a vector DB, or none) living as an **external adapter behind the provider**, nev
 dependency. External Agent Builders bring their own memory over MCP. So: **engine = world +
 perception + durable log (substrate); brain = decision + recall (pluggable); memory backend =
 external.** Persisting the world well (logging) serves any memory-builder without the engine owning memory.
+
+
+## Track R — native editor client (committed 2026-07-20, owner decision)
+
+Two delivery shapes, sequenced:
+
+**R0 — studio desktop shell (LANDED 2026-07-20).** `tools/studio-shell/` — an
+Electron wrapper around the studio web app with PINNED GPU behavior
+(`--force_high_performance_gpu`, `--enable-unsafe-webgpu`, optional
+`--unsafely-treat-insecure-origin-as-secure` for LAN origins; sandboxed
+webContents, no node integration). Motivated by two production incidents:
+dual-GPU laptop GPU roulette and a host with broken WebGPU where browser
+secure-context rules removed every fallback. Verified end-to-end: studio boots
+in-shell on the GB10 with the NVIDIA card driving WebGL
+(`ANGLE (NVIDIA GB10/PCIe, OpenGL 4.5.0)`).
+
+**R1 — native wgpu editor port (Track R proper, planned).** Port the editor
+viewport's render surface onto the native path (`limina --window`, winit +
+`limina_render` wgpu ops) so the editor carries no browser engine at all.
+Committed phases:
+
+- R1.1 **Scene-graph bridge**: the derived-terrain chunk renderer (mesh
+  mount/unmount, residency windows) as native render ops — the editor's
+  largest, most mechanical Three.js surface, and the one whose mount cost
+  drives navigation stalls (see 2.0-B remainder; R1.1 and incremental chunk
+  activation share the same substrate work and should be scheduled together).
+- R1.2 **Water + grass renderers** on native ops (generated-water field is
+  already realm-verified data; only the draw moves).
+- R1.2b **Volumetrics** (study: `plans/volumetrics-study.md`, owner-prioritized):
+  froxel-grid fog foundation first (blue-noise jitter, temporal accumulation
+  with neighborhood clamping + NaN guard, ≤1.5ms tier budget), then sparse
+  brick local volumes (SVT shape), cloud layer, and underwater-as-medium.
+  Architecture is backend-agnostic so the current Three.js path can host V1
+  while Track R adopts V2/V3 as compute passes.
+- R1.3 **Gizmos/overlays** (TransformControls, brush ring, marquee,
+  compass) — small but interaction-critical; brings input mapping onto
+  winit's device events (windowed.rs already normalizes them).
+- R1.4 **Shell parity + retirement**: the Electron shell remains the fallback
+  until the native client reaches viewport-feature parity (selection, tools,
+  telemetry); browser editor stays the zero-install on-ramp regardless.
+
+Standing constraint: every native render op is recorded/replayable like the
+skills behind it — Track R changes WHERE pixels come from, never the
+authoring/determinism contract.

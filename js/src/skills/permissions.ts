@@ -29,7 +29,7 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
     "progression.read", "progression.write", "progression.configure",
     "world.read", "world.write",
     "design.read", "design.write",
-    "catalog.read",
+    "catalog.read", "studio.suggest",
   ],
   // Full player character control (Part D).
   "player.full": [
@@ -128,7 +128,7 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
     "design.read", "design.write", "game.plan",
     "catalog.read",
   ],
-  "reviewer": ["authoring.read", "scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read", "design.read", "catalog.read", DERIVED_RUNTIME_DISCOVERY_PERMISSION],
+  "reviewer": ["authoring.read", "scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read", "design.read", "catalog.read", "studio.suggest", DERIVED_RUNTIME_DISCOVERY_PERMISSION],
   // Phase 10 coordinator/delegate (existing)
   "reviewer.coordinator": [
     "orchestrate", "approval.review",
@@ -137,7 +137,12 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
 };
 
 export function resolveProfile(name: string): ReadonlySet<string> {
-  return new Set(PERMISSION_PROFILES[name] ?? []);
+  // Object.hasOwn, not `?? []`: a name matching an Object.prototype key
+  // ("toString", "constructor", "valueOf", "__proto__") resolves up the prototype
+  // chain to a function/object, and `new Set(function)` throws "not iterable" —
+  // an unknown profile name must yield an empty set, never crash the recorder's
+  // permissionProfileFor or a policy lookup.
+  return new Set(Object.hasOwn(PERMISSION_PROFILES, name) ? PERMISSION_PROFILES[name] : []);
 }
 
 /** The ONE default authoring profile BOTH execution realms boot with — the render

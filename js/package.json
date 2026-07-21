@@ -41,6 +41,9 @@
     "check:assets": "node ../tools/qc/asset-sanity.mjs ../assets",
     "bundle:coordinator-demo": "esbuild ../coordinator-demo/src/app.js --bundle --format=esm --platform=browser --outfile=../coordinator-demo/dist/coordinator-demo.js --loader:.ts=ts",
     "check:coordinator-demo": "node scripts/check-coordinator-demo.mjs",
-    "check:types": "tsc -p tsconfig.check.json"
+    "check:types": "tsc -p tsconfig.check.json",
+    "check:types:all": "tsc -p tsconfig.check.all.json",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\""
   }
 }

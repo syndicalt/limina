@@ -16,6 +16,7 @@ import { tagEntity } from "./ecs.ts";
 import type { AssetRegistry } from "../asset-registry.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
 import type { EditableTerrain } from "./terrain-edit.ts";
+import type { TerrainTile } from "../terrain/types.ts";
 
 const inertTransform = (): Transformable => ({ position: { set() {} }, quaternion: { set() {} }, scale: { set() {} } });
 
@@ -141,10 +142,40 @@ const scatterInput = z.object({
   inclusions: z.array(z.object({ x: z.number(), z: z.number(), r: z.number().nonnegative() })).optional(),
   /** Extra tags for the forest entity (it is always tagged "forest" + "vegetation"). */
   tags: z.array(z.string()).optional(),
+  /** Replay pin (commitFields), derived path only: the MapDoc + base topology +
+   *  ordered height-layer hashes the placements were computed against. A rehydrated
+   *  scatter whose recomputed field identity disagrees throws — replay divergence is
+   *  loud, never a silently different forest. Absent on EditableTerrain worlds. */
+  derivedField: z.object({
+    mapDocHash: z.string(),
+    baseTopologyHash: z.string(),
+    layerHashes: z.array(z.string()),
+  }).optional(),
 });
 
 type SceneLike = { add?: (o: unknown) => void; remove?: (o: unknown) => void };
 type InstMesh = { castShadow: boolean; receiveShadow: boolean };
+
+/** The composed derived-terrain height field a scatter binds to when NO EditableTerrain
+ *  layer resolves (D5.4). Structural mirror of the field terrain/composed-height.mjs
+ *  builds: the denseTile() carries the SAME TerrainTile contract as an editable layer
+ *  (metre heights at origin.y=0, scale.y=1), so candidate generation, slope/elevation
+ *  gates, and the blight read run the identical code on both paths. */
+export interface DerivedScatterField {
+  readonly terrainKey: string;
+  readonly mapDocHash: string;
+  readonly baseTopologyHash: string;
+  readonly layerHashes: readonly string[];
+  readonly seaLevelM: number;
+  denseTile(bounds?: { minX: number; maxX: number; minZ: number; maxZ: number }): TerrainTile;
+}
+
+/** Host seam for the derived scatter path (D5.4). Absent/unavailable → derived
+ *  scatter stays inert (the legacy "no terrain layer" error), exactly like the
+ *  terrain.deform derived path before its authority seams are bound. */
+export interface DerivedVegetationScatterDeps {
+  composedField?: () => DerivedScatterField | undefined;
+}
 
 export function registerVegetationSkills(
   registry: SkillRegistry,
@@ -160,30 +191,74 @@ export function registerVegetationSkills(
    *  instanced meshes. village.build invokes it after computing footprints, so a forest scattered
    *  on the natural terrain FIRST is subtractively cleared where the settlement then builds. */
   vegetationClears: Map<string, Array<() => void | Promise<void>>> = new Map(),
+  /** Derived-terrain seam (D5.4). Hosts share ONE box so authority capabilities
+   *  bound after registration are visible at invoke time (same contract as the
+   *  terrain-edit derived deps box). */
+  derived?: DerivedVegetationScatterDeps,
 ): void {
-  const scatter: SkillDefinition<z.infer<typeof scatterInput>, { entity: string; instances: number; assetHashes: Record<string, string>; placements: unknown[] }> = {
+  const scatter: SkillDefinition<z.infer<typeof scatterInput>, { entity: string; instances: number; assetHashes: Record<string, string>; placements: unknown[]; derivedField?: { mapDocHash: string; baseTopologyHash: string; layerHashes: string[] } }> = {
     name: "vegetation.scatter",
     version: "1.0.0",
-    description: "Scatter a forest of tree archetypes across an editable terrain layer, gated by slope + elevation (tree line), deterministic + recorded. Instanced trees sit on the sculpted ground. Returns the forest entity + instance count.",
+    description: "Scatter a forest of tree archetypes across an editable terrain layer (or the derived world's composed height field), gated by slope + elevation (tree line), deterministic + recorded. Instanced trees sit on the sculpted ground. Returns the forest entity + instance count.",
     category: "terrain",
     permissions: ["scene.write"],
-    // The recorder copies resolved per-asset hashes into the recorded command so replay pins identity.
-    commitFields: ["assetHashes"],
+    // The recorder copies resolved per-asset hashes into the recorded command so replay pins identity;
+    // on the derived path the composed-field identity (MapDoc + topology + layer hashes) is pinned too.
+    commitFields: ["assetHashes", "derivedField"],
     input: scatterInput,
-    output: z.object({ entity: z.string(), instances: z.number().int(), assetHashes: z.record(z.string(), z.string()), placements: z.array(z.unknown()) }),
+    output: z.object({ entity: z.string(), instances: z.number().int(), assetHashes: z.record(z.string(), z.string()), placements: z.array(z.unknown()), derivedField: z.object({ mapDocHash: z.string(), baseTopologyHash: z.string(), layerHashes: z.array(z.string()) }).optional() }),
     handler: async (input, ctx) => {
-      // Resolve the terrain layer (default: most recently created).
+      // Resolve the terrain layer (default: most recently created). With NO editable
+      // layer, fall through to the DERIVED composed-height field when a derived
+      // authority is wired (D5.4) — the same scatter over the compiled terrain.
       let terrainId = input.terrain;
       if (terrainId === undefined) { let last: string | undefined; for (const k of layers.keys()) last = k; terrainId = last; }
       const layer = terrainId !== undefined ? layers.get(terrainId) : undefined;
-      if (layer === undefined) throw new Error("vegetation.scatter: no terrain layer — create one with terrain.create first");
-      const terrainKey = terrainId as string;
+      const derivedField = layer === undefined ? derived?.composedField?.() : undefined;
+      if (layer === undefined && derivedField === undefined) throw new Error("vegetation.scatter: no terrain layer — create one with terrain.create first");
+      const terrainKey = layer !== undefined ? (terrainId as string) : derivedField!.terrainKey;
+      // The scatter surface: the editable tile, or the derived composed lattice as a
+      // dense TerrainTile. Re-resolved per placement computation so a remount (the
+      // settlement-clear flow) reads the CURRENT committed field, never a stale one.
+      const surfaceTile = (): TerrainTile => {
+        if (layer !== undefined) return layer.tile;
+        const field = derived?.composedField?.();
+        if (field === undefined) throw new Error("vegetation.scatter: the derived height field is no longer available (no MapDoc mounted)");
+        // Bound the dense tile to the scatter's region of interest: inclusions
+        // (plus exclusions, whose keep-out matters only near candidates) + one
+        // chunk of margin. Materializing the FULL multi-km lattice per scatter
+        // was the rev-708 boot hang.
+        const discs = [...(input.inclusions ?? []), ...(input.exclusions ?? [])];
+        if (discs.length === 0) return field.denseTile();
+        const margin = 96;
+        const bounds = {
+          minX: Math.min(...discs.map((d) => d.x - d.r)) - margin,
+          maxX: Math.max(...discs.map((d) => d.x + d.r)) + margin,
+          minZ: Math.min(...discs.map((d) => d.z - d.r)) - margin,
+          maxZ: Math.max(...discs.map((d) => d.z + d.r)) + margin,
+        };
+        return field.denseTile(bounds);
+      };
+      // Derived replay pin: recompute the field identity and compare with the
+      // recorded one. The recorded pin winning over a drifted recompute would be a
+      // silent replay fork, so a mismatch THROWS.
+      let derivedPin: { mapDocHash: string; baseTopologyHash: string; layerHashes: string[] } | undefined;
+      if (derivedField !== undefined) {
+        derivedPin = { mapDocHash: derivedField.mapDocHash, baseTopologyHash: derivedField.baseTopologyHash, layerHashes: [...derivedField.layerHashes] };
+        const pinned = input.derivedField;
+        if (pinned !== undefined
+          && (pinned.mapDocHash !== derivedPin.mapDocHash || pinned.baseTopologyHash !== derivedPin.baseTopologyHash
+            || pinned.layerHashes.length !== derivedPin.layerHashes.length
+            || pinned.layerHashes.some((hash, index) => hash !== derivedPin!.layerHashes[index]))) {
+          throw new Error(`vegetation.scatter replay diverged: the recorded derived-field pin ${pinned.mapDocHash} does not match the recomputed field ${derivedPin.mapDocHash}`);
+        }
+      }
 
       // Per-instance BLIGHT lookup over the layer's caesura mask (nearest cell). A tree whose base sits
       // inside painted blight renders DEAD (bare + colour-drained) — the canopy dies with the ground.
       // 0 everywhere when the layer carries no blight, so a clean map scatters an all-living forest.
       // Deterministic: the mask is a pure function of the recorded map, so replay re-splits identically.
-      const bt = layer.tile;
+      const bt = surfaceTile();
       const blightGrid = bt.blight;
       const blightAtWorld = (x: number, z: number): number => {
         if (blightGrid === undefined) return 0;
@@ -221,9 +296,16 @@ export function registerVegetationSkills(
       // explicit `elevationMin` overrides. seaLevel = the generated waterline (elevationColors),
       // or the terrain's lowest point for a plain slab with no generated sea. A pure function of
       // the layer's heights, so replay recomputes the identical floor.
-      let loH = Infinity;
-      for (let i = 0; i < layer.tile.heights.length; i++) { const v = layer.tile.heights[i]; if (v < loH) loH = v; }
-      const seaLevel = layer.elevationColors?.seaLevel ?? (layer.tile.origin[1] + loH);
+      let seaLevel: number;
+      if (layer !== undefined) {
+        let loH = Infinity;
+        for (let i = 0; i < layer.tile.heights.length; i++) { const v = layer.tile.heights[i]; if (v < loH) loH = v; }
+        seaLevel = layer.elevationColors?.seaLevel ?? (layer.tile.origin[1] + loH);
+      } else {
+        // Derived: the map's authored waterline is the sea — the compiled field has
+        // no elevationColors, and the lowest point is basin floor, not waterline.
+        seaLevel = derivedField!.seaLevelM;
+      }
       // Large conifers (spruce/pine/birch) must fully CLEAR the water — a whole-tree margin above the
       // waterline, not just the trunk base, so no big trunk stands in a lake. (A future shallow-water
       // species tier — reeds/mangrove/shrub — will floor LOWER, at ~seaLevel, so small growth can wade
@@ -251,7 +333,7 @@ export function registerVegetationSkills(
           ...(allExclusions.length > 0 ? { exclusions: allExclusions } : {}),
           ...(input.inclusions !== undefined && input.inclusions.length > 0 ? { inclusions: input.inclusions } : {}),
         };
-        return scatterAssets(layer.tile, input.seed, config);
+        return scatterAssets(surfaceTile(), input.seed, config);
       };
 
       const scene = ctx.world.scene as SceneLike | undefined;
@@ -375,7 +457,7 @@ export function registerVegetationSkills(
       await remount();
 
       // A forest handle entity (world-integrated + removable), anchored at the terrain origin.
-      const [ox, oy, oz] = layer.tile.origin;
+      const [ox, oy, oz] = bt.origin;
       const eid = spawnRenderable(ctx.world.ecs, inertTransform(), ox, oy, oz);
       if (eid >= MAX_ENTITIES) {
         active = false;
@@ -422,7 +504,7 @@ export function registerVegetationSkills(
       }
 
       ctx.emit("vegetation.scattered", { entity, terrain: terrainKey, instances: placements.length, mounted: mountedDraws });
-      return { entity, instances: placements.length, assetHashes, placements };
+      return { entity, instances: placements.length, assetHashes, placements, ...(derivedPin !== undefined ? { derivedField: derivedPin } : {}) };
     },
   };
 

@@ -1,0 +1,13 @@
+{
+  "name": "limina-studio-shell",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Desktop shell for the limina studio — the studio web app with PINNED GPU behavior (no dual-GPU roulette, no secure-context WebGPU rules).",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron --no-sandbox ."
+  },
+  "devDependencies": {
+    "electron": "^37.2.0"
+  }
+}

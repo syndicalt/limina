@@ -5,10 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>limina</title>
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles-studio.css" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">limina</div>
+    <div class="workspace-switch" role="tablist" aria-label="Workspace">
+      <button id="workspace-tab-world" class="workspace-tab active" type="button" role="tab" aria-selected="true">World</button>
+      <button id="workspace-tab-atlas" class="workspace-tab" type="button" role="tab" aria-selected="false">Atlas</button>
+      <button id="workspace-tab-design" class="workspace-tab" type="button" role="tab" aria-selected="false">Design</button>
+      <button id="workspace-split-toggle" class="workspace-tab workspace-split" type="button" title="Split view: Atlas + 3D side by side" aria-pressed="false">⫿ Split</button>
+    </div>
     <div class="conn">
       <label>server <input id="url" type="text" value="ws://localhost:8787/" size="22" /></label>
       <label>token <input id="auth-token" type="password" value="" size="18" autocomplete="off" /></label>
@@ -96,7 +103,6 @@
             <div class="acc-actions"><button id="propose" class="btn btn-small" title="Propose a held edit">+ test</button><button id="propose-move" class="btn btn-small" title="Agent moves an existing entity">+ move</button></div>
             <div class="muted">connect to begin</div>
           </div>
-        </section>
       </div>
       <button class="sidebar-toggle" id="sidebar-left-toggle" type="button" title="Collapse panels" aria-label="Collapse left sidebar">‹</button>
     </aside>
@@ -118,6 +124,7 @@
           </span>
         </div>
       </div>
+      <div id="viewport-tool-surface" class="viewport-tool-surface" aria-label="Viewport tools"></div>
       <div class="viewport-overlay-stack">
         <div class="viewport-graphics" aria-label="Viewport graphics">
           <div id="viewport-graphics-quality" class="graphics-segments" role="radiogroup" aria-label="Graphics quality">
@@ -143,7 +150,6 @@
             <button id="viewport-navigation-goto-toggle" class="navigation-command" type="button" aria-haspopup="dialog" aria-controls="viewport-navigation-goto" aria-expanded="false">Go to</button>
             <button id="viewport-navigation-search-toggle" class="navigation-command" type="button" aria-haspopup="dialog" aria-controls="viewport-navigation-search" aria-expanded="false">Search</button>
             <button id="viewport-navigation-views-toggle" class="navigation-command" type="button" aria-haspopup="dialog" aria-controls="viewport-navigation-views" aria-expanded="false">Views</button>
-            <button id="viewport-atlas-toggle" class="navigation-command" type="button" aria-controls="viewport-atlas" aria-expanded="false">Atlas</button>
           </div>
 
           <form id="viewport-navigation-goto" class="navigation-popover navigation-goto" role="dialog" aria-labelledby="viewport-navigation-goto-title" hidden>
@@ -197,19 +203,6 @@
       </div>
       <div class="panel-body" id="viewport-body">
         <canvas id="editor-viewport" width="640" height="360"></canvas>
-        <section id="viewport-atlas" class="atlas-overview" aria-labelledby="viewport-atlas-title" hidden>
-          <div id="viewport-atlas-splitter" class="atlas-overview-splitter" role="separator" tabindex="0"
-            aria-label="Resize Atlas workspace" aria-orientation="vertical"
-            aria-controls="editor-viewport viewport-atlas" aria-valuemin="360" aria-valuenow="560"></div>
-          <div class="atlas-overview-head">
-            <h4 id="viewport-atlas-title">Atlas</h4>
-            <output id="viewport-atlas-status" aria-live="polite">connecting</output>
-            <button id="viewport-atlas-reveal" type="button" title="Reveal the selected entity position" aria-label="Reveal the selected entity position">◎</button>
-            <button id="viewport-atlas-maximize" type="button" title="Maximize Atlas" aria-label="Maximize Atlas" aria-pressed="false">□</button>
-            <button id="viewport-atlas-close" type="button" title="Close Atlas" aria-label="Close Atlas">×</button>
-          </div>
-          <iframe id="viewport-atlas-frame" title="Atlas world builder" loading="lazy"></iframe>
-        </section>
       </div>
       <div class="viewport-tools" aria-label="Viewport controls">
         <button id="viewport-snap-toggle" class="viewport-tool" type="button" aria-pressed="false" title="Toggle snapping (S)">Snap off</button>
@@ -227,6 +220,30 @@
         <button id="viewport-wireframe-toggle" class="viewport-tool" type="button" aria-pressed="false" title="Toggle wireframe view (Shift+F)">Wire off</button>
         <button id="content-browser-toggle" class="viewport-tool" type="button" aria-controls="content-browser" title="Open Content Browser">Content</button>
       </div>
+    </section>
+
+    <!-- CENTER (alternate workspace): the Design workspace — vault documents with
+         their own nav rail at full stage width. The viewport keeps running while
+         hidden and refits via limina:layout-changed on return. -->
+    <section class="panel workspace-design" id="design-workspace" hidden>
+      <div class="panel-head">
+        <div class="workspace-heading">
+          <strong>Design</strong>
+          <span class="hint" id="design-workspace-hint">vault documents</span>
+        </div>
+        <div class="workspace-actions">
+          <button id="design-workspace-new" class="btn btn-small" type="button" title="New document">＋ New doc</button>
+          <button id="design-workspace-refresh" class="btn btn-small" type="button" title="Reload the vault">⟳</button>
+        </div>
+      </div>
+      <div class="panel-body workspace-design-body" id="design-workspace-body"></div>
+    </section>
+
+    <!-- CENTER (alternate workspace): the native Atlas surface (Editor 2.0) —
+         the 2D authoring stage with tool ribbon, generated options bar, and layer
+         rail, editing the same map authority the derived build consumes. -->
+    <section class="panel workspace-design" id="atlas-workspace" hidden>
+      <div class="panel-body workspace-design-body" id="atlas-workspace-body"></div>
     </section>
 
     <!-- RIGHT: collapsible chat sidebar. -->

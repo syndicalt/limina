@@ -17,7 +17,15 @@ import { cueColorFor } from "./viewport.js";
 import { CHAT_MODELS, CHAT_MODEL_CHANGE_EVENT, currentChatModel, setChatModel } from "./chat.js";
 import { ingestTraceEvents } from "./trace-retention.js";
 import { assertEditorAuthoringAllowed, playLifecycle } from "./play-lifecycle.js";
-import { atlasEditorHandoff } from "./atlas-handoff-bootstrap.js";
+import { createDesignApi } from "./design-api.js";
+import { createDesignDocsPanel } from "./panels/design-docs.js";
+import { createDesignPlacesPanel } from "./panels/design-places.js";
+import { createDesignGraphPanel } from "./panels/design-graph.js";
+import { surfaceCascade } from "./panels/design-cascade.js";
+import { createStudioShell } from "./studio-shell.js";
+import { STUDIO_EVENTS, studioBus } from "./agents/studio-events.js";
+import { createContextPacker } from "./agents/context-pack.js";
+import { setChatContextProvider, setChatApplySuggestion, noteAmbient } from "./chat.js";
 export { MAX_TRACE_EVENTS, ingestTraceEvents } from "./trace-retention.js";
 
 const $ = (id) => document.getElementById(id);
@@ -30,10 +38,31 @@ const proposeMoveButton = $("propose-move");
 const configuredServerInput = new URLSearchParams(location.search).get("server");
 const configuredServer = configuredServerInput !== null
   && /^wss?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/$/.test(configuredServerInput)
-  ? configuredServerInput : atlasEditorHandoff?.serverUrl ?? null;
+  ? configuredServerInput : null;
 if (configuredServer !== null) {
   $("url").value = configuredServer;
 }
+// Runtime capability handoff: when the page is served by the launcher-supervised
+// static server, it vends the session capability (Host-validated, same-origin) so
+// the connect bar needs no pasted token. Prefill EMPTY fields only — an explicit
+// ?server= or a typed value always wins. Standalone static
+// serving has no endpoint; the fetch simply fails and nothing changes.
+void (async () => {
+  try {
+    const boot = await fetch("/editor-bootstrap", { cache: "no-store" });
+    if (!boot.ok) return;
+    const config = await boot.json();
+    // The factory default (8787) is a placeholder, not a user choice: a hub-
+    // launched stack on allocated ports must override it. Explicit ?server=
+    // or a typed value always wins.
+    const DEFAULT_URL = "ws://localhost:8787/";
+    if (typeof config?.serverUrl === "string"
+        && ($("url").value.trim() === "" || $("url").value.trim() === DEFAULT_URL)) {
+      $("url").value = config.serverUrl;
+    }
+    if (typeof config?.token === "string" && $("auth-token").value.trim() === "") $("auth-token").value = config.token;
+  } catch { /* no bootstrap endpoint on this origin */ }
+})();
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -120,6 +149,9 @@ async function connect() {
   const authToken = $("auth-token").value.trim() || undefined;
   disconnect();
   setStatus("connecting");
+  // Boot loading overlay seam (viewport.js listens): the island starts assembling from
+  // the connect CLICK, not from the viewport's next poll tick.
+  window.dispatchEvent(new CustomEvent("limina:studio-connect"));
   const client = new McpClient(url, authToken);
   client.onConnectionChange = setStatus;
   client.onSync = () => {}; // live transforms cached; World panel re-renders on poll
@@ -887,5 +919,281 @@ function setupSettings() {
   });
 }
 setupSettings();
+
+// ---------------------------------------------------------------------------
+// Studio shell (studio-unification U1): layout profiles (studio/design) with
+// persisted visibility, and the Design Docs panel — the Design Space docs tab
+// living in the editor chrome, talking to the headless design sidecar through
+// the launcher's same-origin /api/* proxy. Independent of the world connection:
+// the vault loads whether or not a kernel session is connected.
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Studio shell (studio-unification U1): layout profiles (studio/design) with
+// persisted visibility, and the Design Docs panel — the Design Space docs tab
+// living in the editor chrome, talking to the headless design sidecar through
+// the launcher's same-origin /api/* proxy. Independent of the world connection:
+// the vault loads whether or not a kernel session is connected.
+// ---------------------------------------------------------------------------
+// Fluid agents: the studio event bus + the surface-aware context packer. Every
+// chat turn carries WHERE the human is working and WHAT just happened.
+const studioEvents = studioBus;
+let activeWorkspace = "world";
+let docsPanel;
+
+const contextPacker = createContextPacker({
+  events: studioEvents,
+  shell: { activeWorkspace: () => activeWorkspace },
+  selection: {
+    activeTool: () => window.__atlas?.controller?.activeTool(),
+    options: () => {
+      const c = window.__atlas?.controller;
+      const tool = c?.activeTool();
+      if (c === undefined || tool === undefined) return undefined;
+      const out = {};
+      for (const key of Object.keys(tool.options ?? {})) out[key] = c.option(tool.id, key);
+      return out;
+    },
+    entities: () => (editorSelection.selectedId !== undefined ? [editorSelection.selectedId] : []),
+  },
+  world: {
+    summary: () => {
+      const snap = state.snapshot;
+      if (snap === undefined) return {};
+      const out = {};
+      out.entities = snap.page?.totalEntities ?? snap.entities?.length ?? 0;
+      if (Array.isArray(snap.skills)) out.skills = snap.skills.length;
+      return out;
+    },
+  },
+  atlas: {
+    summary: () => {
+      const m = window.__atlas?.model;
+      if (m === null || m === undefined) return undefined;
+      const parts = [];
+      for (const [name, layer] of Object.entries(m.rasters)) parts.push(`${name} ${layer.w}² r${layer.rev ?? 0}`);
+      return parts.join(" · ");
+    },
+  },
+  docs: {
+    active: () => {
+      const name = docsPanel?.activeDoc;
+      if (name == null) return undefined;
+      return { name, kind: "doc", title: name.replace(/\.md$/, "") };
+    },
+    list: () => docsPanel?.docNames ?? [],
+  },
+});
+setChatContextProvider(() => contextPacker.packAsPromptBlock());
+setChatApplySuggestion(async (action) => {
+  if (state.client === null || state.client === undefined) throw new Error("connect first");
+  return state.client.callTool(action.skill, action.input ?? {});
+});
+// Ambient timeline: saves + workspace switches only — strokes would flood it.
+studioEvents.subscribe((event) => {
+  if (event.type === STUDIO_EVENTS.ATLAS_SAVE || event.type === STUDIO_EVENTS.DOC_SAVE) {
+    noteAmbient(`· ${event.detail} ·`);
+  }
+});
+
+function openExpertChat(expertId) {
+  // v0 routing: the chat router (a later U1 chunk) owns true expert personas;
+  // today the shared chat agent takes the mention as context.
+  window.liminaWindows?.open("chat");
+  const input = $("chat-input");
+  if (input) {
+    input.value = `@${expertId} `;
+    input.focus();
+  }
+}
+
+function setupStudioShell() {
+  const shell = createStudioShell({
+    storage: {
+      load: (key) => {
+        try {
+          const raw = localStorage.getItem(key);
+          return raw === null ? undefined : JSON.parse(raw);
+        } catch { return undefined; }
+      },
+      save: (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage optional */ } },
+    },
+    onChange: () => shell.applyVisibility(),
+  });
+  // Bootstrap order (panel-registry contract): register → defineProfile → restore.
+  let restored = false;
+  try {
+    const raw = localStorage.getItem("limina.studio.panel-layout/v1");
+    if (raw !== null) {
+      shell.registry.restore(JSON.parse(raw));
+      restored = true;
+    }
+  } catch (e) {
+    logLine(`studio layout restore rejected (using defaults): ${e && e.message ? e.message : e}`, "warn");
+  }
+  if (!restored && shell.registry.state().profile === null) shell.registry.setProfile("studio");
+  shell.applyVisibility();
+
+  // Workspace switching: World (the live viewport) ⇄ Atlas (native 2D surface)
+  // ⇄ Design (vault docs) — plus SPLIT view (2.0-B): Atlas and the viewport
+  // side by side, both live. The viewport keeps running hidden; limina:layout-
+  // changed makes it refit on return. Choices persist across sessions.
+  const WORKSPACE_KEY = "limina.studio.workspace";
+  const SPLIT_KEY = "limina.studio.split";
+  const WORKSPACES = {
+    world: { section: $("viewport"), tab: $("workspace-tab-world") },
+    atlas: { section: $("atlas-workspace"), tab: $("workspace-tab-atlas") },
+    design: { section: $("design-workspace"), tab: $("workspace-tab-design") },
+  };
+  const splitToggle = $("workspace-split-toggle");
+  let splitMode = lsGet(SPLIT_KEY) === "1";
+
+  const applyLayout = () => {
+    const joint = splitMode && (activeWorkspace === "world" || activeWorkspace === "atlas");
+    for (const [key, ws] of Object.entries(WORKSPACES)) {
+      const visible = joint ? key !== "design" : key === activeWorkspace;
+      if (ws.section) ws.section.hidden = !visible;
+      ws.tab?.classList.toggle("active", key === activeWorkspace);
+      ws.tab?.setAttribute("aria-selected", String(key === activeWorkspace));
+    }
+    splitToggle?.classList.toggle("active", splitMode);
+    splitToggle?.setAttribute("aria-pressed", String(splitMode));
+    window.dispatchEvent(new CustomEvent("limina:layout-changed"));
+  };
+
+  const setWorkspace = (name) => {
+    if (WORKSPACES[name] === undefined) return;
+    activeWorkspace = name;
+    studioEvents.emit(STUDIO_EVENTS.WORKSPACE_SWITCH, { detail: name });
+    lsSet(WORKSPACE_KEY, name);
+    applyLayout();
+  };
+  splitToggle?.addEventListener("click", () => {
+    splitMode = !splitMode;
+    lsSet(SPLIT_KEY, splitMode ? "1" : "0");
+    studioEvents.emit(STUDIO_EVENTS.WORKSPACE_SWITCH, { detail: splitMode ? "split" : activeWorkspace });
+    applyLayout();
+  });
+  for (const [name, ws] of Object.entries(WORKSPACES)) {
+    ws.tab?.addEventListener("click", () => setWorkspace(name));
+  }
+
+  // The native Atlas surface (Editor 2.0). The raster codec arrives through the
+  // launcher's /shared/ allow-list (the exact engine codec, never a copy); if
+  // the page is served without the proxy, the surface reports unavailable.
+  void (async () => {
+    const atlasMount = $("atlas-workspace-body");
+    if (atlasMount === null) return;
+    try {
+      const [codec, waterIr, { createAtlasSurface }, { createDesignApi }] = await Promise.all([
+        import("/shared/raster-codec.mjs"),
+        import("/js/src/world/water-ir.mjs"),
+        import("./atlas/atlas-surface.js"),
+        import("./design-api.js"),
+      ]);
+      const atlas = createAtlasSurface({
+        mount: atlasMount,
+        api: createDesignApi({}),
+        codec,
+        waterIr,
+        document,
+        events: studioEvents,
+        storage: {
+          load: (k) => { try { const raw = localStorage.getItem(k); return raw === null ? undefined : JSON.parse(raw); } catch { return undefined; } },
+          save: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage optional */ } },
+        },
+        onToast: (m) => logLine(m, "warn"),
+      });
+      window.__atlas = atlas; // test hook: behavioral gates drive the surface through this
+      void atlas.load();
+      // 2.0-D 3D → Atlas reveal: viewport selections emit nav.reveal; pan the
+      // map only while the atlas is actually on screen (atlas tab or split).
+      studioEvents.subscribe?.((event) => {
+        if (event.type !== "nav.reveal") return;
+        const joint = splitMode && (activeWorkspace === "world" || activeWorkspace === "atlas");
+        if (activeWorkspace === "atlas" || joint) atlas.reveal(event.x, event.z);
+      });
+    } catch (e) {
+      atlasMount.innerHTML = `<div class="layer-empty">Atlas unavailable: ${e && e.message ? e.message : e}</div>`;
+      logLine(`atlas surface failed to boot: ${e && e.message ? e.message : e}`, "warn");
+    }
+  })();
+
+  const mount = $("design-workspace-body");
+  if (mount) {
+    // Design workspace tabs (2.0-D): Docs | Places | Graph, one panel mounted
+    // at a time inside the shared body. The active tab persists across sessions.
+    const DESIGN_TAB_KEY = "limina.studio.design.tab";
+    const designApi = createDesignApi({});
+    const tabStrip = document.createElement("div");
+    tabStrip.className = "design-tabs";
+    const tabHost = document.createElement("div");
+    tabHost.className = "design-tab-host";
+    mount.appendChild(tabStrip);
+    mount.appendChild(tabHost);
+    const DESIGN_TABS = [
+      { id: "docs", label: "Docs" },
+      { id: "places", label: "Places" },
+      { id: "graph", label: "Graph" },
+    ];
+    const tabButtons = new Map();
+    let activeTab = null;
+    let activePanel = null;
+    const mountDesignTab = (id) => {
+      if (DESIGN_TABS.every((t) => t.id !== id) || id === activeTab) return;
+      activeTab = id;
+      lsSet(DESIGN_TAB_KEY, id);
+      for (const [tabId, btn] of tabButtons) {
+        btn.classList.toggle("active", tabId === id);
+        btn.setAttribute("aria-selected", String(tabId === id));
+      }
+      activePanel?.destroy?.();
+      tabHost.replaceChildren();
+      if (id === "docs") {
+        const panel = createDesignDocsPanel({
+          mount: tabHost,
+          api: designApi,
+          onOpenChat: openExpertChat,
+          onCascade: ({ impacts }) => { if (Array.isArray(impacts)) surfaceCascade(impacts, { onOpenChat: openExpertChat }); },
+          toast: (m) => logLine(m, "warn"),
+          events: studioEvents,
+        });
+        docsPanel = panel;
+        activePanel = panel;
+        void panel.load();
+      } else {
+        docsPanel = undefined; // the docs-derived chat context is stale while its panel is unmounted
+        const panel = id === "places"
+          ? createDesignPlacesPanel({ document, api: designApi, bus: studioEvents })
+          : createDesignGraphPanel({ document, api: designApi, bus: studioEvents });
+        panel.mount(tabHost);
+        activePanel = panel;
+        void panel.refresh();
+      }
+    };
+    for (const tab of DESIGN_TABS) {
+      const btn = document.createElement("button");
+      btn.className = "btn btn-small design-tab";
+      btn.type = "button";
+      btn.textContent = tab.label;
+      btn.addEventListener("click", () => mountDesignTab(tab.id));
+      tabButtons.set(tab.id, btn);
+      tabStrip.appendChild(btn);
+    }
+    mountDesignTab(DESIGN_TABS.some((t) => t.id === lsGet(DESIGN_TAB_KEY)) ? lsGet(DESIGN_TAB_KEY) : "docs");
+    $("design-workspace-new")?.addEventListener("click", () => {
+      mountDesignTab("docs");
+      docsPanel?.openCreateDialog();
+    });
+    $("design-workspace-refresh")?.addEventListener("click", () => {
+      if (activeTab === "docs") void docsPanel?.load();
+      else void activePanel?.refresh?.();
+    });
+  }
+  if (lsGet(WORKSPACE_KEY) !== null && WORKSPACES[lsGet(WORKSPACE_KEY)] !== undefined) {
+    activeWorkspace = lsGet(WORKSPACE_KEY);
+  }
+  applyLayout();
+}
+setupStudioShell();
 
 logLine("ready — set the server URL and Connect (run editor/server/editor_host.ts for the gate-enabled server)", "info");

@@ -26,6 +26,7 @@ import { PolicyEngine, policyEventType, policyEventPayload } from "../policy/eng
 import { isNonReplayableControlSkill, WorldRecorder } from "../worldlog/recorder.ts";
 import { DurableWorldLog } from "../worldlog/durable.ts";
 import { createDesignArtifactStore } from "../world/design-artifacts.ts";
+import { createDerivedComposedHeightProvider } from "../terrain/composed-height.mjs";
 import { captureWorldSnapshot } from "../worldlog/snapshot.ts";
 import {
   captureWorldState,
@@ -53,10 +54,21 @@ export const ACCEPT_CLOSED = 0xffffffff;
  *  awaits a full per-connection handshake, so this is the number of stalled/half-open
  *  peers the accept path tolerates before a legitimate new client has to wait. */
 const ACCEPT_CONCURRENCY = 16;
-const MAX_WIRE_MESSAGE_CHARS = 1_048_576;
+// 8 MiB: matches the bridge client cap — the largest legitimate response is a
+// committed terrain edit layer (4 MiB canonical-JSON format cap) + envelope.
+const MAX_WIRE_MESSAGE_CHARS = 8 * 1_048_576;
 const MAX_QUEUED_INTENTS = 4096;
 const MAX_QUEUED_INTENTS_PER_CONNECTION = 256;
 const MAX_INTENTS_PER_TICK = 256;
+/** Safety-valve cap on broadcast/dispatch sends in flight at once. The tick loop
+ *  does NOT block on broadcast sends (a client that stopped reading its socket would
+ *  otherwise stall the whole simulation behind op_net_send's 1.5s host-side timeout —
+ *  head-of-line blocking every other client behind the slowest). op_net_send is
+ *  self-bounding (1.5s timeout → sendSafe prunes the dead conn), so a stuck conn
+ *  contributes only a bounded burst before eviction; this cap exists purely to stop
+ *  pathological fan-out from growing memory without bound. Well above any healthy
+ *  steady state (a responsive transport keeps this near zero). */
+const MAX_INFLIGHT_BROADCAST_SENDS = 4096;
 /** Read-effect tools/call budget per connection per sim tick. Reads bypass the
  *  intent queue (no tick-boundary wait) but each one holds the authority FIFO
  *  lock, so unmetered readers delay the tick loop — and because the budget window
@@ -121,6 +133,20 @@ export interface AuthoritativeServerOptions {
    * durable WorldLog because its replay envelope has no second persistence path. */
   authoring?: {
     projectId: string;
+    /** LIVE derived-terrain lattice resolver (D5.1): maps the authoritative MapDoc ref
+     *  to the terrain edit-layer base topology the compiler composes against. Only a
+     *  live terrain.deform on derived terrain calls it — replay uses the topology pinned
+     *  in the recorded command. Without it the derived deform path stays inert. */
+    derivedTerrainTopology?: (mapDocRef: { assetId: string; hash: string }) => unknown;
+    /** Optional fs-backed content reader for edit-layer refs missing from the live
+     *  store (e.g. layers committed by external tooling). */
+    readTerrainEditLayer?: (ref: { assetId: string; hash: string }) => unknown;
+    /** Paint-layer sibling of readTerrainEditLayer (D5.3). */
+    readTerrainPaintLayer?: (ref: { assetId: string; hash: string }) => unknown;
+    /** Hash-checked fs reader for the authoritative MapDoc bytes (D5.4). Together
+     *  with derivedTerrainTopology it arms the composed-height sampler: derived
+     *  terrain.deform smooth/flatten and vegetation.scatter on derived worlds. */
+    readMapDoc?: (ref: { assetId: string; hash: string }) => unknown;
   };
   /** Record every per-tick `step` command even when the tick provably changed nothing.
    *  Default FALSE (kernel K-compaction): idle steps are still APPLIED every tick, but only
@@ -238,6 +264,9 @@ export class AuthoritativeServer {
   readonly authoring?: AuthoringSkillRuntime;
 
   private readonly conns = new Map<number, ClientConn>();
+  /** Broadcast/dispatch sends currently in flight — tracked, not awaited by the
+   *  tick loop, so a single slow client can't head-of-line block the simulation. */
+  private readonly inFlightSends = new Set<Promise<void>>();
   private intentQueue: QueuedIntent[] = [];
   private prev = new Map<string, EntityState>();
   private tick = 0;
@@ -358,6 +387,40 @@ export class AuthoritativeServer {
         adapters: new StaticAuthoringAdapterAllowlist([sceneAdapter, projectStateAuthoring.adapter]),
         projectState: projectStateAuthoring.projectState,
       });
+      // D5.1: arm the terrain.deform derived path with the authority seams it reads at
+      // invoke time (the deps box was created by registerCoreSkills above).
+      const derivedTerrainEdit = this.core.terrainEdit.derived;
+      derivedTerrainEdit.projectState = projectStateAuthoring.projectState;
+      if (opts.authoring.derivedTerrainTopology !== undefined) {
+        derivedTerrainEdit.resolveBaseTopology = opts.authoring.derivedTerrainTopology;
+      }
+      if (opts.authoring.readTerrainEditLayer !== undefined) {
+        derivedTerrainEdit.readLayer = opts.authoring.readTerrainEditLayer;
+      }
+      if (opts.authoring.readTerrainPaintLayer !== undefined) {
+        derivedTerrainEdit.readPaintLayer = opts.authoring.readTerrainPaintLayer;
+      }
+      // D5.4: arm the composed-height sampler. ONE provider serves both consumers
+      // (terrain.deform smooth/flatten through DerivedTerrainEditDeps.sampleHeightM,
+      // vegetation.scatter through its derived field box); the base field is cached
+      // per MapDoc content hash and the layer stack re-reads per call, so every
+      // stroke's sampler reflects the field the next derived build will compile.
+      if (opts.authoring.derivedTerrainTopology !== undefined && opts.authoring.readMapDoc !== undefined) {
+        const composedHeights = createDerivedComposedHeightProvider({
+          projectState: projectStateAuthoring.projectState,
+          resolveBaseTopology: derivedTerrainEdit.resolveBaseTopology,
+          readMapDoc: opts.authoring.readMapDoc as (ref: { assetId: string; hash: string }) => string,
+          readLayer: derivedTerrainEdit.readLayer,
+          liveLayers: derivedTerrainEdit.layers,
+          livePaintLayers: derivedTerrainEdit.paintLayers,
+        });
+        derivedTerrainEdit.sampleHeightM = (gx, gz) => {
+          const field = composedHeights.current();
+          if (field === undefined) throw new Error("terrain.deform: composed-height sampler has no mounted MapDoc");
+          return field.heightAtLattice(gx, gz);
+        };
+        this.core.vegetation.derived.composedField = () => composedHeights.current();
+      }
     }
 
     // The authoritative physics world the sim steps each tick.
@@ -593,7 +656,7 @@ export class AuthoritativeServer {
       try {
         if (line.length === 0) break;
         if (line.length > MAX_WIRE_MESSAGE_CHARS) {
-          await this.reply(conn.connId, this.error(null, JSON_RPC_ERRORS.invalidRequest, "Request exceeds the 1 MiB message limit"));
+          await this.reply(conn.connId, this.error(null, JSON_RPC_ERRORS.invalidRequest, "Request exceeds the 8 MiB message limit"));
           break;
         }
         const trimmed = line.trim();
@@ -728,15 +791,10 @@ export class AuthoritativeServer {
           // the tick loop. Reads must still take that lock (an async authoring
           // transaction can yield mid-batch; a lockless reader could observe a
           // state that never committed), so metering is the remaining lever.
-          if (conn.readBudgetTick !== this.tick) {
-            conn.readBudgetTick = this.tick;
-            conn.readsThisTick = 0;
-          }
-          if (conn.readsThisTick >= MAX_READS_PER_CONNECTION_PER_TICK) {
+          if (!this.chargeReadBudget(conn)) {
             await this.reply(conn.connId, this.error(id, mcpErrorToJsonRpc("capacity_exceeded"), "Per-connection read budget for this tick is exhausted"));
             return;
           }
-          conn.readsThisTick += 1;
           const result = await this.withAuthorityLock(async () => {
             await this.ready;
             if (this.currentAuthorityFailure() !== undefined) return this.authorityUnavailableResponse();
@@ -785,6 +843,12 @@ export class AuthoritativeServer {
           ));
           return;
         }
+        // state/subscribe runs two O(world) captures under the authority lock — meter
+        // it against the same per-tick read budget as a read-effect tools/call.
+        if (!this.chargeReadBudget(conn)) {
+          await this.reply(conn.connId, this.error(id, mcpErrorToJsonRpc("capacity_exceeded"), "Per-connection read budget for this tick is exhausted"));
+          return;
+        }
         const joined = await this.withAuthorityLock(async () => {
           await this.ready;
           if (this.currentAuthorityFailure() !== undefined) return undefined;
@@ -816,6 +880,12 @@ export class AuthoritativeServer {
         // the tail from `since` immediately. worldlogTail is the SAME helper worldlog.tail (the
         // skill) calls, so a client that mixes an occasional poll with this push can never see the
         // two disagree on what "authoring since X" means.
+        // worldlog/subscribe with since:0 serializes the whole finalized log — meter it
+        // against the same per-tick read budget so it can't be looped to starve the tick.
+        if (!this.chargeReadBudget(conn)) {
+          await this.reply(conn.connId, this.error(id, mcpErrorToJsonRpc("capacity_exceeded"), "Per-connection read budget for this tick is exhausted"));
+          return;
+        }
         const initial = await this.withAuthorityLock(async () => {
           await this.ready;
           if (this.currentAuthorityFailure() !== undefined) return undefined;
@@ -845,6 +915,12 @@ export class AuthoritativeServer {
             JSON_RPC_ERRORS.internalError,
             "Authoritative state is unavailable after a persistence failure; restart is required",
           ));
+          return;
+        }
+        // aoi/declare iterates all of this.prev under the authority lock — meter it
+        // against the same per-tick read budget as the other O(world) sync verbs.
+        if (!this.chargeReadBudget(conn)) {
+          await this.reply(conn.connId, this.error(id, mcpErrorToJsonRpc("capacity_exceeded"), "Per-connection read budget for this tick is exhausted"));
           return;
         }
         const aoiResult = await this.withAuthorityLock(async () => {
@@ -931,7 +1007,40 @@ export class AuthoritativeServer {
     await this.ready;
     const dispatch = await this.withAuthorityLock(() => this.doTickExclusive());
     this.completeDispatch(dispatch);
-    if (dispatch.sends.length > 0) await Promise.allSettled(dispatch.sends);
+    // Fire broadcast sends without blocking the tick on them. Awaiting the fan-out
+    // couples every client to the slowest: one peer that stopped reading its socket
+    // freezes the entire simulation for up to op_net_send's 1.5s host-side timeout.
+    // The sends are already in flight (sendSafe started them); we only track them so
+    // the safety-valve cap below can apply global backpressure if fan-out outruns the
+    // transport. A stuck conn is pruned on its first send timeout, so its contribution
+    // is a bounded burst, not unbounded growth.
+    for (const send of dispatch.sends) this.trackSend(send);
+    if (this.inFlightSends.size > MAX_INFLIGHT_BROADCAST_SENDS) {
+      await Promise.race([...this.inFlightSends]);
+    }
+  }
+
+  /** Register an in-flight broadcast send so the tick loop can bound aggregate
+   *  fan-out without blocking on any individual (possibly stuck) send. */
+  private trackSend(send: Promise<void>): void {
+    this.inFlightSends.add(send);
+    void send.finally(() => this.inFlightSends.delete(send));
+  }
+
+  /** Charge one read against this connection's per-tick budget. Returns false when
+   *  the budget is exhausted (the caller must reject). Every path that runs an
+   *  O(world) capture under the authority lock — read-effect tools/call AND the
+   *  state/worldlog/aoi sync verbs — charges the SAME budget; otherwise a client
+   *  looping state/subscribe (two full-world captures per request, under the lock)
+   *  starves the tick loop exactly as an unmetered inspector.snapshot loop would. */
+  private chargeReadBudget(conn: ClientConn): boolean {
+    if (conn.readBudgetTick !== this.tick) {
+      conn.readBudgetTick = this.tick;
+      conn.readsThisTick = 0;
+    }
+    if (conn.readsThisTick >= MAX_READS_PER_CONNECTION_PER_TICK) return false;
+    conn.readsThisTick += 1;
+    return true;
   }
 
   private async doTickExclusive(): Promise<TickDispatch> {
@@ -1115,6 +1224,10 @@ export class AuthoritativeServer {
       }
       // `profile` forwarded so the attached recorder re-records the same profile
       // pin the persisted line carried (rewriteFromRecorder must round-trip it).
+      // approvalGateBypassed: the log is the record of APPLIED mutations — a
+      // recorded command was already gated live (a held call is never recorded),
+      // so replaying it must apply, never re-hold. Without this, a granted action
+      // from a review-gated profile replays as pending_approval and boot dies.
       const response = await this.registry.invoke(cmd.tool, cmd.input, {
         agentId: cmd.actorId,
         sessionId: cmd.sessionId,
@@ -1123,6 +1236,8 @@ export class AuthoritativeServer {
         tick: cmd.tick,
         world: this.world,
         causedBy: [],
+        approvalGateBypassed: true,
+        replay: true,
       });
       if (!response.success) {
         const code = response.error?.code ?? "unknown";

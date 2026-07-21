@@ -58,10 +58,19 @@ import {
 } from "./derived-terrain-index.ts";
 import { exactDataKeys, plainRecord } from "./derived-plain-data.ts";
 import { createTerrainGridSpec } from "../terrain/grid.mjs";
-import { tileKey } from "../terrain/stream.ts";
+import { parseTileKey, tileKey } from "../terrain/stream.ts";
 import type { TerrainTile } from "../terrain/types.ts";
 import { prepareGeneratedWaterFieldInput } from "../world/water-field.mjs";
-import type { PreparedWaterContactBinding, TerrainHeightSampler } from "../world/water-contact.ts";
+import { decodeHydrologyFieldArtifact } from "../world/hydrology-artifact.mjs";
+import { worldMapContentHash } from "../world/worldmap-hash.mjs";
+import { sha256 } from "../world/sha256.mjs";
+import type { WorldMap } from "../world/worldmap.ts";
+import {
+  DERIVED_SELF_BINDING_ID_PREFIX,
+  isDerivedSelfBindingId,
+  type PreparedWaterContactBinding,
+  type TerrainHeightSampler,
+} from "../world/water-contact.ts";
 import {
   SIM_STATUS_BYTES,
   SIM_STATUS_FLAG_IN_WATER,
@@ -94,6 +103,32 @@ interface DerivedSimGeneratedWater {
     erosionStageKey: string;
     compilerGraphHash: string;
   }>;
+  /** Canonical hydrology-field artifact bytes pinned by bindings.hydrologyFieldContentHash.
+   *  Required ONLY for the self-binding path (no authored worldlog map binding): the field's
+   *  verified placement/sea level become the self-binding's computed map identity. */
+  readonly fieldBytes?: Uint8Array;
+}
+
+/** The in-realm verified shape of the generated-water prepared envelope (prepareGeneratedWaterFieldInput). */
+interface DerivedSimPreparedWater {
+  readonly artifactContentHash: string;
+  readonly bindings: DerivedSimGeneratedWater["bindings"];
+  readonly topology: Readonly<{
+    placement: Readonly<{ originX: number; originZ: number }>;
+    rows: number;
+    cols: number;
+    cellSizeM: number;
+  }>;
+}
+
+/** The hydrology-field identity a self-binding's synthetic map is computed from. Every value
+ *  traces to canonical artifact bytes re-hashed and re-decoded in THIS realm. */
+interface DerivedSimPreparedField {
+  readonly placement: Readonly<{ originX: number; originZ: number }>;
+  readonly rows: number;
+  readonly cols: number;
+  readonly cellSizeM: number;
+  readonly seaLevelM: number;
 }
 
 export interface DerivedSimTerrainWindowEntry {
@@ -192,11 +227,43 @@ function parseDerivedTerrainTile(value: unknown, label: string): TerrainTile {
   return Object.freeze({ nrows: nrows as number, ncols: ncols as number, origin, scale, heights });
 }
 
+/** Parse ONE transferred terrain-window entry (`{key, tx, tz, tile}`) against the stage
+ *  grid. Shared by the full stage snapshot and the incremental residency update (2.0-B):
+ *  both wire shapes carry the exact same per-chunk contract. */
+function parseDerivedSimWindowEntry(
+  value: unknown,
+  grid: DerivedTerrainGrid,
+  manifestHash: string,
+  label: string,
+): Readonly<{ windowEntry: DerivedSimTerrainWindowEntry; indexEntry: DerivedTerrainIndexEntry }> {
+  const item = exactPlainRecord(value, ["key", "tx", "tz", "tile"], [], label);
+  let canonicalKey: string;
+  try { canonicalKey = tileKey(item.tx as number, item.tz as number); }
+  catch (error) { throw derivedError("INVALID_DERIVED_TERRAIN", error instanceof Error ? error.message : String(error)); }
+  if (item.key !== canonicalKey) throw derivedError("INVALID_DERIVED_TERRAIN", `${label}.key is not canonical`);
+  const tile = parseDerivedTerrainTile(item.tile, `${label}.tile`);
+  const chunk: DerivedTerrainManifestChunk = Object.freeze({
+    chunkId: `resident:${grid.gridId}:0:${item.tx}:${item.tz}`,
+    gridId: grid.gridId,
+    lod: 0,
+    tx: item.tx as number,
+    tz: item.tz as number,
+    topologyHash: manifestHash,
+    sourceSliceHashes: Object.freeze([]),
+    artifacts: Object.freeze([]),
+  });
+  return Object.freeze({
+    windowEntry: Object.freeze({ key: canonicalKey, tx: item.tx as number, tz: item.tz as number, tile }),
+    indexEntry: Object.freeze({ chunk, tile }),
+  });
+}
+
 function parseDerivedSimStageSnapshot(value: unknown): Readonly<{
   snapshot: DerivedSimStageSnapshot;
   entries: readonly DerivedTerrainIndexEntry[];
   index: DerivedLod0TerrainIndex;
   preparedGeneratedWater: unknown;
+  preparedGeneratedField: DerivedSimPreparedField | undefined;
 }> {
   const record = exactPlainRecord(
     value,
@@ -228,24 +295,9 @@ function parseDerivedSimStageSnapshot(value: unknown): Readonly<{
   const entries: DerivedTerrainIndexEntry[] = [];
   const window: DerivedSimTerrainWindowEntry[] = [];
   for (let index = 0; index < record.terrainWindow.length; index++) {
-    const item = exactPlainRecord(record.terrainWindow[index], ["key", "tx", "tz", "tile"], [], `derived sim terrainWindow[${index}]`);
-    let canonicalKey: string;
-    try { canonicalKey = tileKey(item.tx as number, item.tz as number); }
-    catch (error) { throw derivedError("INVALID_DERIVED_TERRAIN", error instanceof Error ? error.message : String(error)); }
-    if (item.key !== canonicalKey) throw derivedError("INVALID_DERIVED_TERRAIN", `derived sim terrainWindow[${index}].key is not canonical`);
-    const tile = parseDerivedTerrainTile(item.tile, `derived sim terrainWindow[${index}].tile`);
-    const chunk: DerivedTerrainManifestChunk = Object.freeze({
-      chunkId: `resident:${grid.gridId}:0:${item.tx}:${item.tz}`,
-      gridId: grid.gridId,
-      lod: 0,
-      tx: item.tx as number,
-      tz: item.tz as number,
-      topologyHash: manifestHash,
-      sourceSliceHashes: Object.freeze([]),
-      artifacts: Object.freeze([]),
-    });
-    entries.push(Object.freeze({ chunk, tile }));
-    window.push(Object.freeze({ key: canonicalKey, tx: item.tx as number, tz: item.tz as number, tile }));
+    const parsed = parseDerivedSimWindowEntry(record.terrainWindow[index], grid, manifestHash, `derived sim terrainWindow[${index}]`);
+    entries.push(parsed.indexEntry);
+    window.push(parsed.windowEntry);
   }
   let terrainIndex: DerivedLod0TerrainIndex;
   try { terrainIndex = new DerivedLod0TerrainIndex(entries, grid); }
@@ -253,8 +305,9 @@ function parseDerivedSimStageSnapshot(value: unknown): Readonly<{
 
   let generatedWater: DerivedSimGeneratedWater | undefined;
   let preparedGeneratedWater: unknown = undefined;
+  let preparedGeneratedField: DerivedSimPreparedField | undefined;
   if (record.generatedWater !== undefined) {
-    const generated = exactPlainRecord(record.generatedWater, ["artifact", "bytes", "bindings"], [], "derived sim generatedWater");
+    const generated = exactPlainRecord(record.generatedWater, ["artifact", "bytes", "bindings"], ["fieldBytes"], "derived sim generatedWater");
     // prepareGeneratedWaterFieldInput performs the canonical byte hash, descriptor, binding,
     // topology and ownership checks again in this simulation realm.
     try {
@@ -265,6 +318,9 @@ function parseDerivedSimStageSnapshot(value: unknown): Readonly<{
       });
     } catch (error) {
       throw derivedError("INVALID_DERIVED_WATER", error instanceof Error ? error.message : String(error));
+    }
+    if (generated.fieldBytes !== undefined) {
+      preparedGeneratedField = prepareDerivedSimFieldBytes(generated.fieldBytes, preparedGeneratedWater as DerivedSimPreparedWater);
     }
     generatedWater = generated as unknown as DerivedSimGeneratedWater;
   }
@@ -278,7 +334,66 @@ function parseDerivedSimStageSnapshot(value: unknown): Readonly<{
     terrainWindow: Object.freeze(window),
     ...(generatedWater === undefined ? {} : { generatedWater }),
   });
-  return Object.freeze({ snapshot, entries: Object.freeze(entries), index: terrainIndex, preparedGeneratedWater });
+  return Object.freeze({ snapshot, entries: Object.freeze(entries), index: terrainIndex, preparedGeneratedWater, preparedGeneratedField });
+}
+
+/** Verify the pinned hydrology-field bytes in THIS realm: owned buffer, sha256 against the water
+ *  artifact's binding-pinned field hash, canonical decode, and a grid cross-check against the
+ *  verified water topology (the compiler derives both from ONE field). Fail-closed: any mismatch
+ *  rejects the whole derived revision, exactly like the water byte verification above. */
+function prepareDerivedSimFieldBytes(value: unknown, preparedWater: DerivedSimPreparedWater): DerivedSimPreparedField {
+  if (!ArrayBuffer.isView(value) || Object.getPrototypeOf(value) !== Uint8Array.prototype
+      || !(value.buffer instanceof ArrayBuffer) || value.byteOffset !== 0 || value.byteLength !== value.buffer.byteLength) {
+    throw derivedError("INVALID_DERIVED_WATER", "derived sim hydrology field bytes must own a complete non-shared Uint8Array");
+  }
+  if (`sha256:${sha256(value)}` !== preparedWater.bindings.hydrologyFieldContentHash) {
+    throw derivedError("INVALID_DERIVED_WATER", "derived sim hydrology field bytes do not match the water artifact's pinned field binding");
+  }
+  try {
+    const decoded = decodeHydrologyFieldArtifact(value) as unknown as Readonly<{
+      placement: Readonly<{ originX: number; originZ: number }>;
+      topology: Readonly<{ rows: number; cols: number; cellSizeM: number; seaLevelM: number }>;
+    }>;
+    const topology = preparedWater.topology;
+    if (decoded.topology.rows !== topology.rows || decoded.topology.cols !== topology.cols
+        || decoded.topology.cellSizeM !== topology.cellSizeM
+        || decoded.placement.originX !== topology.placement.originX
+        || decoded.placement.originZ !== topology.placement.originZ) {
+      throw new Error("derived sim hydrology field grid does not match the verified water topology");
+    }
+    return Object.freeze({
+      placement: Object.freeze({ originX: decoded.placement.originX, originZ: decoded.placement.originZ }),
+      rows: decoded.topology.rows,
+      cols: decoded.topology.cols,
+      cellSizeM: decoded.topology.cellSizeM,
+      seaLevelM: decoded.topology.seaLevelM,
+    });
+  } catch (error) {
+    if (error instanceof DerivedSimActivationError) throw error;
+    throw derivedError("INVALID_DERIVED_WATER", error instanceof Error ? error.message : String(error));
+  }
+}
+
+/** Build the MINIMAL map descriptor a generated-water self-binding needs, computed entirely from
+ *  in-realm verified canonical artifacts: origin/extent/grid from the pinned hydrology field, sea
+ *  level from its decoded topology, and NO authored bodies (the verified generated artifact
+ *  supplies every water body). provenance.contentHash is COMPUTED over this descriptor, so the
+ *  self-binding identity is a pure deterministic function of verified bytes: a water-only revision
+ *  change keeps this hash (clean same-binding rebind), a field/map change moves it (stage rebinds). */
+function derivedSelfBindingMap(preparedWater: DerivedSimPreparedWater, field: DerivedSimPreparedField): WorldMap {
+  const fieldHash = preparedWater.bindings.hydrologyFieldContentHash;
+  const map = {
+    version: 1,
+    id: `derived-self:${fieldHash}`,
+    unitsPerMeter: 1,
+    origin: [field.placement.originX, field.placement.originZ],
+    extent: { w: field.cols * field.cellSizeM, h: field.rows * field.cellSizeM },
+    seaLevel: field.seaLevelM,
+    land: [], relief: [], biomes: [], waterways: [], routes: [], anchors: [],
+    provenance: { tool: "limina.derived-self-binding", sourceHash: fieldHash, contentHash: "0".repeat(64) },
+  };
+  map.provenance.contentHash = worldMapContentHash(map);
+  return Object.freeze(map) as unknown as WorldMap;
 }
 
 /** The grant set `loadWorld` drives authoring skills with when the caller passes no
@@ -422,7 +537,15 @@ export class SimWorkerController {
   private activeDerived: {
     readonly requestId: string;
     readonly manifestHash: string;
+    readonly grid: DerivedTerrainGrid;
     readonly colliderIds: readonly number[];
+    /** Live per-chunk collider/tile maps — the incremental residency delta (2.0-B)
+     *  mutates ONLY these inside its single physics snapshot/rollback wrapper. */
+    readonly colliders: Map<string, number>;
+    readonly tiles: Map<string, DerivedTerrainIndexEntry>;
+    /** Mutable cell the active terrain sampler closure reads, so a residency delta
+     *  re-covers the contact sampler without rebinding the verified water contact. */
+    readonly indexCell: { current: DerivedLod0TerrainIndex };
     readonly preparedContact: PreparedWaterContactBinding | null;
     readonly terrainSampler: TerrainHeightSampler;
   } | null = null;
@@ -513,7 +636,10 @@ export class SimWorkerController {
     for (const [id, bytes] of assetBytes) assets.seed(id, bytes);
     const core = registerCoreSkills(registry, { assets });
     const authoringBinding = new AuthoringProjectBinding((projectId) => {
-      registerBrowserAuthoringRuntime(registry, world, projectId);
+      const runtime = registerBrowserAuthoringRuntime(registry, world, projectId);
+      // D5.1: a replayed derived terrain.deform re-commits its edit layer into THIS
+      // realm's project-state store through the same nested authoring.commit.
+      core.terrainEdit.derived.projectState = runtime.projectState;
     }, opts.authoringProjectId);
 
     return new SimWorkerController({
@@ -558,9 +684,15 @@ export class SimWorkerController {
     if (this.activeDerived !== null) {
       this.suppressAuthoredTerrainColliders();
       // A recorded terrain-source command may have cleared the authored contact binding. The
-      // committed derived presentation remains authoritative until a later two-phase commit.
+      // committed derived presentation remains authoritative until a later two-phase commit —
+      // EXCEPT when the batch installed a DIFFERENT binding: an authored worldlog binding that
+      // preempted a derived self-binding wins, and the next derived stage/commit re-binds the
+      // generated water against that authored map (see water-contact.ts prepareVerifiedMap).
       if (this.activeDerived.preparedContact !== null) {
-        this.core.water.contact.activate(this.activeDerived.preparedContact, this.activeDerived.terrainSampler);
+        const activeBindingId = this.core.water.contact.activeBindingId;
+        if (activeBindingId === null || activeBindingId === this.activeDerived.preparedContact.bindingId) {
+          this.core.water.contact.activate(this.activeDerived.preparedContact, this.activeDerived.terrainSampler);
+        }
       }
     }
     this.syncTransforms();
@@ -622,17 +754,50 @@ export class SimWorkerController {
       throw derivedError("DERIVED_MANIFEST_MISMATCH", "derived stage manifestHash does not match its snapshot");
     }
     const contact = this.core.water.contact;
+    // The sampler fallback is captured BEFORE any self-binding clear below, so a committed
+    // revision keeps an out-of-window height source even across a self-binding rebind.
     const priorTerrainSampler = contact.activeTerrainSampler;
     let preparedContact: PreparedWaterContactBinding | null = null;
-    if (contact.activeBindingId !== null || parsed.preparedGeneratedWater !== undefined) {
-      if (contact.activeBindingId === null) {
-        throw derivedError("DERIVED_CONTACT_UNBOUND", "generated water requires an active verified authored map binding");
-      }
+    let priorContactBindingId = contact.activeBindingId;
+    let priorContactContentHash = contact.activeContentHash;
+    let priorGeneratedContentHash = contact.activeGeneratedArtifactContentHash;
+    if (priorContactBindingId !== null && !isDerivedSelfBindingId(priorContactBindingId)) {
+      // An authored worldlog map binding is authoritative; generated water binds against its
+      // verified map exactly as before the self-binding path existed.
       try { preparedContact = contact.prepareGeneratedForActive(parsed.preparedGeneratedWater); }
       catch (error) { throw derivedError("DERIVED_CONTACT_PREPARE_FAILED", error instanceof Error ? error.message : String(error)); }
       if (priorTerrainSampler === null) {
         throw derivedError("DERIVED_CONTACT_UNBOUND", "active water contact has no terrain sampler");
       }
+    } else if (parsed.preparedGeneratedWater !== undefined) {
+      // SELF-BINDING: the generated artifact already passed the full in-realm canonical
+      // byte-hash/descriptor/binding/topology verification at parse, so its own verified identity
+      // (the pinned hydrology field) is sufficient to build the contact when no worldlog binding
+      // exists. Anything failing that verification never reaches here (fail-closed at parse).
+      if (parsed.preparedGeneratedField === undefined) {
+        throw derivedError("DERIVED_CONTACT_UNBOUND", "generated water self-binding requires the pinned hydrology field bytes");
+      }
+      const selfMap = derivedSelfBindingMap(parsed.preparedGeneratedWater as DerivedSimPreparedWater, parsed.preparedGeneratedField);
+      const selfBindingId = `${DERIVED_SELF_BINDING_ID_PREFIX}${selfMap.provenance.contentHash}`;
+      if (priorContactBindingId !== null && priorContactBindingId !== selfBindingId) {
+        // MAP-EDIT REBIND: the field identity moved, so the active self-binding is stale the
+        // moment this newer verified artifact staged. Clearing at STAGE (the only stage side
+        // effect) fails closed to dry if the stage is later discarded, never to superseded water;
+        // the priors are captured post-clear so commit's staleness check stays coherent.
+        contact.clear(priorContactBindingId);
+        priorContactBindingId = null;
+        priorContactContentHash = null;
+        priorGeneratedContentHash = null;
+      }
+      try { preparedContact = contact.prepareVerifiedMap(selfMap, { bindingId: selfBindingId }, parsed.preparedGeneratedWater); }
+      catch (error) { throw derivedError("DERIVED_CONTACT_PREPARE_FAILED", error instanceof Error ? error.message : String(error)); }
+    } else if (priorContactBindingId !== null) {
+      // The active self-binding's revision carried water and this one does not: the water left
+      // the world, so staging unbinds it (same fail-closed-to-dry discard semantics as above).
+      contact.clear(priorContactBindingId);
+      priorContactBindingId = null;
+      priorContactContentHash = null;
+      priorGeneratedContentHash = null;
     }
     this.stagedDerived = Object.freeze({
       requestId,
@@ -641,9 +806,9 @@ export class SimWorkerController {
       index: parsed.index,
       preparedContact,
       priorTerrainSampler,
-      priorContactBindingId: contact.activeBindingId,
-      priorContactContentHash: contact.activeContentHash,
-      priorGeneratedContentHash: contact.activeGeneratedArtifactContentHash,
+      priorContactBindingId,
+      priorContactContentHash,
+      priorGeneratedContentHash,
     });
     this.lastDiscardedDerived = null;
     return Object.freeze({ requestId, manifestHash, tick: this.ticks });
@@ -670,8 +835,9 @@ export class SimWorkerController {
       throw derivedError("STALE_DERIVED_CONTACT", "active water contact changed after derived staging");
     }
     const fallback = candidate.priorTerrainSampler;
+    const indexCell = { current: candidate.index };
     const terrainSampler: TerrainHeightSampler = (x, z) => {
-      const resident = candidate.index.sampleHeight(x, z);
+      const resident = indexCell.current.sampleHeight(x, z);
       if (resident !== null) return resident;
       if (fallback !== null) return fallback(x, z);
       throw new RangeError("derived terrain query is outside the resident LOD0 window and has no prior sampler");
@@ -700,7 +866,11 @@ export class SimWorkerController {
       this.activeDerived = Object.freeze({
         requestId: stagedRequestId,
         manifestHash,
+        grid: candidate.snapshot.grid,
         colliderIds: Object.freeze(nextColliderIds),
+        colliders: new Map(candidate.entries.map((entry, index) => [tileKey(entry.chunk.tx, entry.chunk.tz), nextColliderIds[index]!])),
+        tiles: new Map(candidate.entries.map((entry) => [tileKey(entry.chunk.tx, entry.chunk.tz), entry])),
+        indexCell,
         preparedContact: candidate.preparedContact,
         terrainSampler,
       });
@@ -715,6 +885,185 @@ export class SimWorkerController {
       throw derivedError("DERIVED_COMMIT_FAILED", error instanceof Error ? error.message : String(error));
     }
     return Object.freeze({ requestId, stagedRequestId, manifestHash, tick: this.ticks });
+  }
+
+  /** 2.0-B incremental residency delta: add/remove ONLY the chunk-set difference of a
+   *  same-manifest window move. Mirrors the streamTileColliders precedent (keyed
+   *  heightfield add/remove between fixed steps) but goes through ONE physics
+   *  snapshot/rollback wrapper like commitDerivedRevision — a tick never observes a
+   *  half-applied delta. Every semantic check runs BEFORE the wrapper, so a rejected
+   *  delta leaves physics, colliders, and the contact sampler untouched (fail-closed;
+   *  the render realm falls back to a full stage/commit on the next activation). */
+  updateDerivedResidency(requestIdValue: unknown, manifestHashValue: unknown, updateValue: unknown): Readonly<{
+    requestId: string; manifestHash: string; added: number; removed: number; tick: number;
+  }> {
+    if (this.disposed) throw derivedError("SIM_DISPOSED", "sim worker is disposed");
+    const requestId = derivedId(requestIdValue, "derived residency update requestId");
+    const manifestHash = derivedHash(manifestHashValue, "derived residency update manifestHash");
+    const active = this.activeDerived;
+    if (active === null || active.manifestHash !== manifestHash) {
+      throw derivedError("STALE_DERIVED_STAGE", "derived residency update does not name the active revision");
+    }
+    if (this.stagedDerived !== null) {
+      throw derivedError("STALE_DERIVED_STAGE", "derived residency update raced a staged full revision");
+    }
+    const update = exactPlainRecord(updateValue, ["added", "removed"], [], "derived residency update");
+    if (!Array.isArray(update.added) || update.added.length > DERIVED_SIM_MAX_RESIDENT_TILES
+        || !Array.isArray(update.removed) || update.removed.length > DERIVED_SIM_MAX_RESIDENT_TILES) {
+      throw derivedError("INVALID_DERIVED_TERRAIN", `derived residency update must carry 0-${DERIVED_SIM_MAX_RESIDENT_TILES} added and removed entries`);
+    }
+    const added: Array<Readonly<{ windowEntry: DerivedSimTerrainWindowEntry; indexEntry: DerivedTerrainIndexEntry }>> = [];
+    const addedKeys = new Set<string>();
+    for (let index = 0; index < update.added.length; index++) {
+      const parsed = parseDerivedSimWindowEntry(update.added[index], active.grid, manifestHash, `derived residency added[${index}]`);
+      if (addedKeys.has(parsed.windowEntry.key)) {
+        throw derivedError("INVALID_DERIVED_TERRAIN", `derived residency added key '${parsed.windowEntry.key}' is duplicated`);
+      }
+      if (active.colliders.has(parsed.windowEntry.key)) {
+        throw derivedError("INVALID_DERIVED_TERRAIN", `derived residency added key '${parsed.windowEntry.key}' is already resident`);
+      }
+      addedKeys.add(parsed.windowEntry.key);
+      added.push(parsed);
+    }
+    const removedKeys: string[] = [];
+    const removedKeySet = new Set<string>();
+    for (let index = 0; index < update.removed.length; index++) {
+      const key = update.removed[index];
+      if (typeof key !== "string") throw derivedError("INVALID_DERIVED_TERRAIN", `derived residency removed[${index}] must be a chunk key`);
+      // parseTileKey itself enforces the canonical `tx,tz` form.
+      try { parseTileKey(key); }
+      catch { throw derivedError("INVALID_DERIVED_TERRAIN", `derived residency removed key '${key}' is not canonical`); }
+      if (removedKeySet.has(key)) throw derivedError("INVALID_DERIVED_TERRAIN", `derived residency removed key '${key}' is duplicated`);
+      if (addedKeys.has(key)) throw derivedError("INVALID_DERIVED_TERRAIN", `derived residency key '${key}' is both added and removed`);
+      if (!active.colliders.has(key)) {
+        throw derivedError("INVALID_DERIVED_TERRAIN", `derived residency removed key '${key}' is not resident`);
+      }
+      removedKeySet.add(key);
+      removedKeys.push(key);
+    }
+    const residentAfter = active.colliders.size - removedKeys.length + added.length;
+    if (residentAfter < 1 || residentAfter > DERIVED_SIM_MAX_RESIDENT_TILES) {
+      throw derivedError("INVALID_DERIVED_TERRAIN", `derived residency update leaves ${residentAfter} resident tiles, outside 1-${DERIVED_SIM_MAX_RESIDENT_TILES}`);
+    }
+    const physicsSnapshot = this.world.ops.op_physics_snapshot();
+    const addedColliderIds: number[] = [];
+    try {
+      // Ops only; the live maps swap AFTER every op succeeds, so a rollback cannot
+      // strand map entries whose colliders the snapshot restore already removed.
+      for (const key of removedKeys) this.world.ops.op_physics_remove_body(active.colliders.get(key)!);
+      for (const entry of added) {
+        const tile = entry.windowEntry.tile;
+        addedColliderIds.push(this.world.ops.op_physics_add_heightfield(
+          tile.origin[0], tile.origin[1], tile.origin[2],
+          tile.nrows, tile.ncols,
+          tile.scale[0], tile.scale[1], tile.scale[2],
+          tile.heights,
+        ));
+      }
+      for (const key of removedKeys) {
+        active.colliders.delete(key);
+        active.tiles.delete(key);
+      }
+      for (let index = 0; index < added.length; index++) {
+        active.colliders.set(added[index]!.windowEntry.key, addedColliderIds[index]!);
+        active.tiles.set(added[index]!.windowEntry.key, added[index]!.indexEntry);
+      }
+      active.indexCell.current = new DerivedLod0TerrainIndex([...active.tiles.values()], active.grid);
+      this.activeDerived = Object.freeze({
+        ...active,
+        colliderIds: Object.freeze([...active.colliders.values()]),
+      });
+    } catch (error) {
+      try { this.world.ops.op_physics_restore(physicsSnapshot); }
+      catch (restoreError) {
+        throw new AggregateError([error, restoreError], "derived residency update failed and physics rollback also failed");
+      }
+      throw derivedError("DERIVED_RESIDENCY_UPDATE_FAILED", error instanceof Error ? error.message : String(error));
+    }
+    return Object.freeze({ requestId, manifestHash, added: added.length, removed: removedKeys.length, tick: this.ticks });
+  }
+
+  /** Content-delta (sculpt-on-derived): replace the heightfield colliders of EXACTLY
+   *  the resident chunks whose content hash moved between two manifests of one
+   *  window, then re-name the active revision to the new manifest. A replacement IS
+   *  remove+add for the same key inside ONE physics snapshot/rollback wrapper — a
+   *  tick never observes a half-applied delta. The contact sampler is untouched: it
+   *  reads indexCell, which swaps to an index built from the replaced tiles, so
+   *  contact queries see the new heights without a water rebind (the water artifact
+   *  is routing-guaranteed unchanged). Every semantic check runs BEFORE the wrapper,
+   *  so a rejected delta leaves physics, colliders, and the contact sampler
+   *  untouched (fail-closed; the render realm falls back to a full stage/commit). */
+  updateDerivedContent(requestIdValue: unknown, manifestHashValue: unknown, updateValue: unknown): Readonly<{
+    requestId: string; manifestHash: string; replaced: number; tick: number;
+  }> {
+    if (this.disposed) throw derivedError("SIM_DISPOSED", "sim worker is disposed");
+    const requestId = derivedId(requestIdValue, "derived content update requestId");
+    const manifestHash = derivedHash(manifestHashValue, "derived content update manifestHash");
+    const active = this.activeDerived;
+    if (active === null || active.manifestHash !== manifestHash) {
+      throw derivedError("STALE_DERIVED_STAGE", "derived content update does not name the active revision");
+    }
+    if (this.stagedDerived !== null) {
+      throw derivedError("STALE_DERIVED_STAGE", "derived content update raced a staged full revision");
+    }
+    const update = exactPlainRecord(updateValue, ["nextManifestHash", "replaced"], [], "derived content update");
+    const nextManifestHash = derivedHash(update.nextManifestHash, "derived content update nextManifestHash");
+    if (nextManifestHash === manifestHash) {
+      throw derivedError("INVALID_DERIVED_TERRAIN", "derived content update requires a changed manifest");
+    }
+    if (!Array.isArray(update.replaced) || update.replaced.length < 1
+        || update.replaced.length > DERIVED_SIM_MAX_RESIDENT_TILES) {
+      throw derivedError("INVALID_DERIVED_TERRAIN", `derived content update must carry 1-${DERIVED_SIM_MAX_RESIDENT_TILES} replaced entries`);
+    }
+    const replaced: Array<Readonly<{ windowEntry: DerivedSimTerrainWindowEntry; indexEntry: DerivedTerrainIndexEntry }>> = [];
+    const replacedKeys = new Set<string>();
+    for (let index = 0; index < update.replaced.length; index++) {
+      const parsed = parseDerivedSimWindowEntry(update.replaced[index], active.grid, nextManifestHash, `derived content replaced[${index}]`);
+      if (replacedKeys.has(parsed.windowEntry.key)) {
+        throw derivedError("INVALID_DERIVED_TERRAIN", `derived content replaced key '${parsed.windowEntry.key}' is duplicated`);
+      }
+      if (!active.colliders.has(parsed.windowEntry.key)) {
+        throw derivedError("INVALID_DERIVED_TERRAIN", `derived content replaced key '${parsed.windowEntry.key}' is not resident`);
+      }
+      replacedKeys.add(parsed.windowEntry.key);
+      replaced.push(parsed);
+    }
+    const physicsSnapshot = this.world.ops.op_physics_snapshot();
+    try {
+      // Ops only; the live maps swap AFTER every op succeeds, so a rollback cannot
+      // strand map entries whose colliders the snapshot restore already removed.
+      const nextColliderIds: number[] = [];
+      for (const entry of replaced) this.world.ops.op_physics_remove_body(active.colliders.get(entry.windowEntry.key)!);
+      for (const entry of replaced) {
+        const tile = entry.windowEntry.tile;
+        nextColliderIds.push(this.world.ops.op_physics_add_heightfield(
+          tile.origin[0], tile.origin[1], tile.origin[2],
+          tile.nrows, tile.ncols,
+          tile.scale[0], tile.scale[1], tile.scale[2],
+          tile.heights,
+        ));
+      }
+      for (let index = 0; index < replaced.length; index++) {
+        active.colliders.set(replaced[index]!.windowEntry.key, nextColliderIds[index]!);
+        active.tiles.set(replaced[index]!.windowEntry.key, replaced[index]!.indexEntry);
+      }
+      active.indexCell.current = new DerivedLod0TerrainIndex([...active.tiles.values()], active.grid);
+      this.activeDerived = Object.freeze({
+        ...active,
+        manifestHash: nextManifestHash,
+        colliderIds: Object.freeze([...active.colliders.values()]),
+      });
+    } catch (error) {
+      try { this.world.ops.op_physics_restore(physicsSnapshot); }
+      catch (restoreError) {
+        throw new AggregateError([error, restoreError], "derived content update failed and physics rollback also failed");
+      }
+      throw derivedError("DERIVED_CONTENT_UPDATE_FAILED", error instanceof Error ? error.message : String(error));
+    }
+    // The ack echoes the REQUEST-named (prior) manifest: the main realm's derived
+    // waiter pairs acks to requests by that hash. The active revision now carries
+    // nextManifestHash — the next content delta or full stage names it.
+    return Object.freeze({ requestId, manifestHash, replaced: replaced.length, tick: this.ticks });
   }
 
   /** Discard is idempotent only for the exact candidate most recently discarded. Replaced,
@@ -1022,7 +1371,23 @@ export type DiscardDerivedRevisionMessage = {
   stagedRequestId: string;
   manifestHash: string;
 };
-type DerivedRevisionShellMessage = StageDerivedRevisionMessage | CommitDerivedRevisionMessage | DiscardDerivedRevisionMessage;
+/** 2.0-B incremental residency delta: only the entering/leaving chunk colliders. */
+export type UpdateDerivedResidencyMessage = {
+  type: "updateDerivedResidency";
+  requestId: string;
+  manifestHash: string;
+  update: { added: DerivedSimTerrainWindowEntry[]; removed: string[] };
+};
+/** Content-delta (sculpt-on-derived): replace exactly the changed chunks' colliders
+ *  and re-name the active revision to `nextManifestHash` — one atomic wrapper. */
+export type UpdateDerivedContentMessage = {
+  type: "updateDerivedContent";
+  requestId: string;
+  manifestHash: string;
+  update: { nextManifestHash: string; replaced: DerivedSimTerrainWindowEntry[] };
+};
+type DerivedRevisionShellMessage = StageDerivedRevisionMessage | CommitDerivedRevisionMessage | DiscardDerivedRevisionMessage
+  | UpdateDerivedResidencyMessage | UpdateDerivedContentMessage;
 type ShellMessage = InitMessage | StepMessage | StopMessage | PauseMessage | ResumeMessage | ApplyCommandsMessage
   | StreamTileCollidersMessage | DerivedRevisionShellMessage;
 
@@ -1086,20 +1451,30 @@ export class FixedStepAccumulator {
 }
 
 function parseDerivedRevisionShellMessage(value: unknown): Readonly<DerivedRevisionShellMessage> {
-  const record = exactPlainRecord(value, ["type", "requestId", "manifestHash"], ["snapshot", "stagedRequestId"], "derived revision shell message");
+  const record = exactPlainRecord(value, ["type", "requestId", "manifestHash"], ["snapshot", "stagedRequestId", "update"], "derived revision shell message");
   const type = record.type;
-  if (type !== "stageDerivedRevision" && type !== "commitDerivedRevision" && type !== "discardDerivedRevision") {
+  if (type !== "stageDerivedRevision" && type !== "commitDerivedRevision" && type !== "discardDerivedRevision"
+      && type !== "updateDerivedResidency" && type !== "updateDerivedContent") {
     throw derivedError("INVALID_DERIVED_MESSAGE", "derived revision shell message type is invalid");
   }
   const requestId = derivedId(record.requestId, `derived ${type} requestId`);
   const manifestHash = derivedHash(record.manifestHash, `derived ${type} manifestHash`);
   if (type === "stageDerivedRevision") {
-    if (!Object.hasOwn(record, "snapshot") || Object.hasOwn(record, "stagedRequestId")) {
+    if (!Object.hasOwn(record, "snapshot") || Object.hasOwn(record, "stagedRequestId") || Object.hasOwn(record, "update")) {
       throw derivedError("INVALID_DERIVED_MESSAGE", "derived stage message fields are invalid");
     }
     return Object.freeze({ type, requestId, manifestHash, snapshot: record.snapshot as DerivedSimStageSnapshot });
   }
-  if (!Object.hasOwn(record, "stagedRequestId") || Object.hasOwn(record, "snapshot")) {
+  if (type === "updateDerivedResidency" || type === "updateDerivedContent") {
+    if (!Object.hasOwn(record, "update") || Object.hasOwn(record, "snapshot") || Object.hasOwn(record, "stagedRequestId")) {
+      throw derivedError("INVALID_DERIVED_MESSAGE", "derived update message fields are invalid");
+    }
+    // The update payload itself is parsed field-by-field by the controller op.
+    return type === "updateDerivedResidency"
+      ? Object.freeze({ type, requestId, manifestHash, update: record.update as UpdateDerivedResidencyMessage["update"] })
+      : Object.freeze({ type, requestId, manifestHash, update: record.update as UpdateDerivedContentMessage["update"] });
+  }
+  if (!Object.hasOwn(record, "stagedRequestId") || Object.hasOwn(record, "snapshot") || Object.hasOwn(record, "update")) {
     throw derivedError("INVALID_DERIVED_MESSAGE", `derived ${type} message fields are invalid`);
   }
   const stagedRequestId = derivedId(record.stagedRequestId, `derived ${type} stagedRequestId`);
@@ -1154,7 +1529,7 @@ export function installSimWorker(scope: WorkerScopeLike, dependencies: SimWorker
     scope.postMessage({ type: "controlRejected", operation, requestId, reason });
   };
 
-  const rejectDerived = (operation: "stage" | "commit" | "discard", raw: unknown, error: unknown): void => {
+  const rejectDerived = (operation: "stage" | "commit" | "discard" | "update", raw: unknown, error: unknown): void => {
     const record = raw !== null && typeof raw === "object" ? raw as Record<string, unknown> : {};
     const message = error instanceof Error ? error.message : String(error);
     scope.postMessage({
@@ -1278,8 +1653,10 @@ export function installSimWorker(scope: WorkerScopeLike, dependencies: SimWorker
       }
     } else if (msg.type === "streamTileColliders") {
       if (controller !== null) controller.applyStreamTileColliders(msg.add ?? [], msg.remove ?? []);
-    } else if (msg.type === "stageDerivedRevision" || msg.type === "commitDerivedRevision" || msg.type === "discardDerivedRevision") {
-      const operation = msg.type === "stageDerivedRevision" ? "stage" : msg.type === "commitDerivedRevision" ? "commit" : "discard";
+    } else if (msg.type === "stageDerivedRevision" || msg.type === "commitDerivedRevision" || msg.type === "discardDerivedRevision"
+        || msg.type === "updateDerivedResidency" || msg.type === "updateDerivedContent") {
+      const operation = msg.type === "stageDerivedRevision" ? "stage" : msg.type === "commitDerivedRevision" ? "commit"
+        : msg.type === "updateDerivedResidency" || msg.type === "updateDerivedContent" ? "update" : "discard";
       try {
         if (controller === null) throw derivedError("SIM_NOT_INITIALIZED", "sim worker is not initialized");
         const derived = parseDerivedRevisionShellMessage(msg);
@@ -1289,6 +1666,12 @@ export function installSimWorker(scope: WorkerScopeLike, dependencies: SimWorker
         } else if (derived.type === "commitDerivedRevision") {
           const result = controller.commitDerivedRevision(derived.requestId, derived.stagedRequestId, derived.manifestHash);
           scope.postMessage({ type: "derivedRevisionCommitted", ...result });
+        } else if (derived.type === "updateDerivedResidency") {
+          const result = controller.updateDerivedResidency(derived.requestId, derived.manifestHash, derived.update);
+          scope.postMessage({ type: "derivedRevisionUpdated", ...result });
+        } else if (derived.type === "updateDerivedContent") {
+          const result = controller.updateDerivedContent(derived.requestId, derived.manifestHash, derived.update);
+          scope.postMessage({ type: "derivedRevisionUpdated", ...result });
         } else {
           const result = controller.discardDerivedRevision(derived.requestId, derived.stagedRequestId, derived.manifestHash);
           scope.postMessage({ type: "derivedRevisionDiscarded", ...result });

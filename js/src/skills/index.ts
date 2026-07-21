@@ -12,6 +12,7 @@ import { MaterialRegistry } from "../materials/material-registry.ts";
 import { registerPhysicsSkills } from "./physics.ts";
 import { registerAgentSkills } from "./agent.ts";
 import { registerSystemSkills } from "./system.ts";
+import { registerStudioSkills } from "./studio.ts";
 import { registerApprovalSkills } from "./approval.ts";
 import { registerAuditSkills } from "../policy/audit.ts";
 import { registerUiSkills } from "./ui.ts";
@@ -23,10 +24,10 @@ import { registerSocialSkills, type SocialRuntime } from "./social.ts";
 import { AudioManager } from "../audio/manager.ts";
 import { registerAudioSkills } from "./audio.ts";
 import { registerTerrainSkills, type RegionState } from "./terrain.ts";
-import { registerTerrainEditSkills, type EditableTerrain } from "./terrain-edit.ts";
+import { registerTerrainEditSkills, type DerivedTerrainEditDeps, type EditableTerrain } from "./terrain-edit.ts";
 import type { ScatterExclusion } from "../terrain/asset-scatter.ts";
 import { registerVillageSkills } from "./village.ts";
-import { registerVegetationSkills } from "./vegetation.ts";
+import { registerVegetationSkills, type DerivedVegetationScatterDeps } from "./vegetation.ts";
 import { registerGrassFieldSkill } from "./grass-field.ts";
 import { registerRenderSkills } from "./render.ts";
 import { registerWaterSkills, type WaterSkillState } from "./water.ts";
@@ -88,6 +89,11 @@ export interface CoreSkills {
    *  streamed-path state so a client (runLive's Map Phase 3.3 view streaming) can see EVERY
    *  recorded-terrain footprint and never double-mount ground the world already owns. */
   terrain: { source: TerrainSource; cache: TileCache; regions: Map<string, RegionState>; layers: Map<string, EditableTerrain> };
+  /** D5.1 derived-terrain edit-layer seams. The host binds authority capabilities
+   *  (project-state reader, live topology resolver) after the authoring runtime exists. */
+  terrainEdit: { derived: DerivedTerrainEditDeps };
+  /** D5.4: host-bound composed-height field provider for vegetation.scatter on derived worlds. */
+  vegetation: { derived: DerivedVegetationScatterDeps };
   assets: AssetRegistry;
   materials: MaterialRegistry;
   water: WaterSkillState & { contact: WaterContactRuntime };
@@ -215,6 +221,7 @@ export function registerCoreSkills(
   registerPhysicsSkills(registry);
   registerAgentSkills(registry);
   registerSystemSkills(registry);
+  registerStudioSkills(registry);
   registerApprovalSkills(registry);
   registerAuditSkills(registry);
   registerDesignSkills(registry);
@@ -274,8 +281,16 @@ export function registerCoreSkills(
   // map to scatter a forest on the sculpt. The footprint + clear registries are shared so the
   // PAINT-DRIVEN grass (blades wherever the paint channel says grass) honours settlement
   // footprints exactly like vegetation.scatter / vegetation.grassField.
-  registerTerrainEditSkills(registry, terrainLayers, assets, settlementFootprints, vegetationClears, waterContact, opts?.grassVisualPackage);
-  registerVegetationSkills(registry, terrainLayers, assets, settlementFootprints, undefined, vegetationClears);
+  // D5.1 derived-terrain edit layers: ONE deps box the host binds authority
+  // capabilities into AFTER the authoring runtime exists (net/server.ts, browser
+  // authoring binding) — the terrain.deform derived path reads it at invoke time.
+  const derivedTerrainEdit: DerivedTerrainEditDeps = { layers: new Map(), paintLayers: new Map() };
+  registerTerrainEditSkills(registry, terrainLayers, assets, settlementFootprints, vegetationClears, waterContact, opts?.grassVisualPackage, derivedTerrainEdit);
+  // D5.4 derived-terrain scatter: ONE deps box the host binds the composed-height
+  // field provider into AFTER the authoring runtime exists (net/server.ts) — same
+  // late-binding contract as derivedTerrainEdit above.
+  const derivedVegetationScatter: DerivedVegetationScatterDeps = {};
+  registerVegetationSkills(registry, terrainLayers, assets, settlementFootprints, undefined, vegetationClears, derivedVegetationScatter);
   // village.build: ONE skill that lays a terrain-aware settlement onto an editable
   // terrain layer by placing curated library GLBs (via asset.place) at transforms from
   // the SHARED, pure layout planner (world/pipeline/village-layout.mjs — same brain the
@@ -373,6 +388,8 @@ export function registerCoreSkills(
   return {
     packages, ui, locomotion, social, audio,
     terrain: { source: terrainSource, cache: terrainCache, regions: terrainRegions, layers: terrainLayers },
+    terrainEdit: { derived: derivedTerrainEdit },
+    vegetation: { derived: derivedVegetationScatter },
     assets, materials, water,
     player, camera, animation, interaction, inventory,
     gamestate, triggers, cutscene, director, clips, quest, combat, ability, behavior,

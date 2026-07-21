@@ -380,3 +380,76 @@ test("canonical MapDoc bytes reject accessors, symbols, non-enumerable fields, a
   assert.deepEqual(JSON.parse(canonicalMapDocBytes(protoKey)), protoKey);
   assert.equal({}.polluted, undefined);
 });
+
+// ── Shrink guard (2026-07-19 data-loss circuit breaker): a save that would gut
+// the map is refused with 409 shrink_rejected; allowShrink:true is the explicit
+// escape hatch. Proves each refused shape (raster collapse, class vanish) and
+// that a benign save and a flagged erasure both pass.
+
+function richMap(landmassBytes, elevationBytes, features = 2, stamps = 1, waterBodies = 1) {
+  return {
+    version: 2,
+    activeMapId: "primary",
+    maps: [{
+      id: "primary",
+      name: "Primary",
+      scope: "site",
+      parent: null,
+      features: Array.from({ length: features }, (_, i) => ({ id: `f${i}`, type: "line", points: [[i, i]] })),
+      stamps: Array.from({ length: stamps }, (_, i) => ({ id: `s${i}`, assetId: "pine.glb", x: i, z: i })),
+      waterBodies: Array.from({ length: waterBodies }, (_, i) => ({ id: `w${i}`, kind: "lake", level: 0, footprint: { points: [[0, 0], [10, 0], [10, 10]], holes: [] }, depthZones: [{ minShoreDistanceM: 0, maxShoreDistanceM: 4, depthM: 2 }] })),
+      rasters: {
+        landmass: { w: 4, h: 4, rect: { x0: 0, z0: 0, w: 100, h: 100 }, data: "A".repeat(landmassBytes) },
+        elevation: { w: 4, h: 4, rect: { x0: 0, z0: 0, w: 100, h: 100 }, minY: -500, maxY: 9000, encoding: "u16", data: "B".repeat(elevationBytes) },
+      },
+      units: { kind: "m", unitsPerMeter: 1, origin: [0, 0] },
+    }],
+  };
+}
+
+function richFixture() {
+  const fx = fixture();
+  writeFileSync(join(fx.vaultDir, "maps.json"), `${JSON.stringify(richMap(2048, 4096), null, 2)}\n`);
+  return fx;
+}
+
+test("shrink guard: gutting saves are refused; allowShrink passes; benign saves pass", async () => {
+  const fx = richFixture();
+  const authority = new FakeAuthority();
+  const b = bridge(fx, authority);
+  const baseRev = workspaceRevision(readFileSync(join(fx.vaultDir, "maps.json")));
+  try {
+    // 1. Landmass collapse → refused with a named reason.
+    await assert.rejects(
+      b.save({ maps: richMap(128, 4096).maps, activeMapId: "primary", baseRev }),
+      (error) => {
+        assert.ok(error instanceof AtlasSourceBridgeError);
+        assert.equal(error.code, "shrink_rejected");
+        assert.match(error.message, /landmass/);
+        return true;
+      },
+    );
+    // 2. Features vanishing → refused.
+    await assert.rejects(
+      b.save({ maps: richMap(2048, 4096, 0, 1, 1).maps, activeMapId: "primary", baseRev }),
+      (error) => error.code === "shrink_rejected" && /features/.test(error.message),
+    );
+    // 3. Elevation collapse → refused.
+    await assert.rejects(
+      b.save({ maps: richMap(2048, 64).maps, activeMapId: "primary", baseRev }),
+      (error) => error.code === "shrink_rejected" && /elevation/.test(error.message),
+    );
+    // 4. The escape hatch: the same gutting save WITH allowShrink:true commits.
+    const gutted = richMap(0, 0, 0, 0, 0).maps;
+    const flagged = await b.save({ maps: gutted, activeMapId: "primary", baseRev, allowShrink: true });
+    assert.ok(flagged !== undefined, "allowShrink:true commits the intentional erasure");
+    // 5. A benign edit (small shrink within the quarter tolerance) commits.
+    const fx2 = richFixture();
+    const b2 = bridge(fx2, authority);
+    const baseRev2 = workspaceRevision(readFileSync(join(fx2.vaultDir, "maps.json")));
+    const benign = await b2.save({ maps: richMap(1800, 4096).maps, activeMapId: "primary", baseRev: baseRev2 });
+    assert.ok(benign !== undefined, "a small edit passes the guard");
+  } finally {
+    fx.cleanup();
+  }
+});

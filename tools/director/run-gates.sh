@@ -39,6 +39,15 @@ REPO_ROOTED_TESTS=" p_building_production_review_scene p_asset_place_collider_li
 # The determinism core added to --quick: worldlog replay/durability/recovery, policy/audit/
 # isolation, packaging, plus the p7x layout/geometry/scatter/grass determinism gates.
 QUICK_DETERMINISM_GLOBS=(js/test/p4_*.ts
+  js/test/p_worldlog_negzero.ts
+  js/test/p_architecture_compile_golden.ts
+  js/test/p_derived_water_self_binding.ts
+  js/test/p_terrain_derived_edit_layer.ts
+  js/test/p_terrain_derived_paint_layer.ts
+  js/test/p_vegetation_scatter_derived.ts
+  js/test/p_derived_incremental_residency.ts
+  js/test/p_derived_content_delta.ts
+  js/test/p_derived_windowed_fetch.ts
   js/test/p76_village_layout_determinism.ts
   js/test/p77_village_geometry_determinism.ts
   js/test/p78_scatter_exclusion_determinism.ts
@@ -58,6 +67,8 @@ QUICK_DETERMINISM_GLOBS=(js/test/p4_*.ts
   js/test/p_engine_op_composition.ts
   js/test/p8_browser_trace_segments.ts
   js/test/p_studio_trace_append_replay.ts
+  js/test/p_studio_recorder_seam.ts
+  js/test/p_studio_approval_replay.ts
   js/test/p_fb5_functional_settlement_furnishing.ts
   js/test/p_fb5_functional_settlement_furnishing_runtime.ts
   js/test/p_fb5_functional_settlement_release.ts
@@ -190,6 +201,13 @@ echo "   js/test: $pass passed, $fail failed, $skip skipped"
 
 # ---- host-side gates (skip gracefully when their tools are absent) ----
 hostfail=0
+# Host/design/browser skips are counted SEPARATELY from the js/test $skip counter so
+# the final banner reflects the TRUE skip surface — a headless CI run skips the entire
+# visual family (design-gate, packager, playable-smoke, dogfood, browser twins), and a
+# banner that read "ALL GATES GREEN" while that family never ran overstated coverage
+# (CLAUDE.md failure mode #6). host_skip() increments it from every non-js/test skip.
+hostskip=0
+host_skip() { hostskip=$((hostskip+1)); echo "   $1"; }
 echo "== host gates =="
 
 # Uniform host-gate contract: exit 0 = PASS, exit 2 = announced SKIP, anything else =
@@ -200,7 +218,7 @@ host_gate() { # <label> <skip-note> <cmd...>
   local out rc=0
   out="$("$@" 2>&1)" || rc=$?
   if [ "$rc" -eq 0 ]; then echo "   $label: PASS"
-  elif [ "$rc" -eq 2 ]; then echo "   $label: SKIP${skipnote:+ ($skipnote)}"
+  elif [ "$rc" -eq 2 ]; then echo "   $label: SKIP${skipnote:+ ($skipnote)}"; hostskip=$((hostskip+1))
   else
     echo "   $label: FAIL (exit $rc)"
     printf '%s\n' "$out" | tail -n 25 | sed 's/^/      /'
@@ -320,7 +338,7 @@ host_gate "functional-building R1 final closure" "" node --test \
 # fail-closed input boundary, asset-sanity/QC integration, and atomic publication rollback.
 if command -v bun >/dev/null 2>&1 && [ -x "${BLENDER_BIN:-$HOME/blender-5.1.2-linux-x64/blender}" ]; then
   host_gate "retopo-static" "" bash -c 'cd tools && bun run test:retopo'
-else echo "   retopo-static: SKIP (bun or pinned Blender 5.1.2 absent)"; fi
+else host_skip "retopo-static: SKIP (bun or pinned Blender 5.1.2 absent)"; fi
 
 # A3 force-WebGL proof: compile the bounded TSL POM against the real CC0 pack and compare it to
 # an otherwise-identical control from two camera angles. SwiftShader keeps this CI-safe.
@@ -343,11 +361,11 @@ host_gate "tree-scatter-integration" "accepted oak inputs or pinned Blender abse
 zaxy_bin="${ZAXY_BIN:-zaxy}"
 if command -v "$zaxy_bin" >/dev/null 2>&1; then
   host_gate "eventloom-roundtrip" "" env ZAXY_BIN="$zaxy_bin" LIMINA_BIN="$BIN" node js/test/eventloom_bridge_roundtrip.mjs
-else echo "   eventloom-roundtrip: SKIP (no zaxy; set ZAXY_BIN)"; fi
+else host_skip "eventloom-roundtrip: SKIP (no zaxy; set ZAXY_BIN)"; fi
 
 if command -v bun >/dev/null 2>&1; then
   host_gate "check-gds" "" bun run tools/director/check-gds.ts
-else echo "   check-gds: SKIP (no bun)"; fi
+else host_skip "check-gds: SKIP (no bun)"; fi
 
 host_gate "engine-browser-gate" "no chromium" node tools/director/engine-browser-gate.mjs
 host_gate "browser trace real IndexedDB" "no Chromium/Playwright" node tools/browser-trace-indexeddb.test.mjs
@@ -378,13 +396,7 @@ else
 fi
 host_gate "scaffold editor lifecycle" "" node tools/scaffold-editor-bundle.test.mjs
 host_gate "scaffold Atlas proxy" "" node tools/scaffold-serve.test.mjs
-host_gate "Atlas editor launch config" "" node tools/design/editor-launch.test.mjs
-host_gate "Atlas editor bridge/workspace" "" node --test \
-  editor/test/atlas_editor_protocol.test.mjs \
-  editor/test/atlas_handoff.test.mjs \
-  editor/test/atlas_workspace_state.test.mjs \
-  editor/test/atlas_bridge_wiring_static.test.mjs \
-  tools/design/doc-templates.test.mjs
+host_gate "design doc templates" "" node tools/design/doc-templates.test.mjs
 host_gate "editor event retention" "" node editor/test/app_event_retention.test.mjs
 host_gate "editor artifacts" "" node editor/test/artifacts.test.cjs
 
@@ -417,12 +429,14 @@ free_port() {
 }
 editor_static_port="$(free_port)"
 editor_host_port="$(free_port)"
-# Atlas service (tools/design/serve-design.mjs): the embedded Atlas dock the
-# atlas_*_browser gates drive is a PROXY (serve.mjs /atlas/**) to this server —
-# without it the iframe 404s and #map-svg never renders (the gates time out on a
-# harness artifact instead of testing anything). Port chosen now so the static
-# server learns the origin at spawn; the service itself starts after the host
-# token exists (its editor bridge needs it). Vault = a throwaway project dir.
+# Atlas service (tools/design/serve-design.mjs): the native Atlas surface
+# (editor/src/atlas/) talks to this server through the studio proxy (serve.mjs
+# /api/**, /shared/**, /js/src/world/**) — without it the surface's save/compile
+# calls 404 and atlas browser gates time out on a harness artifact instead of
+# testing anything. Port chosen now so the static server learns the origin at
+# spawn; the service itself starts after the host token exists (its editor
+# bridge needs it). Vault = a throwaway project dir. The old Atlas SPA
+# (tools/design/frontend/) is retired: the service runs --headless.
 editor_atlas_port="$(free_port)"
 editor_atlas_log="$(mktemp)"
 editor_atlas_pid=""
@@ -454,9 +468,10 @@ printf '{\n  "schema": "limina-project/1",\n  "projectId": "limina",\n  "assetRo
 # land extent while keeping the 300m navigation target inside authority.
 printf '{"version":2,"activeMapId":"primary","maps":[{"id":"primary","name":"Grey Field","scope":"world","parent":null,"features":[],"rasters":{"landmass":{"w":7,"h":7,"rect":{"x0":-384,"z0":-384,"w":768,"h":768},"data":"AAAAAAAAAAD//////wAA//////8AAP//////AAD//////wAA//////8AAAAAAAAAAA=="}},"seaLevel":0,"units":{"kind":"m","unitsPerMeter":1,"origin":[0,0]}}]}\n' \
   > "$editor_atlas_proj/design/maps.json"
+editor_design_token="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
 LIMINA_ATLAS_ORIGIN="http://127.0.0.1:$editor_atlas_port" \
-  LIMINA_EDITOR_PUBLIC_URL="http://localhost:$editor_static_port/" \
   LIMINA_EDITOR_SERVER_URL="ws://localhost:$editor_host_port/" \
+  LIMINA_DESIGN_TOKEN="$editor_design_token" \
   node tools/scaffold/scripts/serve.mjs editor "$editor_static_port" >"$editor_static_log" 2>&1 &
 editor_static_pid=$!
 editor_token="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
@@ -527,12 +542,14 @@ else
   fi
 
   # Bring up the Atlas service now that the host token exists (empty throwaway
-  # vault; the SPA renders #map-svg regardless of vault content). A failed boot is
-  # ANNOUNCED — the atlas gates then fail with real output, never silently.
+  # vault; the native Atlas surface works regardless of vault content). A failed
+  # boot is ANNOUNCED — the atlas gates then fail with real output, never silently.
+  # Headless: the old SPA is retired, so /api/** calls authenticate with the
+  # launcher-issued design token the studio proxy attaches server-side.
   env LIMINA_EDITOR_URL="ws://127.0.0.1:$editor_host_port/" LIMINA_EDITOR_TOKEN="$editor_token" \
-    LIMINA_EDITOR_HANDOFF_URL="http://localhost:$editor_static_port/atlas-handoff.html" \
+    LIMINA_DESIGN_TOKEN="$editor_design_token" \
     LIMINA_ATLAS_PUBLIC_ORIGIN="http://127.0.0.1:$editor_atlas_port" \
-    node tools/design/serve-design.mjs "$editor_atlas_proj/design" "$editor_atlas_port" >"$editor_atlas_log" 2>&1 &
+    node tools/design/serve-design.mjs "$editor_atlas_proj/design" "$editor_atlas_port" --headless >"$editor_atlas_log" 2>&1 &
   editor_atlas_pid=$!
   atlas_up=0
   for _ in $(seq 1 50); do
@@ -615,12 +632,12 @@ trap - EXIT
 
 if [ -n "${LLMFF_BIN:-}" ] || command -v llmff >/dev/null 2>&1; then
   host_gate "check-slice-builder" "" node tools/director/check-slice-builder.mjs
-else echo "   check-slice-builder: SKIP (no llmff; set LLMFF_BIN)"; fi
+else host_skip "check-slice-builder: SKIP (no llmff; set LLMFF_BIN)"; fi
 
 # Design-quality gate (gamestack procgen-review, executed): the silhouette gate's own falsifiability —
 # distinct assets PASS, a clone-heavy "oatmeal" set HARD-FAILS. Needs a real GPU + chromium;
 # gates/design/check.mjs exits 2 (announced) when they are absent.
-if [ "$HEADLESS" = 1 ]; then echo "   design-gate (silhouette): SKIP (headless: needs GPU/chromium)"
+if [ "$HEADLESS" = 1 ]; then host_skip "design-gate (silhouette): SKIP (headless: needs GPU/chromium)"
 else host_gate "design-gate (silhouette)" "no chromium" node gates/design/check.mjs; fi
 # Style-conformance gate (design direction): a build whose materials stay inside the Design Direction's
 # declared palette + surface envelope PASSES; an off-brief build (off-palette color / off-envelope
@@ -631,7 +648,7 @@ host_gate "design-gate (style conformance)" "" node gates/design/style-conforman
 host_gate "design-gate (map studio)" "" node gates/design/mapstudio-gate.mjs
 # GDS-level design gate: scores a game's content by tier (well-art-directed PASSES, samey HARD-FAILS,
 # and a GDS resolving ZERO assets FAILS — no vacuous green). Exit 2 = no chromium.
-if [ "$HEADLESS" = 1 ]; then echo "   design-gate (gds tiers): SKIP (headless: needs GPU/chromium)"
+if [ "$HEADLESS" = 1 ]; then host_skip "design-gate (gds tiers): SKIP (headless: needs GPU/chromium)"
 else host_gate "design-gate (gds tiers)" "no chromium" node gates/design/gds-gate-check.mjs; fi
 # Packager: a direct-path game is rejected; a record+export world packs into a self-contained release
 # that RENDERS non-blank in the real engine.
@@ -643,13 +660,13 @@ host_gate "check-compile-run" "no chromium" node tools/director/check-compile-ru
 
 # Playable-build smoke: the pipeline gates the thing you actually PLAY (the native window build loads
 # its full graph + game + shared dressed field), not just the headless sim. Display-independent.
-if [ "$HEADLESS" = 1 ]; then echo "   playable-smoke (beacon window): SKIP (headless: needs GPU)"
+if [ "$HEADLESS" = 1 ]; then host_skip "playable-smoke (beacon window): SKIP (headless: needs GPU)"
 else host_gate "playable-smoke (beacon window)" "" node games/beacon-quest/smoke-playable.mjs; fi
 
 # Beacon Quest playable-render smoke: the "Light the Eastern Beacon" capstone on the MAP-PAINTER
 # world renders clean (painted terrain source + rigged models + HUD, N frames, zero errors). The
 # render sibling of js/test/p14_beacon_quest.ts (which proves the SIM + replay). Exit 2 = no GPU.
-if [ "$HEADLESS" = 1 ]; then echo "   playable-smoke (beacon quest): SKIP (headless: needs GPU)"
+if [ "$HEADLESS" = 1 ]; then host_skip "playable-smoke (beacon quest): SKIP (headless: needs GPU)"
 else host_gate "playable-smoke (beacon quest)" "no GPU surface" node games/beacon-quest/smoke-quest.mjs; fi
 
 # Beacon Quest headless determinism gate, PROJECT-LOCAL: the game is a self-contained project whose
@@ -679,6 +696,15 @@ host_gate "export-gate (beacon painted world)" "no engine binary" node games/bea
 host_gate "dogfood (beacon end-to-end)" "no chromium/GPU" node games/beacon-quest/dogfood.mjs
 
 echo "== summary =="
-echo "   js/test: $pass passed / $fail failed / $skip skipped; host gates: $([ $hostfail -eq 0 ] && echo OK || echo FAIL)"
-[ ${#skipped[@]} -gt 0 ] && printf '   SKIPPED (%d): %s\n' "$skip" "${skipped[*]}"
-[ $fail -eq 0 ] && [ $hostfail -eq 0 ] && { echo "ALL GATES GREEN"; exit 0; } || { echo "GATES RED"; exit 1; }
+total_skip=$((skip + hostskip))
+echo "   js/test: $pass passed / $fail failed / $skip skipped; host/design skips: $hostskip; host gates: $([ $hostfail -eq 0 ] && echo OK || echo FAIL)"
+[ ${#skipped[@]} -gt 0 ] && printf '   SKIPPED js/test (%d): %s\n' "$skip" "${skipped[*]}"
+# The banner must reflect the TRUE skip surface: a headless CI run skips the entire
+# visual family, and printing an UNQUALIFIED "ALL GATES GREEN" there overstated coverage
+# (failure mode #6). Green now always carries the skip count, so pixel-blind ≠ fully green.
+if [ $fail -eq 0 ] && [ $hostfail -eq 0 ]; then
+  if [ $total_skip -gt 0 ]; then echo "GATES GREEN ($total_skip SKIPPED — visual/GPU family not run here)"; else echo "ALL GATES GREEN"; fi
+  exit 0
+else
+  echo "GATES RED"; exit 1
+fi
