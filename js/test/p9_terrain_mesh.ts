@@ -34,6 +34,7 @@ const g = terrainTileGeometry(tile);
 // 1. Vertex count = nrows*ncols.
 assert(g.positions.length === NROWS * NCOLS * 3, `positions length ${g.positions.length} != ${NROWS * NCOLS * 3}`);
 assert(g.normals.length === NROWS * NCOLS * 3, `normals length ${g.normals.length} != ${NROWS * NCOLS * 3}`);
+assert(g.uvs.length === NROWS * NCOLS * 2, `UV length ${g.uvs.length} != ${NROWS * NCOLS * 2}`);
 
 // 2. Index count = (nrows-1)*(ncols-1)*2 triangles.
 const tris = (NROWS - 1) * (NCOLS - 1) * 2;
@@ -57,6 +58,8 @@ for (const [r, c] of [[0, 0], [5, 11], [NROWS - 1, NCOLS - 1], [9, 0], [0, NCOLS
   assert(close(g.positions[v * 3], ex), `vertex (${r},${c}) x=${g.positions[v * 3]} != ${ex}`);
   assert(close(g.positions[v * 3 + 1], ey), `vertex (${r},${c}) Y=${g.positions[v * 3 + 1]} != ${ey} (heights*scaleY)`);
   assert(close(g.positions[v * 3 + 2], ez), `vertex (${r},${c}) z=${g.positions[v * 3 + 2]} != ${ez}`);
+  assert(close(g.uvs[v * 2], c / (NCOLS - 1)) && close(g.uvs[v * 2 + 1], r / (NROWS - 1)),
+    `vertex (${r},${c}) UV does not match canonical X/Z tile parameterization`);
 }
 
 // 4. Corner XZ spans the tile extent: width along x = scaleX, depth along z = scaleZ.
@@ -108,6 +111,7 @@ assert(close(ray[3], meshY, 0.02), `collider surface Y=${ray[3]} != mesh vertex 
 const g2 = terrainTileGeometry(tile);
 for (let i = 0; i < g.positions.length; i++) assert(Object.is(g.positions[i], g2.positions[i]), `positions not deterministic at ${i}`);
 for (let i = 0; i < g.normals.length; i++) assert(Object.is(g.normals[i], g2.normals[i]), `normals not deterministic at ${i}`);
+for (let i = 0; i < g.uvs.length; i++) assert(Object.is(g.uvs[i], g2.uvs[i]), `UVs not deterministic at ${i}`);
 
 // ===========================================================================
 // STREAM / LOD bookkeeping.
@@ -167,7 +171,7 @@ assert(dd.resident.length === 13, `disc r=2 should be 13 tiles, got ${dd.residen
 
 ops.op_log(
   `p9_terrain_mesh OK: geometry ${NROWS}x${NCOLS} -> ${g.positions.length / 3} verts / ${tris} tris, ` +
-  `vertex Y == origin.y+h*scaleY, corner XZ spans ${spanX}x${spanZ}, unit +y normals; ` +
+  `vertex Y == origin.y+h*scaleY, canonical X/Z UVs, corner XZ spans ${spanX}x${spanZ}, unit +y normals; ` +
   `DROP-TEST PARITY collider Y=${ray[3].toFixed(3)} == mesh Y=${meshY.toFixed(3)}; ` +
   `stream: 5x5 window, +x move loads/unloads one ${2 * R + 1}-tile column (no thrash/gaps), disc r=2=${dd.resident.length}.`,
 );

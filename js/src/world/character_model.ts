@@ -3,7 +3,7 @@
 // procedural rig) and third_person_camera.ts (the follow camera): same world/ helper
 // style, same RENDER-ONLY contract.
 //
-//   attachCharacterModel({ world, registry, base, engine, ... }) -> CharacterModel
+//   attachCharacterModel({ assetId, world, registry, base, ... }) -> CharacterModel
 //
 // It loads a rigged, animated glTF (default assets/robot.glb — 4 SkinnedMeshes with
 // Idle/Walking/Running clips) through the three.loadGLTF SKILL (so the model becomes a
@@ -29,14 +29,13 @@ import type { InvokeBase, SkillRegistry, WorldContext } from "../skills/registry
 /** Locomotion gait the model plays. Maps to the idle/walk/run clip ids. */
 export type LocomotionState = "idle" | "walk" | "run";
 
-/** Named locomotion clips carried by the rigged glTF (defaults match robot.glb). */
+/** Named locomotion clips carried by the rigged glTF (default clip names below). */
 export interface LocomotionClips {
   idle: string;
   walk: string;
   run: string;
 }
 
-const DEFAULT_ASSET = "robot.glb";
 const DEFAULT_CLIPS: LocomotionClips = { idle: "Idle", walk: "Walking", run: "Running" };
 const DEFAULT_TARGET_HEIGHT = 1.8; // meters — auto-fit the model to a human height
 const DEFAULT_CROSSFADE_MS = 180; // locomotion clip crossfade
@@ -49,8 +48,9 @@ export interface AttachCharacterModelOptions {
   /** The shared AnimationManager (core.animation.animationManager). When supplied,
    *  setLocomotion(dt) pumps the mixer itself; otherwise the host must pump it. */
   animationManager?: AnimationManager;
-  /** Asset id of the rigged glTF. Default "robot.glb". */
-  assetId?: string;
+  /** Asset id of the rigged glTF character (REQUIRED — the engine ships no default character content;
+   *  the caller/project supplies its own rigged body). */
+  assetId: string;
   /** Explicit uniform scale. When omitted the model is auto-fit so its height ≈
    *  targetHeight (robust to unknown model units). */
   scale?: number;
@@ -233,7 +233,10 @@ class RiggedCharacterModel implements CharacterModel {
  *  and starts it in the idle clip. The host drives it each render frame with
  *  setPose(footPos, yaw) + setLocomotion(state, dt). */
 export async function attachCharacterModel(opts: AttachCharacterModelOptions): Promise<CharacterModel> {
-  const assetId = opts.assetId ?? DEFAULT_ASSET;
+  const assetId = opts.assetId;
+  if (typeof assetId !== "string" || assetId.length === 0) {
+    throw new Error("attachCharacterModel: assetId is required — the engine ships no default character asset");
+  }
   const clips: LocomotionClips = { ...DEFAULT_CLIPS, ...opts.clips };
   const forwardOffset = opts.forwardOffset ?? 0;
   const crossfadeMs = opts.crossfadeMs ?? DEFAULT_CROSSFADE_MS;

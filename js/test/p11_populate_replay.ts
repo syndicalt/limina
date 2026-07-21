@@ -81,6 +81,13 @@ const SHAPE = {
   islandRadius: HALF_EXTENT * 0.40, islandFalloff: HALF_EXTENT * 0.62,
 };
 const WATER_MARGIN = 2.5;
+// Keep this replay test hermetic. The engine intentionally ships no biome pack, and a project's
+// cwd-local biome-pack.json is external content rather than a test fixture. Passing the role
+// bindings inline proves the recorded transaction carries the exact content identity replay needs.
+const TEST_BIOME_PACK = {
+  conifer: { id: "pine.glb", embedRadius: 0.75 },
+  boulder: { id: "rock.glb", embedRadius: 0.4 },
+} as const;
 
 // ── AUTHORING (recorded): generateRegion (auto-surface, default render) + populateBiome ──
 const recorder = new WorldRecorder("ses_p11_populate_rec");
@@ -97,7 +104,12 @@ const gen = ok(await recReg.invoke("world.generateRegion", { seed: SEED, bounds:
 const regionId = gen.regionId as string;
 const relief = gen.relief as { minY: number; maxY: number };
 const seaLevel = relief.minY + 0.18 * (relief.maxY - relief.minY);
-const pop = ok(await recReg.invoke("world.populateBiome", { regionId, waterLevel: seaLevel, waterMargin: WATER_MARGIN }, base));
+const pop = ok(await recReg.invoke("world.populateBiome", {
+  regionId,
+  waterLevel: seaLevel,
+  waterMargin: WATER_MARGIN,
+  biomePack: TEST_BIOME_PACK,
+}, base));
 assert((pop.instances as number) > 0, "authoring populateBiome placed nothing");
 assert(authPlacements.length === (pop.instances as number), `captured ${authPlacements.length} placements != reported ${pop.instances} (a layer's scatter was missed)`);
 
@@ -131,7 +143,12 @@ const world2 = makeWorld(ops);
 const base2 = { agentId: "agt_nr", sessionId: "ses_p11_populate_norender", permissions: resolveProfile("builder.readWrite"), tick: 0, world: world2 };
 const gen2 = ok(await reg2.invoke("world.generateRegion", { seed: SEED, bounds: BOUNDS, lod: 0, type: "mountains", hints: SHAPE, render: false }, base2));
 assert((gen2.meshes as number) === 0, "render:false still built meshes");
-ok(await reg2.invoke("world.populateBiome", { regionId: gen2.regionId as string, waterLevel: seaLevel, waterMargin: WATER_MARGIN }, base2));
+ok(await reg2.invoke("world.populateBiome", {
+  regionId: gen2.regionId as string,
+  waterLevel: seaLevel,
+  waterMargin: WATER_MARGIN,
+  biomePack: TEST_BIOME_PACK,
+}, base2));
 assert(sameInstances(noRenderPlacements, authPlacements), "render:false changed the populateBiome placements — the auto-surface is NOT render-only");
 
 ops.op_log(

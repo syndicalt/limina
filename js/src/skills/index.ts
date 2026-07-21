@@ -12,6 +12,7 @@ import { MaterialRegistry } from "../materials/material-registry.ts";
 import { registerPhysicsSkills } from "./physics.ts";
 import { registerAgentSkills } from "./agent.ts";
 import { registerSystemSkills } from "./system.ts";
+import { registerStudioSkills } from "./studio.ts";
 import { registerApprovalSkills } from "./approval.ts";
 import { registerAuditSkills } from "../policy/audit.ts";
 import { registerUiSkills } from "./ui.ts";
@@ -23,9 +24,15 @@ import { registerSocialSkills, type SocialRuntime } from "./social.ts";
 import { AudioManager } from "../audio/manager.ts";
 import { registerAudioSkills } from "./audio.ts";
 import { registerTerrainSkills, type RegionState } from "./terrain.ts";
+import { registerTerrainEditSkills, type DerivedTerrainEditDeps, type EditableTerrain } from "./terrain-edit.ts";
+import type { ScatterExclusion } from "../terrain/asset-scatter.ts";
+import { registerVillageSkills } from "./village.ts";
+import { registerVegetationSkills, type DerivedVegetationScatterDeps } from "./vegetation.ts";
+import { registerGrassFieldSkill } from "./grass-field.ts";
 import { registerRenderSkills } from "./render.ts";
-import { registerWaterSkills, type WaterSurfaceState } from "./water.ts";
+import { registerWaterSkills, type WaterSkillState } from "./water.ts";
 import { ProceduralTerrainSource } from "../terrain/procedural.ts";
+import { SwappableTerrainSource } from "../terrain/swappable.ts";
 import { TileCache } from "../terrain/tilecache.ts";
 import type { TerrainSource } from "../terrain/types.ts";
 import { registerOrchestrationSkills } from "./orchestration.ts";
@@ -34,23 +41,40 @@ import type { AgentRegistry } from "../agents/agent.ts";
 import { registerPlayerSkills, type InputRegistry, type CharacterControllerRegistry } from "./player.ts";
 import { registerCameraSkills, type CameraManager } from "./camera.ts";
 import { registerAnimationSkills, type AnimationManager } from "./animation.ts";
-import { registerInteractionSkills, type InteractionManager } from "./interaction.ts";
-import { registerInventorySkills, type InventoryManager } from "./inventory.ts";
+import { registerInteractionSkills, InteractionManager } from "./interaction.ts";
+import { registerInventorySkills, InventoryManager } from "./inventory.ts";
 import { registerGameStateSkills, type GameStateManager } from "./gamestate.ts";
 import { registerTriggerEventSkills, type TriggerManager, type EventManager } from "./triggers.ts";
 import { registerCutsceneSkills, type CutsceneManager } from "./cutscene.ts";
 import { registerArchitectureSkills } from "./architecture.ts";
+import { registerBuildingSkills } from "./building/skill.ts";
+import { registerFunctionalBuildingSkills, type DoorAudio } from "./functional-building.ts";
+import { FunctionalBuildingTopologyManager } from "./functional-building-topology.ts";
+import { registerFunctionalSettlementSkills, type FunctionalSettlementPlacementManager } from "./functional-settlement.ts";
+import {
+  createResidentFunctionalSettlementTerrainSampler,
+  FunctionalSettlementReleaseHost,
+} from "./functional-settlement-live-host.ts";
+import { registerFurnitureSkills } from "./furniture.ts";
 import { registerDirectorSkills, type DirectorManager } from "./director.ts";
 import { registerAbilitySkills, type AbilityManager } from "./ability.ts";
 import { registerClipAuthorSkills, type ClipAuthor } from "./clip_author.ts";
 import { registerQuestSkills, type QuestManager } from "./quest.ts";
 import { registerCombatSkills, type StatsManager, type CombatManager } from "./combat.ts";
 import { registerBehaviorDialogueSkills, type BehaviorManager, type DialogueManager } from "./behavior.ts";
-import { registerNavmeshSkills, type NavmeshManager } from "./navmesh.ts";
+import { registerBehaviorSpecSkills, type EventSpecRegistry } from "./behavior-spec.ts";
+import { registerNavmeshSkills, NavmeshManager } from "./navmesh.ts";
+import { registerNavigationSkills, type GazetteerManager } from "./navigation.ts";
 import { registerVFXSkills, type VFXManager } from "./vfx.ts";
 import { registerSaveSkills, type SaveManager } from "./save.ts";
 import { registerProgressionSkills, type ProgressionManager } from "./progression.ts";
 import { registerWorldAudioExtensionSkills, type WorldStateManager, type BGMManager, type ReverbManager } from "./worldstate.ts";
+import { registerDesignSkills } from "./design.ts";
+import { registerGdsSkills } from "./gds.ts";
+import { WaterContactRuntime } from "../world/water-contact.ts";
+import type { GrassFieldVisualPackage } from "../render/grass-field-package.ts";
+import { buildCoreSnapshotParticipants } from "./snapshot-participants.ts";
+import type { SnapshotParticipantRegistry } from "../worldlog/snapshot.ts";
 
 /** Stateful helpers the core skill set builds and shares with its skills, handed
  *  back so a host/demo can drive them (the UiManager's per-frame tick, the M9
@@ -61,10 +85,18 @@ export interface CoreSkills {
   audio: AudioManager;
   locomotion: Locomotion;
   social: SocialRuntime;
-  terrain: { source: TerrainSource; cache: TileCache; regions: Map<string, RegionState> };
+  /** `layers` = the editable terrain.create slabs (terrain-edit state), exposed alongside the
+   *  streamed-path state so a client (runLive's Map Phase 3.3 view streaming) can see EVERY
+   *  recorded-terrain footprint and never double-mount ground the world already owns. */
+  terrain: { source: TerrainSource; cache: TileCache; regions: Map<string, RegionState>; layers: Map<string, EditableTerrain> };
+  /** D5.1 derived-terrain edit-layer seams. The host binds authority capabilities
+   *  (project-state reader, live topology resolver) after the authoring runtime exists. */
+  terrainEdit: { derived: DerivedTerrainEditDeps };
+  /** D5.4: host-bound composed-height field provider for vegetation.scatter on derived worlds. */
+  vegetation: { derived: DerivedVegetationScatterDeps };
   assets: AssetRegistry;
   materials: MaterialRegistry;
-  water: { surfaces: WaterSurfaceState[] };
+  water: WaterSkillState & { contact: WaterContactRuntime };
   /** Phase 12: player input and movement surface. */
   player: { input: InputRegistry; controllers: CharacterControllerRegistry };
   /** Phase 12: camera rigs and control. */
@@ -93,8 +125,20 @@ export interface CoreSkills {
   ability: { abilityManager: AbilityManager };
   /** Phase 12: NPC behavior and dialogue. */
   behavior: { behaviorManager: BehaviorManager; dialogueManager: DialogueManager };
+  /** Track B (B1): declarative behaviour/event RECORD FORMAT — the world-level event registry the
+   *  snapshot layer captures/restores (behavior.set + event.define authoring skills). */
+  behaviorSpec: { events: EventSpecRegistry };
   /** Phase 12: navigation and pathfinding. */
   nav: { navmeshManager: NavmeshManager };
+  /** FB-4 layered room/portal, acoustic, visibility-residency, and spawn authority. */
+  functionalBuildings: { topologyManager: FunctionalBuildingTopologyManager };
+  /** FB-5 exact released-settlement loading, streaming, and placement ownership. */
+  functionalSettlements: {
+    placementManager: FunctionalSettlementPlacementManager;
+    releaseHost: FunctionalSettlementReleaseHost;
+  };
+  /** Places Stage 4: the runtime named-place index (gazetteer.load + npc.goToPlace). */
+  navigation: { gazetteerManager: GazetteerManager };
   /** Phase 12: visual effects and particles. */
   vfx: { vfxManager: VFXManager };
   /** Phase 12: save, load, checkpoints. */
@@ -103,6 +147,11 @@ export interface CoreSkills {
   progression: { progressionManager: ProgressionManager };
   /** Phase 12: world dynamics (time, weather, spawn) and audio extensions (BGM, SFX, reverb). */
   worldstate: { worldStateManager: WorldStateManager; bgmManager: BGMManager; reverbManager: ReverbManager };
+  /** H2: every core manager owning runtime-mutated sim state, enrolled for snapshot
+   *  capture/restore — the ONE object hosts pass to captureWorldSnapshot /
+   *  restoreSnapshot / recoverWorld. The bucket-per-manager classification table
+   *  lives in skills/snapshot-participants.ts; a new manager must pick a bucket. */
+  snapshotParticipants: SnapshotParticipantRegistry;
 }
 
 export function registerCoreSkills(
@@ -120,6 +169,16 @@ export function registerCoreSkills(
     /** Phase 11: override the content-addressed asset registry (e.g. a pre-pinned
      *  curated registry). Default: a fresh registry over the host ops. */
     assets?: AssetRegistry;
+    /** Host-selected grass presentation. Placement and residency remain engine-owned. */
+    grassVisualPackage?: GrassFieldVisualPackage;
+    /** Test/host seam for functional-door positional one-shots; defaults to the shared AudioManager. */
+    functionalDoorAudio?: DoorAudio;
+    /**
+     * Exact resident-terrain authority required by settlement.placeFunctional. When omitted,
+     * core binds the live generated-region/editable-layer sampler and rejects uncovered points.
+     * Hosts with a separate derived-terrain residency window inject its current sampler here.
+     */
+    functionalSettlementSiteSampler?: (x: number, z: number) => number | undefined;
   },
 ): CoreSkills {
   // Phase 11 content-addressed asset seam: BOTH three.loadGLTF and asset.place
@@ -131,7 +190,12 @@ export function registerCoreSkills(
   // asset.scatter (registered below) shares the SAME deterministic source + cache the
   // terrain.* / world.* skills use — a scattered region matches the generated world,
   // and a replay re-resolves identical tiles. The terrain.* skills bind to them below.
-  const terrainSource: TerrainSource = opts?.terrainSource ?? new ProceduralTerrainSource();
+  // Map Phase 3.2: the bound source is wrapped in ONE SwappableTerrainSource holder so
+  // the RECORDED world.setTerrainSource skill can rebind it (procedural ⇄ map) and the
+  // swap propagates to every consumer (terrain.*, asset.scatter, water) at once. A world
+  // whose log never issues that command behaves byte-identically (pure delegation).
+  const terrainSource: TerrainSource = new SwappableTerrainSource(opts?.terrainSource ?? new ProceduralTerrainSource());
+  const waterContact = new WaterContactRuntime();
   const terrainCache = opts?.terrainCache ?? new TileCache();
   // The region table is shared by the terrain.* skills (which populate it in
   // world.generateRegion) and asset.scatter (which binds a scatter to a region by id,
@@ -142,17 +206,28 @@ export function registerCoreSkills(
   // (resolving + decoding images through the SAME content-addressed asset registry, so the
   // bytes ride the export); a replay re-runs the recorded import requests to rebuild it.
   const materials = new MaterialRegistry();
+  const inventoryManager=new InventoryManager(),interactionManager=new InteractionManager(),navmeshManager=new NavmeshManager(),audio=new AudioManager(),topologyManager=new FunctionalBuildingTopologyManager();
   registerSceneSkills(registry, materials);
   registerArchitectureSkills(registry);
+  registerBuildingSkills(registry);
   registerEcsSkills(registry);
   registerThreeSkills(registry, assets, materials);
-  registerAssetSkills(registry, assets, { source: terrainSource, cache: terrainCache, regions: terrainRegions });
+  // Editable heightfield layers (declared here so asset.place can GROUND-CONFORM to the sculpt; the
+  // terrain.* / village.build / vegetation skills below share this same map by reference).
+  const terrainLayers = new Map<string, EditableTerrain>();
+  registerAssetSkills(registry, assets, { source: terrainSource, cache: terrainCache, regions: terrainRegions }, terrainLayers);
+  registerFurnitureSkills(registry, assets);
   registerMaterialSkills(registry, assets, materials);
   registerPhysicsSkills(registry);
   registerAgentSkills(registry);
   registerSystemSkills(registry);
+  registerStudioSkills(registry);
   registerApprovalSkills(registry);
   registerAuditSkills(registry);
+  registerDesignSkills(registry);
+  // gds.plan — the game-director planning stage as a skill (read-computation over
+  // THIS registry's catalog: mechanic→skill mapping checks registry.has at invoke time).
+  registerGdsSkills(registry);
   // A4 UI surface: the `ui.*` skills author live containers against a shared
   // UiManager; the host ticks UiManager.update(camera,…) each frame.
   const ui = new UiManager();
@@ -160,7 +235,6 @@ export function registerCoreSkills(
   // Audio surface: the `audio.*` skills play synthesized SFX/ambience/positional
   // sound via the native limina-audio backend (op_audio_*). The host calls
   // op_audio_init() once and drives the per-frame listener sync (AudioManager).
-  const audio = new AudioManager();
   registerAudioSkills(registry, audio);
   // Embodied social surface: a shared walk-to-target Locomotion (also the
   // host-bound speaker -> entity resolver) + the social.* skills, which set move
@@ -185,7 +259,46 @@ export function registerCoreSkills(
   // with asset.scatter, along with the region table). A runtime can override the
   // source (model at authoring, cache at replay) via opts; the cache is the
   // snapshot/export-carried tile store.
-  registerTerrainSkills(registry, terrainSource, terrainCache, terrainRegions);
+  registerTerrainSkills(registry, terrainSource, terrainCache, terrainRegions, assets, waterContact);
+  // Shared settlement-footprint registry (keyed by terrain id): village.build fills it with the
+  // built ground's keep-out discs and vegetation.scatter auto-excludes them, so "build a village
+  // then scatter a forest" clears the buildings/courtyard/lane with no manual data-flow. Mirrors
+  // how terrainLayers is created here and shared across the terrain-editing skills.
+  const settlementFootprints = new Map<string, ScatterExclusion[]>();
+  // Shared VEGETATION-CLEAR registry (keyed by terrain id): each vegetation skill
+  // registers a re-mount closure that recomputes its placements against the terrain's CURRENT
+  // settlement footprints and swaps its instanced meshes. village.build invokes these AFTER it
+  // computes its footprints, so the canonical causal order — vegetation grows on the natural terrain
+  // FIRST, then civilization builds and CLEARS the veg on its footprints — renders correctly even
+  // when the veg commands run BEFORE village.build. Deterministic + replay-safe: the footprints and
+  // the placements are pure functions of the recorded ops, so the cleared set reproduces byte-for-
+  // byte on replay. (When veg runs AFTER village.build, the footprints already exist at mount time,
+  // so the initial mount is already cleared and the closure is a harmless no-op re-mount.)
+  const vegetationClears = new Map<string, Array<() => void | Promise<void>>>();
+  // Editable heightfield terrain: terrain.create (an owned, deformable ground layer) +
+  // terrain.deform (brush sculpt) + terrain.paint (surface material). Records ops, not bytes —
+  // replay reconstructs the heights/paint. vegetation.scatter reads the SAME live terrain-layer
+  // map to scatter a forest on the sculpt. The footprint + clear registries are shared so the
+  // PAINT-DRIVEN grass (blades wherever the paint channel says grass) honours settlement
+  // footprints exactly like vegetation.scatter / vegetation.grassField.
+  // D5.1 derived-terrain edit layers: ONE deps box the host binds authority
+  // capabilities into AFTER the authoring runtime exists (net/server.ts, browser
+  // authoring binding) — the terrain.deform derived path reads it at invoke time.
+  const derivedTerrainEdit: DerivedTerrainEditDeps = { layers: new Map(), paintLayers: new Map() };
+  registerTerrainEditSkills(registry, terrainLayers, assets, settlementFootprints, vegetationClears, waterContact, opts?.grassVisualPackage, derivedTerrainEdit);
+  // D5.4 derived-terrain scatter: ONE deps box the host binds the composed-height
+  // field provider into AFTER the authoring runtime exists (net/server.ts) — same
+  // late-binding contract as derivedTerrainEdit above.
+  const derivedVegetationScatter: DerivedVegetationScatterDeps = {};
+  registerVegetationSkills(registry, terrainLayers, assets, settlementFootprints, undefined, vegetationClears, derivedVegetationScatter);
+  // village.build: ONE skill that lays a terrain-aware settlement onto an editable
+  // terrain layer by placing curated library GLBs (via asset.place) at transforms from
+  // the SHARED, pure layout planner (world/pipeline/village-layout.mjs — same brain the
+  // preview uses). Records the direction/steering/seed + pinned hashes, not the transforms.
+  registerVillageSkills(registry, terrainLayers, assets, settlementFootprints, vegetationClears, opts?.grassVisualPackage);
+  // vegetation.grassField is the sole public grass authoring path. Placement and residency stay
+  // engine-owned while the injected package owns geometry, material, silhouette, and blade budget.
+  registerGrassFieldSkill(registry, terrainLayers, settlementFootprints, vegetationClears, {}, opts?.grassVisualPackage);
   // Opt-in, render-only post-processing seam: `render.enablePost` builds the GTAO/bloom/
   // grade pipeline on the live renderer and stows it on world.post (static/cinematic — see
   // render.ts). Render-only; never sim/log state.
@@ -199,7 +312,8 @@ export function registerCoreSkills(
   // from the field the terrain was generated with, and absent one the depth is auto-derived
   // from the regions already generated in this world (the camera-distance proxy is used only
   // when there is no terrain at all). Read-only — never sim/ECS/log state.
-  const water = registerWaterSkills(registry, terrainSource, terrainRegions);
+  const renderWater = registerWaterSkills(registry, terrainSource, terrainRegions, terrainLayers, assets);
+  const water = { ...renderWater, contact: waterContact };
   // Phase 10 chunk C: the coordinator/delegate surface. Only wired when a provider
   // map is supplied (the worker loop needs real providers); without it the engine
   // behaves exactly as before — no `delegate` skill registered.
@@ -209,13 +323,13 @@ export function registerCoreSkills(
   // Phase 12: playable game skills — player, camera, animation, interaction,
   // inventory, game state, triggers/events, quests, combat/stats, behavior/dialogue,
   // navigation, VFX, save/load, progression, world state, and audio extensions.
-  const player = registerPlayerSkills(registry);
+  const player = registerPlayerSkills(registry, { waterContact });
   const camera = registerCameraSkills(registry);
   const animation = registerAnimationSkills(registry);
-  const inventory = registerInventorySkills(registry);
+  const inventory = registerInventorySkills(registry,{inventoryManager});
   // interaction.pickup/drop reach into the inventory manager, so it must be created
   // first and passed in (closure-bound cross-dep, like social ← ui/locomotion).
-  const interaction = registerInteractionSkills(registry, { inventoryManager: inventory.inventoryManager });
+  const interaction = registerInteractionSkills(registry, { inventoryManager: inventory.inventoryManager,interactionManager });
   const gamestate = registerGameStateSkills(registry);
   const triggers = registerTriggerEventSkills(registry);
   const cutscene = registerCutsceneSkills(registry);
@@ -226,17 +340,64 @@ export function registerCoreSkills(
   // ability.cast spends from a resource stat, so it binds the combat stats manager (closure dep).
   const ability = registerAbilitySkills(registry, { statsManager: combat.statsManager });
   const behavior = registerBehaviorDialogueSkills(registry);
-  const nav = registerNavmeshSkills(registry);
+  // Track B (B1): the declarative behaviour/event record-format authoring seam. Owns the
+  // world-level EventSpecRegistry the snapshot bakes/restores; behavior.set writes first-class
+  // entity behaviour. Distinct from the NPC-manager `behavior.*` above (that is the runtime brain
+  // seam; this is the portable record format the world log / snapshot carry).
+  const behaviorSpec = registerBehaviorSpecSkills(registry);
+  const nav = registerNavmeshSkills(registry,{navmeshManager});
+  registerFunctionalBuildingSkills(registry,assets,{interaction:interaction.interactionManager,inventory:inventory.inventoryManager,audio:opts?.functionalDoorAudio??audio,nav:nav.navmeshManager,topology:topologyManager});
+  const functionalSettlementSiteSampler = opts?.functionalSettlementSiteSampler
+    ?? createResidentFunctionalSettlementTerrainSampler({ source: terrainSource, regions: terrainRegions, layers: terrainLayers });
+  const functionalSettlementPlacementManager = registerFunctionalSettlementSkills(registry, assets, { sampleHeight: functionalSettlementSiteSampler });
+  const navigation = registerNavigationSkills(registry);
   const vfx = registerVFXSkills(registry);
   const save = registerSaveSkills(registry);
   const progression = registerProgressionSkills(registry);
   const worldstate = registerWorldAudioExtensionSkills(registry);
+  // H2: enroll every runtime-mutated sim-state manager as a snapshot participant
+  // (classification table + schemas: skills/snapshot-participants.ts). Hosts pass
+  // this one registry to captureWorldSnapshot/restoreSnapshot/recoverWorld.
+  const snapshotParticipants = buildCoreSnapshotParticipants({
+    inventoryManager: inventory.inventoryManager,
+    interactionManager: interaction.interactionManager,
+    gameStateManager: gamestate.gameStateManager,
+    triggerManager: triggers.triggerManager,
+    eventManager: triggers.eventManager,
+    questManager: quest.questManager,
+    statsManager: combat.statsManager,
+    combatManager: combat.combatManager,
+    abilityManager: ability.abilityManager,
+    navmeshManager: nav.navmeshManager,
+    progressionManager: progression.progressionManager,
+    worldStateManager: worldstate.worldStateManager,
+    gazetteerManager: navigation.gazetteerManager,
+    cutsceneManager: cutscene.cutsceneManager,
+    directorManager: director.directorManager,
+    behaviorManager: behavior.behaviorManager,
+    dialogueManager: behavior.dialogueManager,
+    functionalSettlementPlacementManager,
+    eventSpecs: behaviorSpec.events,
+  });
+  const functionalSettlementReleaseHost = new FunctionalSettlementReleaseHost(
+    registry,
+    assets,
+    functionalSettlementPlacementManager,
+    snapshotParticipants,
+  );
   return {
     packages, ui, locomotion, social, audio,
-    terrain: { source: terrainSource, cache: terrainCache, regions: terrainRegions },
+    terrain: { source: terrainSource, cache: terrainCache, regions: terrainRegions, layers: terrainLayers },
+    terrainEdit: { derived: derivedTerrainEdit },
+    vegetation: { derived: derivedVegetationScatter },
     assets, materials, water,
     player, camera, animation, interaction, inventory,
     gamestate, triggers, cutscene, director, clips, quest, combat, ability, behavior,
-    nav, vfx, save, progression, worldstate,
+    behaviorSpec,
+    nav, functionalBuildings: { topologyManager }, functionalSettlements: {
+      placementManager: functionalSettlementPlacementManager,
+      releaseHost: functionalSettlementReleaseHost,
+    }, navigation, vfx, save, progression, worldstate,
+    snapshotParticipants,
   };
 }

@@ -22,6 +22,7 @@ import { LiminaTracer, type Tracer } from "../observability/event.ts";
 import type { SkillRegistry, WorldContext } from "../skills/registry.ts";
 import {
   captureWorldState,
+  getInstalledSkillRng,
   installSeededRandom,
   parseWorldLog,
   PHYSICS_OP_FN,
@@ -30,6 +31,7 @@ import {
   type WorldCommand,
   type WorldStateSnapshot,
 } from "./log.ts";
+import { assertReplayable } from "./verify.ts";
 
 export interface ReplayDeps {
   /** Build a fresh, empty world (new bitECS world + entity table + stub or real
@@ -61,8 +63,9 @@ export async function replayCommands(commands: WorldCommand[], deps: ReplayDeps)
   const registry = deps.makeRegistry(tracer);
   const world = deps.makeWorld();
 
-  // Fresh transform storage: the SoA arrays are module globals, so zero them so
-  // a not-rebuilt entity is detectably wrong rather than carrying stale values.
+  // Fresh transform storage: zero the ACTIVE world's SoA so a not-rebuilt entity
+  // is detectably wrong rather than carrying stale values. (Single-world replay
+  // runs against the default store; a multi-world caller activates first.)
   Position.x.fill(0); Position.y.fill(0); Position.z.fill(0);
   Rotation.x.fill(0); Rotation.y.fill(0); Rotation.z.fill(0); Rotation.w.fill(0);
   Scale.x.fill(0); Scale.y.fill(0); Scale.z.fill(0);
@@ -75,7 +78,12 @@ export async function replayCommands(commands: WorldCommand[], deps: ReplayDeps)
 
   for (const cmd of commands) {
     if (cmd.kind === "seed") {
-      installSeededRandom(cmd.seed);
+      // Each replay stands up a FRESH world, so re-seeding the module-singleton RNG
+      // is intentional here -- force=true declares that (see installSeededRandom).
+      // Both streams reinstall: the global Math.random slot AND the world-owned
+      // skill stream, which replayed skill handlers draw via ctx.world.rng.
+      installSeededRandom(cmd.seed, true);
+      world.rng = getInstalledSkillRng();
       seeds++;
       continue;
     }
@@ -97,14 +105,22 @@ export async function replayCommands(commands: WorldCommand[], deps: ReplayDeps)
       continue;
     }
     // cmd.kind === "skill": re-apply the recorded tool call (agent or scripted).
-    await registry.invoke(cmd.tool, cmd.input, {
+    // `profile` is forwarded so a recorder attached to the replaying registry
+    // (rehydrate-style callers) re-records the same profile pin the log carried.
+    const response = await registry.invoke(cmd.tool, cmd.input, {
       agentId: cmd.actorId,
       sessionId: cmd.sessionId,
       permissions: new Set(cmd.perms),
+      profile: cmd.profile,
       tick: cmd.tick,
       world,
       causedBy: [],
     });
+    if (!response.success) {
+      const code = response.error?.code ?? "unknown";
+      const message = response.error?.message ?? "skill invocation failed";
+      throw new Error(`world replay: command seq ${cmd.seq} tool ${cmd.tool} failed (${code}): ${message}`);
+    }
     skillInvokes++;
   }
 
@@ -121,7 +137,18 @@ export async function replayCommands(commands: WorldCommand[], deps: ReplayDeps)
   };
 }
 
-/** Replay from a persisted JSONL world log -- the disk-only recovery path. */
+/** Replay from a persisted JSONL world log -- the disk-only recovery path.
+ *
+ *  A persisted log is UNTRUSTED input (it may be truncated, reordered, or corrupted
+ *  on disk), so before replaying we assert it is well-formed: unique + contiguous
+ *  seqs and a well-positioned seed (see assertReplayable), throwing a clear error
+ *  rather than silently reconstructing a wrong world. The guard lives HERE, at the
+ *  persisted-log boundary -- NOT in replayCommands -- so the low-level in-memory
+ *  primitive stays usable for controlled tamper/falsifiability probes (which feed it
+ *  deliberately-perturbed streams and assert DIVERGENCE), and so parseWorldLog stays
+ *  a lenient parser the structural verifier (verifyWorldLog) can report on. */
 export async function replayWorldLog(jsonl: string, deps: ReplayDeps): Promise<ReplayResult> {
-  return replayCommands(parseWorldLog(jsonl).commands, deps);
+  const commands = parseWorldLog(jsonl).commands;
+  assertReplayable(commands);
+  return replayCommands(commands, deps);
 }

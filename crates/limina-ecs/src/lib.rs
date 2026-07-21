@@ -19,9 +19,25 @@
 //! queries answered in parallel over DISJOINT output slices, so the result is
 //! independent of the rayon thread count.
 
-use deno_core::{extension, op2};
+use deno_core::{extension, op2, OpState};
+use deno_error::JsErrorBox;
 use rayon::prelude::*;
 use std::collections::HashMap;
+
+const MAX_ENTITIES: usize = 1_000_000;
+const MAX_QUERIES: usize = 65_536;
+const MAX_HITS_PER_QUERY: usize = 1_000_000;
+const MIN_CELL_SIZE: f64 = 0.001;
+const MAX_CELL_SIZE: f64 = 1_000_000.0;
+const MAX_QUERY_RADIUS: f64 = 1_000_000.0;
+const MAX_CELLS_PER_QUERY: u128 = 1_000_000;
+/// Aggregate cell budget across ALL queries in one batch. MAX_QUERIES and
+/// MAX_CELLS_PER_QUERY are each enforced per-query, but their PRODUCT
+/// (65_536 * 1_000_000 ≈ 6.5e10) is not — one call could otherwise request tens of
+/// billions of grid probes in the synchronous triple loop below, freezing the V8
+/// thread (no interrupt handler here) for minutes to hours. Bound the sum so total
+/// work per batch is capped regardless of how the budget is split across queries.
+const MAX_TOTAL_CELLS_PER_BATCH: u128 = 4_000_000;
 
 /// Batched native uniform-grid radius query.
 ///
@@ -37,6 +53,7 @@ use std::collections::HashMap;
 #[op2(fast)]
 #[allow(clippy::too_many_arguments)]
 pub fn op_ecs_spatial_query_batch(
+    state: &mut OpState,
     #[buffer] px: &[f32],
     #[buffer] py: &[f32],
     #[buffer] pz: &[f32],
@@ -45,19 +62,193 @@ pub fn op_ecs_spatial_query_batch(
     #[buffer] queries: &[f64],
     max_hits: u32,
     #[buffer] out: &mut [u32],
-) {
+) -> Result<(), JsErrorBox> {
+    // Thin op wrapper: the `#[op2]` macro scopes the op type inside a generated
+    // `const fn`, so the pure logic lives in a module-level fn that unit tests can
+    // call directly (no JS runtime needed).
+    if state.try_borrow::<SpatialScratch>().is_none() {
+        state.put(SpatialScratch::default());
+    }
+    let scratch = state.borrow_mut::<SpatialScratch>();
+    spatial_query_batch(
+        scratch,
+        px,
+        py,
+        pz,
+        ordered_eids,
+        cell_size,
+        queries,
+        max_hits,
+        out,
+    )
+}
+
+/// Reusable build buffers for the uniform grid, held in `OpState` so the batch
+/// query does not allocate 5 fresh Vecs plus an up-to-1M-entry HashMap on every
+/// call. The grid CONTENTS are still rebuilt from the live positions each call
+/// (entities move between ticks; results must be identical to a from-scratch
+/// build) — only the allocations persist. Retained capacity is bounded by
+/// `MAX_ENTITIES`.
+#[derive(Default)]
+struct SpatialScratch {
+    rx: Vec<f64>,
+    ry: Vec<f64>,
+    rz: Vec<f64>,
+    cell_of: Vec<u32>,
+    cell_map: HashMap<(i64, i64, i64), u32>,
+    counts: Vec<u32>,
+    starts: Vec<u32>,
+    cursor: Vec<u32>,
+    sorted: Vec<u32>,
+}
+
+/// Pure implementation of the batched uniform-grid radius query (see the op doc
+/// above). Kept separate from the op so it is directly unit-testable.
+#[allow(clippy::too_many_arguments)]
+fn spatial_query_batch(
+    scratch: &mut SpatialScratch,
+    px: &[f32],
+    py: &[f32],
+    pz: &[f32],
+    ordered_eids: &[u32],
+    cell_size: f64,
+    queries: &[f64],
+    max_hits: u32,
+    out: &mut [u32],
+) -> Result<(), JsErrorBox> {
     let n = ordered_eids.len();
     let max_hits = max_hits as usize;
-    let stride = 1 + max_hits;
+    if n > MAX_ENTITIES {
+        return Err(JsErrorBox::generic(format!(
+            "spatial_query_batch: entity count {n} exceeds {MAX_ENTITIES}"
+        )));
+    }
+    if !cell_size.is_finite() || !(MIN_CELL_SIZE..=MAX_CELL_SIZE).contains(&cell_size) {
+        return Err(JsErrorBox::generic(format!(
+            "spatial_query_batch: cell_size must be finite and in [{MIN_CELL_SIZE}, {MAX_CELL_SIZE}]"
+        )));
+    }
+    if !queries.len().is_multiple_of(5) {
+        return Err(JsErrorBox::type_error(
+            "spatial_query_batch: queries length must be a multiple of 5",
+        ));
+    }
+    let k = queries.len() / 5;
+    if k > MAX_QUERIES {
+        return Err(JsErrorBox::generic(format!(
+            "spatial_query_batch: query count {k} exceeds {MAX_QUERIES}"
+        )));
+    }
+    if max_hits > MAX_HITS_PER_QUERY {
+        return Err(JsErrorBox::generic(format!(
+            "spatial_query_batch: max_hits {max_hits} exceeds {MAX_HITS_PER_QUERY}"
+        )));
+    }
+    let stride = 1usize
+        .checked_add(max_hits)
+        .ok_or_else(|| JsErrorBox::generic("spatial_query_batch: output stride overflow"))?;
+    let required_out = k
+        .checked_mul(stride)
+        .ok_or_else(|| JsErrorBox::generic("spatial_query_batch: output length overflow"))?;
+
+    // Validate the array-length invariants ONCE, here at the op boundary, before
+    // the sequential build and the parallel query region. A desync between
+    // `ordered_eids` and the Position SoA (a short/stale array handed over from
+    // JS) would otherwise be an out-of-bounds panic mid-frame; instead surface a
+    // clean error to JS. After these checks every `ordered_eids[..]` index into
+    // px/py/pz is in bounds, so the hot loops can index unchecked.
+    if px.len() != py.len() || px.len() != pz.len() {
+        return Err(JsErrorBox::type_error(format!(
+            "spatial_query_batch: position SoA arrays must be equal length (px={}, py={}, pz={})",
+            px.len(),
+            py.len(),
+            pz.len(),
+        )));
+    }
+    let pos_len = px.len();
+    for &eid in ordered_eids {
+        let index = eid as usize;
+        if index >= pos_len {
+            return Err(JsErrorBox::type_error(format!(
+                "spatial_query_batch: eid {eid} out of bounds for position SoA of length {pos_len}"
+            )));
+        }
+        let (x, y, z) = (px[index], py[index], pz[index]);
+        if !x.is_finite() || !y.is_finite() || !z.is_finite() {
+            return Err(JsErrorBox::generic(format!(
+                "spatial_query_batch: non-finite position at active eid {eid}"
+            )));
+        }
+    }
+
+    let mut total_cells = 0u128;
+    for (q, query) in queries.chunks_exact(5).enumerate() {
+        let [nx, ny, nz, radius, exclude] = [query[0], query[1], query[2], query[3], query[4]];
+        if !nx.is_finite() || !ny.is_finite() || !nz.is_finite() {
+            return Err(JsErrorBox::generic(format!(
+                "spatial_query_batch: query {q} center must be finite"
+            )));
+        }
+        if !radius.is_finite() || !(0.0..=MAX_QUERY_RADIUS).contains(&radius) {
+            return Err(JsErrorBox::generic(format!(
+                "spatial_query_batch: query {q} radius must be finite and in [0, {MAX_QUERY_RADIUS}]"
+            )));
+        }
+        if !exclude.is_finite()
+            || (exclude >= 0.0 && (exclude.fract() != 0.0 || exclude > u32::MAX as f64))
+        {
+            return Err(JsErrorBox::range_error(format!(
+                "spatial_query_batch: query {q} excludeEid must be negative or an exact u32"
+            )));
+        }
+        let mins = [nx - radius, ny - radius, nz - radius];
+        let maxs = [nx + radius, ny + radius, nz + radius];
+        let mut cells = 1u128;
+        for axis in 0..3 {
+            let lo = (mins[axis] / cell_size).floor();
+            let hi = (maxs[axis] / cell_size).floor();
+            if lo < i64::MIN as f64 || hi > i64::MAX as f64 {
+                return Err(JsErrorBox::generic(format!(
+                    "spatial_query_batch: query {q} cell coordinate exceeds i64 range"
+                )));
+            }
+            let span = (hi as i128 - lo as i128 + 1) as u128;
+            cells = cells.saturating_mul(span);
+        }
+        if cells > MAX_CELLS_PER_QUERY {
+            return Err(JsErrorBox::generic(format!(
+                "spatial_query_batch: query {q} spans {cells} cells, cap is {MAX_CELLS_PER_QUERY}"
+            )));
+        }
+        total_cells = total_cells.saturating_add(cells);
+        if total_cells > MAX_TOTAL_CELLS_PER_BATCH {
+            return Err(JsErrorBox::generic(format!(
+                "spatial_query_batch: batch spans {total_cells}+ cells across queries, aggregate cap is {MAX_TOTAL_CELLS_PER_BATCH}"
+            )));
+        }
+    }
 
     // Record coords (f32 -> f64, matching JS reads) and the dense cell index of
     // each record. `cell_map` densifies the distinct cells actually occupied.
-    let mut rx = vec![0f64; n];
-    let mut ry = vec![0f64; n];
-    let mut rz = vec![0f64; n];
-    let mut cell_of = vec![0u32; n];
-    let mut cell_map: HashMap<(i64, i64, i64), u32> = HashMap::with_capacity(n);
-    let mut counts: Vec<u32> = Vec::new();
+    // Buffers come from the persistent scratch: every slot in [0..n) is written
+    // below, so `resize` + full overwrite reproduces a from-scratch build exactly.
+    let SpatialScratch {
+        rx,
+        ry,
+        rz,
+        cell_of,
+        cell_map,
+        counts,
+        starts,
+        cursor,
+        sorted,
+    } = scratch;
+    rx.resize(n, 0.0);
+    ry.resize(n, 0.0);
+    rz.resize(n, 0.0);
+    cell_of.resize(n, 0);
+    cell_map.clear();
+    counts.clear();
     for order in 0..n {
         let eid = ordered_eids[order] as usize;
         let x = px[eid] as f64;
@@ -83,21 +274,33 @@ pub fn op_ecs_spatial_query_batch(
     // ascending `order` so every cell's slice in `sorted` is order-ascending
     // (== JS `bucket.sort(compareRecordOrder)`).
     let num_cells = counts.len();
-    let mut starts = vec![0u32; num_cells + 1];
+    starts.clear();
+    starts.resize(num_cells + 1, 0);
     for c in 0..num_cells {
         starts[c + 1] = starts[c] + counts[c];
     }
-    let mut cursor: Vec<u32> = starts[..num_cells].to_vec();
-    let mut sorted = vec![0u32; n];
+    cursor.clear();
+    cursor.extend_from_slice(&starts[..num_cells]);
+    sorted.resize(n, 0);
     for (order, &cidx) in cell_of.iter().enumerate() {
         let c = cidx as usize;
         sorted[cursor[c] as usize] = order as u32;
         cursor[c] += 1;
     }
 
-    let k = queries.len() / 5;
+    // `out` must hold one `stride`-wide chunk per query; a mis-sized buffer would
+    // otherwise silently truncate (`take(k)`) or write past the end. Check up front.
+    if out.len() < required_out {
+        return Err(JsErrorBox::type_error(format!(
+            "spatial_query_batch: out buffer too small (need {} u32 for {k} queries, got {})",
+            required_out,
+            out.len(),
+        )));
+    }
     // One query per output chunk; chunks are disjoint, so parallelism never
     // affects the result (each query is an independent pure function).
+    let (rx, ry, rz) = (&*rx, &*ry, &*rz);
+    let (cell_map, starts, sorted) = (&*cell_map, &*starts, &*sorted);
     out.par_chunks_mut(stride)
         .take(k)
         .enumerate()
@@ -130,8 +333,6 @@ pub fn op_ecs_spatial_query_batch(
                     }
                 }
             }
-            candidates.sort_unstable();
-
             let mut hits: Vec<(f64, u32, u32)> = Vec::new(); // (distance, order, eid)
             for &order in &candidates {
                 let oi = order as usize;
@@ -149,12 +350,9 @@ pub fn op_ecs_spatial_query_batch(
                 hits.push((distance, order, eid));
             }
             // (distance asc, then order asc) == V8 stable sort by distance over an
-            // order-ascending input.
-            hits.sort_by(|a, b| {
-                a.0.partial_cmp(&b.0)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then(a.1.cmp(&b.1))
-            });
+            // order-ascending input. `f64::total_cmp` is a TOTAL order, so this is
+            // well-defined. Boundary validation guarantees finite distances.
+            hits.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
 
             let count = hits.len();
             slot[0] = count as u32;
@@ -163,6 +361,237 @@ pub fn op_ecs_spatial_query_batch(
                 slot[1 + i] = hit.2;
             }
         });
+
+    Ok(())
 }
 
 extension!(limina_ecs, ops = [op_ecs_spatial_query_batch],);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oob_or_mismatched_input_errors_without_panicking() {
+        let mut scratch = SpatialScratch::default();
+        // An eid past the end of the Position SoA must error, not OOB-panic.
+        let px = [0.0f32];
+        let py = [0.0f32];
+        let pz = [0.0f32];
+        let ordered_eids = [0u32, 5u32]; // 5 is out of bounds for len-1 arrays
+        let queries = [0.0f64, 0.0, 0.0, 10.0, -1.0];
+        let mut out = vec![0u32; 1 + 4];
+        assert!(spatial_query_batch(
+            &mut scratch,
+            &px,
+            &py,
+            &pz,
+            &ordered_eids,
+            8.0,
+            &queries,
+            4,
+            &mut out
+        )
+        .is_err());
+
+        // A short/stale (mismatched-length) SoA must error too.
+        let px = [0.0f32, 1.0];
+        let py = [0.0f32];
+        let pz = [0.0f32, 1.0];
+        let ordered_eids = [0u32];
+        let mut out = vec![0u32; 5];
+        assert!(spatial_query_batch(
+            &mut scratch,
+            &px,
+            &py,
+            &pz,
+            &ordered_eids,
+            8.0,
+            &queries,
+            4,
+            &mut out
+        )
+        .is_err());
+
+        // An undersized `out` buffer must error rather than truncate/overrun.
+        let px = [0.0f32];
+        let py = [0.0f32];
+        let pz = [0.0f32];
+        let ordered_eids = [0u32];
+        let mut out = vec![0u32; 3]; // need 1 * (1 + 4) = 5
+        assert!(spatial_query_batch(
+            &mut scratch,
+            &px,
+            &py,
+            &pz,
+            &ordered_eids,
+            8.0,
+            &queries,
+            4,
+            &mut out
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn small_query_returns_expected_sorted_neighbors() {
+        let mut scratch = SpatialScratch::default();
+        // Three entities; only the two within radius 5 of the origin should hit,
+        // ordered by ascending distance (eid 0 at d=0, then eid 1 at d=1).
+        let px = [0.0f32, 1.0, 100.0];
+        let py = [0.0f32, 0.0, 0.0];
+        let pz = [0.0f32, 0.0, 0.0];
+        let ordered_eids = [0u32, 1, 2];
+        let queries = [0.0f64, 0.0, 0.0, 5.0, -1.0];
+        let mut out = vec![0u32; 1 + 4];
+        spatial_query_batch(
+            &mut scratch,
+            &px,
+            &py,
+            &pz,
+            &ordered_eids,
+            8.0,
+            &queries,
+            4,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(out[0], 2); // true hit count
+        assert_eq!(&out[1..3], &[0u32, 1u32]); // nearest-first eids
+
+        // Reusing the SAME scratch across calls (including after a differently
+        // shaped world) must reproduce a from-scratch build bit-identically.
+        let px2 = [3.0f32, 0.0, 1.0, 100.0];
+        let py2 = [0.0f32, 0.0, 0.0, 0.0];
+        let pz2 = [0.0f32, 0.0, 0.0, 0.0];
+        let ordered2 = [0u32, 1, 2, 3];
+        let mut out2 = vec![0u32; 1 + 4];
+        spatial_query_batch(
+            &mut scratch,
+            &px2,
+            &py2,
+            &pz2,
+            &ordered2,
+            8.0,
+            &queries,
+            4,
+            &mut out2,
+        )
+        .unwrap();
+        let mut fresh = SpatialScratch::default();
+        let mut out3 = vec![0u32; 1 + 4];
+        spatial_query_batch(
+            &mut fresh, &px2, &py2, &pz2, &ordered2, 8.0, &queries, 4, &mut out3,
+        )
+        .unwrap();
+        assert_eq!(out2, out3, "reused scratch must match a fresh build");
+        assert_eq!(out2[0], 3);
+        assert_eq!(&out2[1..4], &[1u32, 2, 0]); // nearest-first eids
+    }
+
+    #[test]
+    fn malformed_geometry_is_rejected_before_query_loops() {
+        let mut scratch = SpatialScratch::default();
+        let px = [0.0f32, f32::NAN, 1.0];
+        let py = [0.0f32, 0.0, 0.0];
+        let pz = [0.0f32, 0.0, 0.0];
+        let ordered_eids = [0u32, 1, 2];
+        let queries = [0.0f64, 0.0, 0.0, 100.0, -1.0];
+        let mut out = vec![0u32; 5];
+        assert!(spatial_query_batch(
+            &mut scratch,
+            &px,
+            &py,
+            &pz,
+            &ordered_eids,
+            8.0,
+            &queries,
+            4,
+            &mut out
+        )
+        .is_err());
+
+        let finite = [0.0f32, 1.0, 2.0];
+        assert!(spatial_query_batch(
+            &mut scratch,
+            &finite,
+            &py,
+            &pz,
+            &ordered_eids,
+            0.0,
+            &queries,
+            4,
+            &mut out
+        )
+        .is_err());
+        assert!(spatial_query_batch(
+            &mut scratch,
+            &finite,
+            &py,
+            &pz,
+            &ordered_eids,
+            8.0,
+            &[0.0, 0.0],
+            4,
+            &mut out
+        )
+        .is_err());
+        let huge = [0.0, 0.0, 0.0, MAX_QUERY_RADIUS, -1.0];
+        assert!(spatial_query_batch(
+            &mut scratch,
+            &finite,
+            &py,
+            &pz,
+            &ordered_eids,
+            MIN_CELL_SIZE,
+            &huge,
+            4,
+            &mut out
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn aggregate_cell_budget_is_enforced_across_queries() {
+        // Each query spans ~97^3 ≈ 912k cells — individually UNDER MAX_CELLS_PER_QUERY,
+        // but five of them sum to ~4.56M, over MAX_TOTAL_CELLS_PER_BATCH. Without the
+        // aggregate cap this is the ~6.5e10 DoS in miniature: many legal-looking queries
+        // whose total work is unbounded. Must be rejected before the query loop runs.
+        let mut scratch = SpatialScratch::default();
+        let finite = [0.0f32, 1.0, 2.0];
+        let py = [0.0f32, 0.0, 0.0];
+        let pz = [0.0f32, 0.0, 0.0];
+        let ordered_eids = [0u32, 1, 2];
+        let mut queries = Vec::new();
+        for _ in 0..5 {
+            queries.extend_from_slice(&[0.0f64, 0.0, 0.0, 48.0, -1.0]);
+        }
+        let mut out = vec![0u32; 64];
+        let err = spatial_query_batch(
+            &mut scratch,
+            &finite,
+            &py,
+            &pz,
+            &ordered_eids,
+            1.0,
+            &queries,
+            4,
+            &mut out,
+        );
+        assert!(err.is_err(), "aggregate cell budget must reject the batch");
+        assert!(
+            err.unwrap_err().to_string().contains("aggregate cap"),
+            "error must name the aggregate cap"
+        );
+
+        // A single query of the SAME per-query size stays well under the aggregate cap.
+        let one = [0.0f64, 0.0, 0.0, 48.0, -1.0];
+        assert!(
+            spatial_query_batch(
+                &mut scratch, &finite, &py, &pz, &ordered_eids, 1.0, &one, 4, &mut out
+            )
+            .is_ok(),
+            "a single in-budget query must still succeed"
+        );
+    }
+}

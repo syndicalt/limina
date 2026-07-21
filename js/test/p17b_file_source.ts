@@ -19,7 +19,7 @@ function assert(cond: boolean, msg: string): asserts cond {
   if (!cond) throw new Error("p17b_file_source FAIL: " + msg);
 }
 
-const FIXTURE = "cactus.glb"; // a committed asset at the root of <cwd>/assets
+const FIXTURE = "fixtures/mesh.glb"; // a committed synthetic fixture under <cwd>/assets/fixtures
 const expected = ops.op_read_asset(FIXTURE);
 assert(expected instanceof Uint8Array && expected.length > 0, "fixture asset must exist on disk");
 

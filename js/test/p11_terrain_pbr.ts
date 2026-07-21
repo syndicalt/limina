@@ -20,7 +20,7 @@
 //
 // Run: limina js/test/p11_terrain_pbr.ts   (exit 0 = pass)
 
-import { buildTerrainMesh } from "../src/terrain/render.ts";
+import { buildTerrainMesh, disposeTerrainMesh } from "../src/terrain/render.ts";
 import { ProceduralTerrainSource, TILE_RES } from "../src/terrain/procedural.ts";
 import { terrainTypeHints } from "../src/terrain/terrain-types.ts";
 import { ops } from "../src/engine.ts";
@@ -87,6 +87,12 @@ const pbr = buildTerrainMesh(tile, {
 const pm = pbr.material as any;
 assert(isSet(pm.colorNode) && isSet(pm.normalNode) && isSet(pm.roughnessNode), "pbr must set colorNode + normalNode + roughnessNode");
 assert(pbr.geometry.getAttribute("position").count === tile.nrows * tile.ncols, "pbr geometry vertex count wrong");
+const pbrOwnedTextures = pm.userData?.liminaOwnedTextures as { dispose?: () => void }[] | undefined;
+assert(Array.isArray(pbrOwnedTextures) && pbrOwnedTextures.length === 1, "pbr material must track its baked climate texture for disposal");
+let pbrTextureDisposes = 0;
+for (const tex of pbrOwnedTextures) tex.dispose = () => { pbrTextureDisposes++; };
+disposeTerrainMesh(pbr);
+assert(pbrTextureDisposes === 1, "disposeTerrainMesh must dispose the pbr climate texture");
 
 const cn = collect(pm.colorNode);
 const nn = collect(pm.normalNode);

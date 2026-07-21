@@ -51,7 +51,7 @@ ops.op_physics_add_ground(-50);
 
 const tracer = new LiminaTracer("ses_audit");
 const engine = new PolicyEngine();
-engine.setQuota({ cap: "physics.applyImpulse", perSession: true, limit: 2, windowMs: 60_000 });
+engine.setQuota({ cap: "physics.applyImpulse", perSession: true, limit: 2, windowTicks: 60_000 });
 const ctx = createHeadlessContext({ tracer, policy: engine });
 const registry = ctx.registry;
 const world = ctx.world;

@@ -1,0 +1,275 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+import { validateFurnitureDesignContract } from "../../js/src/architecture/furniture-design-contract.ts";
+import {
+  validateVisualDesignContract,
+  visualDesignContractHash,
+} from "../../js/src/architecture/visual-design-contract.ts";
+import { buildDiningChairV1Contract, createDiningChairV1Contract } from "./create-dining-chair-v1-contract.mjs";
+
+const visual = validateVisualDesignContract(
+  JSON.parse(
+    await readFile(
+      new URL("../../art-direction/furniture/dining-chair-v1-visual-design.json", import.meta.url),
+      "utf8",
+    ),
+  ),
+);
+const contract = buildDiningChairV1Contract(visual),
+  parts = new Map(contract.parts.map((part) => [part.id, part])),
+  DEG = Math.PI / 180;
+function localHalf(part) {
+  const geometry = part.geometry;
+  if (part.kind === "shaped-board" || part.kind === "panel") return geometry.size.map((value) => value / 2);
+  if (part.kind === "tapered-member")
+    return [
+      Math.max(geometry.bottomSection[0], geometry.topSection[0]) / 2,
+      geometry.lengthM / 2,
+      Math.max(geometry.bottomSection[1], geometry.topSection[1]) / 2,
+    ];
+  if (part.kind === "peg")
+    return geometry.axis === "x"
+      ? [geometry.lengthM / 2, geometry.diameterM / 2, geometry.diameterM / 2]
+      : geometry.axis === "y"
+        ? [geometry.diameterM / 2, geometry.lengthM / 2, geometry.diameterM / 2]
+        : [geometry.diameterM / 2, geometry.diameterM / 2, geometry.lengthM / 2];
+  throw new Error(`unsupported test geometry ${part.kind}`);
+}
+function bounds(part) {
+  const [hx, hy, hz] = localHalf(part),
+    rx = part.rotationDeg[0] * DEG,
+    c = Math.abs(Math.cos(rx)),
+    s = Math.abs(Math.sin(rx)),
+    half = [hx, c * hy + s * hz, s * hy + c * hz];
+  return half.map((value, axis) => [part.center[axis] - value, part.center[axis] + value]);
+}
+function touches(left, right, tolerance = 0.008) {
+  const a = bounds(left),
+    b = bounds(right);
+  return a.every(([minimum, maximum], axis) => b[axis][1] >= minimum - tolerance && b[axis][0] <= maximum + tolerance);
+}
+function minimumPenetration(left, right) {
+  const a = bounds(left),
+    b = bounds(right);
+  return Math.min(
+    ...a.map(([minimum, maximum], axis) => Math.min(maximum, b[axis][1]) - Math.max(minimum, b[axis][0])),
+  );
+}
+
+test("chair contract binds the current visual hash and exact I1/ergonomic semantics", async () => {
+  assert.equal(contract.id, "furniture/dining-chair/v1");
+  assert.equal(contract.role, "dining-chair");
+  assert.deepEqual(contract.dimensions, {
+    widthM: 0.48,
+    heightM: 0.89,
+    depthM: 0.47,
+    seatHeightM: 0.45,
+    seatDepthM: 0.42,
+    occupancy: 1,
+  });
+  assert.equal(contract.visualDesign.id, visual.id);
+  assert.equal(contract.visualDesign.hash, visualDesignContractHash(visual));
+  const changed = structuredClone(visual);
+  changed.prompt += " changed";
+  assert.notEqual(
+    contract.visualDesign.hash,
+    visualDesignContractHash(changed),
+    "visual hash must be computed from current bytes, not hardcoded",
+  );
+  assert.equal(
+    (await createDiningChairV1Contract({ write: false })).contract.visualDesign.hash,
+    contract.visualDesign.hash,
+  );
+  assert.deepEqual(contract.chair, {
+    seatPartId: "seat/solid",
+    backPartIds: ["back-rail/lower", "back-rail/upper"],
+    legPartIds: ["leg/front-left", "leg/front-right", "leg/rear-left", "leg/rear-right"],
+    usableSeatWidthM: 0.42,
+    backSupportHeightM: 0.38,
+    ratedLoadKg: 150,
+    canonicalForward: [0, 0, -1],
+  });
+  assert.deepEqual(contract.sockets, [
+    {
+      id: "occupancy/main",
+      kind: "occupancy",
+      position: [0, 0.45, 0],
+      facing: [0, 0, -1],
+      supportedBy: "seat/solid",
+      clearanceRadiusM: 0.3,
+    },
+  ]);
+  validateFurnitureDesignContract(contract, visual);
+});
+
+test("semantic inventory is armless, adapter-representable, and matches the visual construction cues", () => {
+  assert.equal(contract.parts.filter((part) => part.id.startsWith("leg/")).length, 4);
+  assert.equal(contract.parts.filter((part) => part.id.startsWith("seat-rail/")).length, 4);
+  assert.equal(contract.parts.filter((part) => part.id.startsWith("stretcher/")).length, 4);
+  assert.equal(contract.parts.filter((part) => part.id.startsWith("back-rail/")).length, 2);
+  assert.equal(contract.parts.filter((part) => part.id === "seat/solid").length, 1);
+  assert.equal(
+    contract.parts.some((part) => part.id.startsWith("arm/")),
+    false,
+  );
+  assert.equal(contract.joints.filter((joint) => joint.type === "mortise-tenon").length, 20);
+  assert.ok(contract.joints.every((joint) => joint.toleranceM <= 0.003));
+  assert.equal(contract.parts.filter((part) => part.kind === "peg").length, 4);
+  assert.deepEqual(contract.materialRoles, ["oak-frame", "oak-panel", "oak-endgrain"]);
+  assert.ok(contract.materialRoles.every((role) => contract.parts.some((part) => part.materialRole === role)));
+  assert.ok(contract.parts.every((part) => ["shaped-board", "tapered-member", "peg"].includes(part.kind)));
+  assert.ok(
+    contract.parts.filter((part) => part.kind === "tapered-member").every((part) => part.geometry.axis === "y"),
+  );
+  assert.ok(contract.parts.filter((part) => part.kind === "peg").every((part) => part.geometry.axis === "z"));
+  const cues = new Set(visual.cues.map((cue) => cue.id));
+  for (const id of [
+    "locked-i1-envelope",
+    "dimensioned-one-adult-seat",
+    "continuous-frame-load-path",
+    "controlled-back-section",
+    "bounded-period-joinery",
+    "deliberately-armless-table-clearance",
+    "restrained-oak-material-direction",
+    "stable-support-and-functional-proof",
+  ])
+    assert.ok(cues.has(id), `missing visual cue ${id}`);
+});
+
+test("every semantic part belongs to one contact-plausible connected joint graph", () => {
+  const graph = new Map(contract.parts.map((part) => [part.id, new Set()]));
+  for (const joint of contract.joints) {
+    const [left, right] = joint.members;
+    assert.ok(touches(parts.get(left), parts.get(right)), `${joint.id} does not plausibly contact`);
+    graph.get(left).add(right);
+    graph.get(right).add(left);
+  }
+  const visited = new Set(),
+    queue = ["seat/solid"];
+  while (queue.length) {
+    const id = queue.pop();
+    if (visited.has(id)) continue;
+    visited.add(id);
+    queue.push(...graph.get(id));
+  }
+  assert.equal(visited.size, contract.parts.length, "joint graph must connect every part");
+  for (const side of ["left", "right"]) {
+    const rear = parts.get(`leg/rear-${side}`),
+      sideRail = parts.get(`seat-rail/${side}`);
+    assert.equal(rear.rotationDeg[0], 4.5);
+    assert.ok(Math.abs(bounds(rear)[1][0]) < 1e-9, `${side} rear post must contact floor`);
+    assert.ok(Math.abs(bounds(rear)[1][1] - 0.89) < 1e-9, `${side} rear post must reach crest`);
+    assert.ok(minimumPenetration(rear, sideRail) <= 0.055, `${side} side-rail tenon must not consume the rear post`);
+  }
+});
+
+test("oriented authored bounds and all compound colliders stay inside the exact centered envelope", () => {
+  const envelope = [
+      [-0.24, 0.24],
+      [0, 0.89],
+      [-0.235, 0.235],
+    ],
+    aggregate = [
+      [Infinity, -Infinity],
+      [Infinity, -Infinity],
+      [Infinity, -Infinity],
+    ];
+  for (const part of contract.parts) {
+    const partBounds = bounds(part);
+    for (let axis = 0; axis < 3; axis++) {
+      assert.ok(
+        partBounds[axis][0] >= envelope[axis][0] - 1e-9 && partBounds[axis][1] <= envelope[axis][1] + 1e-9,
+        `${part.id} escapes axis ${axis}`,
+      );
+      aggregate[axis][0] = Math.min(aggregate[axis][0], partBounds[axis][0]);
+      aggregate[axis][1] = Math.max(aggregate[axis][1], partBounds[axis][1]);
+    }
+  }
+  assert.ok(Math.abs(aggregate[0][0] + 0.24) < 1e-9 && Math.abs(aggregate[0][1] - 0.24) < 1e-9);
+  assert.ok(Math.abs(aggregate[1][0]) < 1e-9 && Math.abs(aggregate[1][1] - 0.89) < 1e-9);
+  assert.ok(Math.abs(aggregate[2][0] + 0.235) < 1e-9 && Math.abs(aggregate[2][1] - 0.235) < 1e-9);
+  assert.ok(contract.colliders.length >= 5);
+  for (const collider of contract.colliders)
+    for (let axis = 0; axis < 3; axis++)
+      assert.ok(
+        collider.center[axis] - collider.halfExtents[axis] >= envelope[axis][0] - 1e-9 &&
+          collider.center[axis] + collider.halfExtents[axis] <= envelope[axis][1] + 1e-9,
+        `${collider.id} escapes axis ${axis}`,
+      );
+  assert.equal(
+    contract.colliders.some(
+      (collider) =>
+        collider.halfExtents[0] === 0.24 && collider.halfExtents[1] === 0.445 && collider.halfExtents[2] === 0.235,
+    ),
+    false,
+    "whole-chair AABB is forbidden",
+  );
+  const covered = new Set(contract.colliders.flatMap((collider) => collider.covers));
+  assert.deepEqual(
+    contract.parts.filter((part) => part.kind !== "peg" && !covered.has(part.id)).map((part) => part.id),
+    [],
+  );
+});
+
+test("four grounded legs create a stable support footprint around the rated-load occupancy", () => {
+  const feet = contract.chair.legPartIds.map((id) => {
+    const box = bounds(parts.get(id));
+    return { id, x: [box[0][0], box[0][1]], z: [box[2][0], box[2][1]], floor: box[1][0] };
+  });
+  assert.equal(feet.length, 4);
+  assert.ok(feet.every((foot) => Math.abs(foot.floor) < 1e-9));
+  const support = {
+      minX: Math.min(...feet.map((foot) => foot.x[0])),
+      maxX: Math.max(...feet.map((foot) => foot.x[1])),
+      minZ: Math.min(...feet.map((foot) => foot.z[0])),
+      maxZ: Math.max(...feet.map((foot) => foot.z[1])),
+    },
+    socket = contract.sockets[0];
+  assert.ok(support.maxX - support.minX >= 0.34);
+  assert.ok(support.maxZ - support.minZ >= 0.34);
+  assert.ok(
+    socket.position[0] - support.minX >= 0.05 &&
+      support.maxX - socket.position[0] >= 0.05 &&
+      socket.position[2] - support.minZ >= 0.05 &&
+      support.maxZ - socket.position[2] >= 0.05,
+  );
+  assert.equal(contract.chair.ratedLoadKg, 150);
+  assert.equal(socket.clearanceRadiusM, 0.3);
+  const seat = bounds(parts.get(contract.chair.seatPartId));
+  assert.ok(seat[0][1] - seat[0][0] >= contract.chair.usableSeatWidthM);
+  assert.ok(seat[2][1] - seat[2][0] >= contract.dimensions.seatDepthM);
+  assert.ok(Math.abs(seat[1][1] - contract.dimensions.seatHeightM) < 1e-9);
+});
+
+test("seat covers the frame at seat height without extruding behind the raked posts", () => {
+  const seat = bounds(parts.get("seat/solid")),
+    frontLeg = bounds(parts.get("leg/front-left")),
+    rearPost = parts.get("leg/rear-left"),
+    rearRail = bounds(parts.get("seat-rail/rear")),
+    rx = rearPost.rotationDeg[0] * DEG,
+    axisZ = rearPost.center[2] + (0.43 - rearPost.center[1]) * Math.tan(rx),
+    rearFaceAtSeat = axisZ + rearPost.geometry.topSection[1] / (2 * Math.cos(rx));
+  assert.ok(Math.abs(seat[0][0] + 0.24) < 1e-9 && Math.abs(seat[0][1] - 0.24) < 1e-9, "seat must cover frame width");
+  assert.ok(Math.abs(seat[2][0] - frontLeg[2][0]) < 1e-9, "seat front must cover the front frame");
+  assert.ok(seat[2][1] >= rearRail[2][1] - 1e-9, "seat must cover the rear seat rail");
+  assert.ok(
+    Math.abs(seat[2][1] - rearFaceAtSeat) < 1e-9,
+    "seat rear must terminate at the rear-post back face at seat height",
+  );
+  assert.ok(seat[2][1] < bounds(rearPost)[2][1] - 0.02, "seat must not inherit the upper raked-back envelope");
+  const collider = contract.colliders.find((entry) => entry.id === "collision/seat-frame");
+  assert.ok(Math.abs(collider.center[2] - parts.get("seat/solid").center[2]) < 1e-9);
+  assert.ok(Math.abs(collider.halfExtents[2] - (seat[2][1] - seat[2][0]) / 2) < 1e-9);
+});
+
+test("the current Blender adapter explicitly supports every selected geometry and axis", async () => {
+  const source = await readFile(new URL("../blender/furniture-contract-adapter.py", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /BUILDERS=\{"shaped-board":shaped,"tapered-member":tapered,"profile-extrusion":profile,"panel":panel,"peg":peg\}/,
+  );
+  assert.match(source, /if axis!="y": raise RuntimeError/);
+  assert.match(source, /axis not in \{"x","y","z"\}/);
+  assert.match(source, /elif axis=="z": o\.rotation_euler\[0\]=math\.pi\/2/);
+});

@@ -1,0 +1,86 @@
+<!doctype html><html><head><meta charset="utf-8"></head>
+<body style="margin:0;background:#b9c4cc"><canvas id="limina-canvas" width="1280" height="800"></canvas>
+<script type="module">
+// Renders a scene an AGENT authored (tools/preview/authored-scene.json = { commands, camera }) through
+// the REAL live engine (runLive). ZERO scene content is written here — every placement/scale/layout/
+// camera comes from the agent's file. This is the honest "can an agent one-shot a scene" test.
+window.__log = []; window.__err = []; window.__status = [];
+try {
+  const sceneUrl = new URLSearchParams(location.search).get("scene") || "/tools/preview/authored-scene.json";
+  const scene = await (await fetch(sceneUrl)).json();
+  const M = await import("/editor/vendor/limina-runtime.js");
+  const runLive = M.runLive;
+  if (typeof runLive !== "function") { window.__err.push("runLive not exported"); window.__done = true; }
+  else {
+    const canvas = document.getElementById("limina-canvas");
+    const cam = scene.camera || { center: [0, 3, 0], radius: 24, height: 10 };
+    // POSITIONED VANTAGE (Places Stage 2): camera carries { mode:'vantage', pos:[x,z], yaw, eyeHeight }.
+    // World Y = eyeHeight above the map's sea level (a terrain-height lookup isn't available in this
+    // harness, so seaLevel+eyeHeight is the stand-in ground reference — see peek-scene.mjs). Otherwise
+    // the legacy overview orbit.
+    const isVantage = cam.mode === "vantage";
+    const camOpt = isVantage
+      ? { vantage: { pos: [cam.pos[0], (scene.seaLevel ?? 0) + (cam.eyeHeight ?? 1.7), cam.pos[1]], yaw: cam.yaw ?? 0, ...(cam.pitch !== undefined ? { pitch: cam.pitch } : {}), far: cam.far } }
+      : { orbit: { center: cam.center, radius: cam.radius, height: cam.height, autoSpin: cam.autoSpin, far: cam.far } };
+    const __t0 = performance.now();
+    const running = await runLive({
+      canvas, width: 1280, height: 800, commands: scene.commands,
+      forceWebGL: true,
+      peek: scene.peek === true, // overview turntable → skip eye-level grass (see RunLiveOptions.peek)
+      renderBaseline: scene.renderBaseline,
+      entityStream: scene.entityStream,
+      terrainMountsPerFrame: 4096, // offline peek: mount the whole tile window at once (no ~40s 2/frame drain)
+      ...camOpt,
+      onStatus: (s, m) => window.__status.push(s + ": " + m),
+    });
+    window.__log.push("runLive returned " + (running === null ? "NULL" : "ok") + " · commands=" + (scene.commands || []).length);
+    window.__log.push("PROF runLive() build " + (performance.now() - __t0).toFixed(0) + "ms");
+    if (running && running.terrainStream) window.__log.push("terrainStream mounted=" + running.terrainStream.mounted().length + " pending=" + running.terrainStream.pending());
+    // Structured authoring failures (untruncated) for the render driver, so a broken scene fails
+    // LOUD instead of silently rendering a groundless ocean. A failed STRUCTURAL command (terrain.create
+    // is the ground everything else sits on) invalidates the whole peek — flag it so engine-shots exits
+    // non-zero rather than passing off a blank frame as success.
+    window.__authoringFailures = (running && running.authoringFailures) || [];
+    window.__ranNull = running === null;
+    if (window.__authoringFailures.length) {
+      window.__log.push("authoringFailures=" + JSON.stringify(window.__authoringFailures).slice(0, 500));
+      const cmds = scene.commands || [];
+      const STRUCTURAL = new Set(["terrain.create"]);
+      window.__structuralFailures = window.__authoringFailures
+        .map((f) => ({ tool: (cmds[f.index] || {}).tool, message: f.message }))
+        .filter((f) => STRUCTURAL.has(f.tool));
+    } else { window.__structuralFailures = []; }
+    await new Promise((r) => setTimeout(r, 3000));
+    // A map-streamed world fills its window at ≤2 mounts/frame — wait (bounded) for the pending
+    // queue to drain so the screenshot shows the CONVERGED window, not a half-filled fill.
+    if (running && running.terrainStream) {
+      const t0 = Date.now();
+      while (running.terrainStream.pending() > 0 && Date.now() - t0 < 40000) await new Promise((r) => setTimeout(r, 250));
+      window.__log.push("stream drain waited " + (Date.now() - t0) + "ms · pending=" + running.terrainStream.pending());
+    }
+    if (running && running.scene) { let m = 0, grassM = 0, inst = 0, grassInst = 0; running.scene.traverse((o) => { if (o.isMesh || o.isInstancedMesh) { m++; const g = (o.name || "").toLowerCase().includes("grass"); if (o.isInstancedMesh) { inst++; if (g) grassInst++; } if (g) grassM++; } }); window.__log.push("scene meshes=" + m + " (grass=" + grassM + " instancedMeshes=" + inst + " grassInstanced=" + grassInst + ")"); }
+    if (running && running.scene) { const inv = {}; running.scene.traverse((o) => { if (o === running.scene) return; const t = o.isPoints ? "Points" : o.isSprite ? "Sprite" : o.isLine ? "Line" : o.isInstancedMesh ? "InstancedMesh" : o.isMesh ? "Mesh" : o.type || "obj"; const key = t + (o.isPoints || o.isSprite || o.isLine ? "[" + (o.name || "?") + "]" : ""); inv[key] = (inv[key] || 0) + 1; }); window.__log.push("scene inventory: " + JSON.stringify(inv)); }
+    if (running && running.scene) { let chunks = 0, total = 0; running.scene.traverse((o) => { if (o.isInstancedMesh && !(o.name || "").includes("grass")) { chunks++; total += o.count; } }); if (chunks) window.__log.push("instanced(non-grass): " + chunks + " chunks, " + total + " instances"); }
+    // Water diagnostics: report each named water/river mesh's vertical extent so a buried or
+    // mis-sampled ribbon is visible in the LOG, not just absent from the pixels.
+    if (running && running.scene) running.scene.traverse((o) => {
+      if (o.name === "limina:river" || o.name === "limina:water") {
+        const g = o.geometry; let lo = Infinity, hi = -Infinity;
+        if (g && g.attributes && g.attributes.position) {
+          const p = g.attributes.position.array;
+          for (let i = 1; i < p.length; i += 3) { if (p[i] < lo) lo = p[i]; if (p[i] > hi) hi = p[i]; }
+        }
+        window.__log.push(o.name + ": verts=" + (g && g.attributes.position ? g.attributes.position.count : "?") + " y=[" + (lo === Infinity ? "?" : lo.toFixed(1) + ".." + hi.toFixed(1)) + "] pos.y=" + o.position.y.toFixed(2) + " visible=" + o.visible);
+      }
+    });
+    if (running && running.terrainStream) window.__log.push("terrainStream settled: mounted=" + running.terrainStream.mounted().length + " pending=" + running.terrainStream.pending() + " keys=" + running.terrainStream.mounted().slice(0, 12).join(" "));
+    if (running && running.grassStream) window.__log.push("grassStream: tiles=" + running.grassStream.tiles() + " blades=" + running.grassStream.blades());
+    if (running && running.entityStream) window.__log.push("entityStream: resident=" + running.entityStream.resident() + " dormant=" + running.entityStream.dormant());
+    // Exact-yaw hook for multi-shot drivers (engine-shots.mjs): place the orbit at a precise
+    // azimuth instead of timing screenshots against the frame-rate-dependent autoSpin.
+    window.__setYaw = (a) => { if (running && typeof running.setOrbitAzimuth === "function") { running.setOrbitAzimuth(a); return true; } return false; };
+    window.__log.push("PROF total-to-done " + (performance.now() - __t0).toFixed(0) + "ms");
+    window.__done = true;
+  }
+} catch (e) { window.__err.push("THROW: " + ((e && (e.stack || e.message)) || e)); window.__done = true; }
+</script></body></html>

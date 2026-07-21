@@ -66,11 +66,20 @@ export class ProgressionManager {
     this.xpCurve = opts?.xpCurve ?? ((level: number) => 100 * Math.pow(1.5, level - 1));
   }
 
+  private initialData(): ProgressionData {
+    return { xp: 0, level: 1, xpToNext: this.xpCurve(1), unlocked: new Set(), skillPoints: 0, allocated: new Map() };
+  }
+
   getOrCreate(entity: string): ProgressionData {
     if (!this.progression.has(entity)) {
-      this.progression.set(entity, { xp: 0, level: 1, xpToNext: this.xpCurve(1), unlocked: new Set(), skillPoints: 0, allocated: new Map() });
+      this.progression.set(entity, this.initialData());
     }
     return this.progression.get(entity)!;
+  }
+
+  /** Read progression without materializing state for an unknown entity. */
+  read(entity: string): Readonly<ProgressionData> {
+    return this.progression.get(entity) ?? this.initialData();
   }
 
   /** Attach a data-driven action to fire when `entity` levels up. */
@@ -102,7 +111,7 @@ export class ProgressionManager {
   }
 
   getLevel(entity: string): number {
-    return this.getOrCreate(entity).level;
+    return this.read(entity).level;
   }
 
   unlock(entity: string, id: string): boolean {
@@ -113,7 +122,7 @@ export class ProgressionManager {
   }
 
   isUnlocked(entity: string, id: string): boolean {
-    return this.getOrCreate(entity).unlocked.has(id);
+    return this.read(entity).unlocked.has(id);
   }
 
   defineSkillTree(tree: SkillTree): void {
@@ -168,6 +177,69 @@ export class ProgressionManager {
     const hooks = [...this.levelUpActions.keys()].sort().map((entity) => ({ entity, actions: this.levelUpActions.get(entity)! }));
     return JSON.stringify({ prog, hooks });
   }
+
+  /** Deterministic, LOSSLESS capture of the whole manager (snapshot participant, H2):
+   *  per-entity progression, level-up hooks, and skill-tree definitions, all key-sorted.
+   *  (The string `snapshot()` above is the legacy comparison view; this one restores.) */
+  captureSnapshot(): ProgressionManagerSnapshot {
+    const byString = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+    return {
+      progression: [...this.progression.entries()].sort((a, b) => byString(a[0], b[0])).map(([entity, d]) => ({
+        entity,
+        xp: d.xp,
+        level: d.level,
+        xpToNext: d.xpToNext,
+        skillPoints: d.skillPoints,
+        unlocked: [...d.unlocked].sort(),
+        allocated: [...d.allocated.entries()].sort((a, b) => byString(a[0], b[0])).map(([nodeId, points]) => ({ nodeId, points })),
+      })),
+      levelUpActions: [...this.levelUpActions.entries()].sort((a, b) => byString(a[0], b[0])).map(([entity, actions]) => ({ entity, actions: actions.map((a) => ({ ...a })) })),
+      skillTrees: [...this.skillTrees.values()].sort((a, b) => byString(a.id, b.id)).map((t) => ({
+        id: t.id,
+        name: t.name,
+        nodes: [...t.nodes.values()].sort((a, b) => byString(a.id, b.id)).map((n) => ({ ...n, prerequisites: [...n.prerequisites] })),
+        config: t.config,
+      })),
+    };
+  }
+
+  /** Wholesale replace the manager's state with a captured snapshot (participant restore). */
+  restoreSnapshot(snap: ProgressionManagerSnapshot): void {
+    this.progression.clear();
+    this.levelUpActions.clear();
+    this.skillTrees.clear();
+    for (const p of snap.progression) {
+      this.progression.set(p.entity, {
+        xp: p.xp,
+        level: p.level,
+        xpToNext: p.xpToNext,
+        skillPoints: p.skillPoints,
+        unlocked: new Set(p.unlocked),
+        allocated: new Map(p.allocated.map((a) => [a.nodeId, a.points])),
+      });
+    }
+    for (const h of snap.levelUpActions) this.levelUpActions.set(h.entity, h.actions.map((a) => ({ ...a })));
+    for (const t of snap.skillTrees) {
+      const nodes = new Map<string, SkillTreeNode>();
+      for (const n of t.nodes) nodes.set(n.id, { ...n, prerequisites: [...n.prerequisites] });
+      this.skillTrees.set(t.id, { id: t.id, name: t.name, nodes, config: t.config });
+    }
+  }
+}
+
+/** The whole ProgressionManager state as the snapshot participant carries it (H2). */
+export interface ProgressionManagerSnapshot {
+  progression: {
+    entity: string;
+    xp: number;
+    level: number;
+    xpToNext: number;
+    skillPoints: number;
+    unlocked: string[];
+    allocated: { nodeId: string; points: number }[];
+  }[];
+  levelUpActions: { entity: string; actions: LevelUpAction[] }[];
+  skillTrees: { id: string; name: string; nodes: SkillTreeNode[]; config?: Record<string, unknown> }[];
 }
 
 const addXPInput = z.object({
@@ -247,10 +319,11 @@ export function registerProgressionSkills(registry: SkillRegistry, opts?: { prog
     description: "Get an entity's current level and XP progress (computed from the XP curve). Pure read — does not emit.",
     category: "progression",
     permissions: ["progression.read"],
+    effect: "read",
     input: getLevelInput,
     output: z.object({ level: z.number(), xp: z.number(), xpToNext: z.number() }),
     handler: (input) => {
-      const data = mgr.getOrCreate(input.entity);
+      const data = mgr.read(input.entity);
       return { level: data.level, xp: data.xp, xpToNext: data.xpToNext };
     },
   };
@@ -291,6 +364,7 @@ export function registerProgressionSkills(registry: SkillRegistry, opts?: { prog
     description: "Check if an ability, area, item, or skill is unlocked for an entity. Pure read — does not emit.",
     category: "progression",
     permissions: ["progression.read"],
+    effect: "read",
     input: isUnlockedInput,
     output: z.object({ unlocked: z.boolean() }),
     handler: (input) => ({ unlocked: mgr.isUnlocked(input.entity, input.id) }),

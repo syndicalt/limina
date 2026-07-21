@@ -8,6 +8,7 @@ import { AgentScheduler } from "../src/agents/scheduler.ts";
 import type { DecideRequest, LLMProvider } from "../src/agents/llm.ts";
 import type { MCPRequest } from "../src/mcp/protocol.ts";
 import { createHeadlessContext } from "../src/game/context.ts";
+import { LiminaTracer } from "../src/observability/event.ts";
 
 function field(value: unknown, key: string): unknown {
   if (typeof value === "object" && value !== null && key in value) return (value as Record<string, unknown>)[key];
@@ -58,6 +59,15 @@ const scheduler = new AgentScheduler({
 const provider = new BurstProvider(5);
 
 perceptionSystem(agents, world, tracer, 1);
+
+// The default unbounded cap must still admit each due agent only once. The old
+// two-pass loop admitted all twelve agents twice and caused duplicate provider
+// starts plus stale-generation drops.
+const defaultAdmissions = new AgentScheduler().admitDecisions(agents.all(), 1, new LiminaTracer("ses_default_admission_probe"), () => true);
+if (defaultAdmissions.length !== agents.all().length || new Set(defaultAdmissions.map((a) => a.agent.id)).size !== agents.all().length) {
+  throw new Error(`default scheduler admitted duplicate agents: ${defaultAdmissions.map((a) => a.agent.id).join(",")}`);
+}
+
 decisionSystem(agents, registry, { burst: provider }, tracer, 1, scheduler);
 await Promise.resolve();
 

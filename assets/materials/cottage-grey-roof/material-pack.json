@@ -1,0 +1,67 @@
+{
+  "schema": "limina.material-pack/v1",
+  "id": "cottage-grey-roof",
+  "source": {
+    "provider": "Poly Haven",
+    "assetId": "grey_roof_tiles_02",
+    "assetUrl": "https://polyhaven.com/a/grey_roof_tiles_02",
+    "apiUrl": "https://api.polyhaven.com/files/grey_roof_tiles_02",
+    "apiVersion": "v1",
+    "licenseSpdx": "CC0-1.0"
+  },
+  "download": {
+    "resolution": "1k",
+    "format": "JPG",
+    "metadataSha256": "sha256:fc230c92b6eaae532e290dba4c146e1cc296a19c4ce6263422966a514c900659"
+  },
+  "maps": {
+    "albedo": {
+      "assetId": "materials/cottage-grey-roof/albedo.jpg",
+      "sha256": "sha256:3f001b2f07b5b1f4f8475187ed8fde2699319b15dfcf72ea4741570679560fe7",
+      "assetHash": "sha256:358a78187f4b35c1644900630b0877b625b02b169e8ab8f31ecbcdcf397425cc",
+      "md5": "1c0ba5a73f832ae3e47921f083a38163",
+      "bytes": 402212,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/grey_roof_tiles_02/grey_roof_tiles_02_diff_1k.jpg"
+    },
+    "normal": {
+      "assetId": "materials/cottage-grey-roof/normal.jpg",
+      "sha256": "sha256:94a3f9eebe085b0df60efb34dff132caf85bc77b66c8d50c44404cdcbc5c67e7",
+      "assetHash": "sha256:eb5809a5f4cf033a8db827e112a697374c4b728ba228ed945ace3e9e50982325",
+      "md5": "7aaab6831321d2afad5b1d86fbf6420f",
+      "bytes": 570336,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/grey_roof_tiles_02/grey_roof_tiles_02_nor_gl_1k.jpg"
+    },
+    "roughness": {
+      "assetId": "materials/cottage-grey-roof/roughness.jpg",
+      "sha256": "sha256:0af82d86578118d8bf90a58a1b2107c24ee4763bec2a3e91bbf28772198185e9",
+      "assetHash": "sha256:c4005099c2305918384bb3004524e64798dd25130caff92f82629f53ae62718c",
+      "md5": "7527fc78bd6f9ade635b7d86c7ebcec0",
+      "bytes": 346538,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/grey_roof_tiles_02/grey_roof_tiles_02_rough_1k.jpg"
+    },
+    "occlusion": {
+      "assetId": "materials/cottage-grey-roof/occlusion.jpg",
+      "sha256": "sha256:a1128ea1f04430f6ae8f24c9d76078bef33b37a7d7956d4c50915eb213dbcb5a",
+      "assetHash": "sha256:064f6c70600872a393d9d2d5716b09ab0d2d0b59f3e487d1662760e69a0133db",
+      "md5": "4e7054a9b69553ac50ebf5c9ddd22c0d",
+      "bytes": 307191,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/grey_roof_tiles_02/grey_roof_tiles_02_ao_1k.jpg"
+    },
+    "displacement": {
+      "assetId": "materials/cottage-grey-roof/displacement.jpg",
+      "sha256": "sha256:c747db29fa052ad07c12bd45af9464b18bf08261983987926aa81f3a73907d8f",
+      "assetHash": "sha256:183a5e2de793985d70730261864a2c5b255917b7724d712f38e6077bd8395303",
+      "md5": "95930b8d4cfa6ca07d72d914302a2e07",
+      "bytes": 134666,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/grey_roof_tiles_02/grey_roof_tiles_02_disp_1k.jpg"
+    }
+  },
+  "materialImport": {
+    "name": "cottage-grey-roof",
+    "albedo": "materials/cottage-grey-roof/albedo.jpg",
+    "normal": "materials/cottage-grey-roof/normal.jpg",
+    "roughness": "materials/cottage-grey-roof/roughness.jpg",
+    "occlusion": "materials/cottage-grey-roof/occlusion.jpg",
+    "displacement": "materials/cottage-grey-roof/displacement.jpg"
+  }
+}

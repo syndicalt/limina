@@ -1,0 +1,66 @@
+{
+  "schema": "limina.asset-mechanical-evidence/1",
+  "assetId": "polyhaven-tree-small-02",
+  "status": "candidate-mechanical-only",
+  "source": {
+    "url": "https://polyhaven.com/a/tree_small_02",
+    "licenseSpdx": "CC0-1.0",
+    "attribution": "tree_small_02 by Poly Haven (CC0 1.0)"
+  },
+  "models": [
+    {
+      "level": 0,
+      "path": "vegetation/tree-small-02-lod0.glb",
+      "sha256": "sha256:8870a3a2089383d06b95d43c98bd9157f146aa2f6f51e04aff6aa3b0559a13a9",
+      "boundsM": [2.894304, 4.545011, 4.174395],
+      "vertexCount": 80075,
+      "triangleCount": 61748,
+      "meshCount": 1,
+      "primitiveCount": 3,
+      "materialCount": 3,
+      "textureSlots": ["baseColor", "metallicRoughness", "normal"],
+      "textureResolution": [1024, 1024]
+    },
+    {
+      "level": 1,
+      "path": "vegetation/tree-small-02-lod1.glb",
+      "sha256": "sha256:291f7107434ce958d38d6133f786b071b7341884edf700f6846f15a1f52a4183",
+      "boundsM": [2.862886, 4.545011, 4.138893],
+      "vertexCount": 32704,
+      "triangleCount": 21603,
+      "meshCount": 1,
+      "primitiveCount": 3,
+      "materialCount": 3,
+      "textureSlots": ["baseColor", "metallicRoughness", "normal"],
+      "textureResolution": [1024, 1024]
+    },
+    {
+      "level": 2,
+      "path": "vegetation/tree-small-02-lod2.glb",
+      "sha256": "sha256:4d17f68caf8d4cc7b5ce9bae4c325ac57f84e28607d2a941481b66503a7b368c",
+      "boundsM": [2.862886, 4.53845, 4.036695],
+      "vertexCount": 11392,
+      "triangleCount": 6269,
+      "meshCount": 1,
+      "primitiveCount": 3,
+      "materialCount": 3,
+      "textureSlots": ["baseColor", "metallicRoughness", "normal"],
+      "textureResolution": [1024, 1024]
+    }
+  ],
+  "checks": {
+    "allGlbReadable": true,
+    "allSelfContained": true,
+    "boundsPreservedAcrossLods": true,
+    "materialsPreservedAcrossLods": true,
+    "textureSlotsPreservedAcrossLods": true,
+    "textureResolutionPreservedAcrossLods": true,
+    "triangleCountStrictlyDecreases": true,
+    "classMeshLimit": true,
+    "classPrimitiveDrawLimit": true
+  },
+  "lodDistancesM": null,
+  "lodDistanceStatus": "unassigned",
+  "humanVisualApproval": false,
+  "releaseEligible": false
+}

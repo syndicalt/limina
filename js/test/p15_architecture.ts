@@ -57,30 +57,32 @@ async function build(session: string, input: Record<string, unknown>): Promise<{
 {
   const center: V3 = [10, 0, -4];
   const { parts, result, reg, base } = await build("ses_p15_arch_a", { position: center, width: 8, depth: 6, height: 3.2 });
-  assert(result.entityCount === 8, `default building has 8 parts (floor,4 walls split to door,lintel,roof) — got ${result.entityCount}`);
+  // Kit-backed building: many parts (plinth, floor, relief wall panels, lintel, slate roof, gable
+  // pediments, a doorstep). Assert the STRUCTURE by kind rather than a brittle exact count.
+  assert(result.entityCount >= 10, `a kit building has many parts (plinth,floor,walls,lintel,roof,gables,stoop) — got ${result.entityCount}`);
   const kinds = new Set(parts.map((p) => p.kind));
-  for (const k of ["floor", "wall_north", "wall_east", "wall_west", "wall_south_left", "wall_south_right", "lintel", "roof"]) {
+  for (const k of ["plinth", "floor", "wall_north", "wall_east", "wall_west", "wall_south", "lintel_south", "roof", "gable"]) {
     assert(kinds.has(k), `building includes a ${k} part`);
   }
   const b = result.bounds as { min: V3; max: V3 };
   assert(b.min[0] === 6 && b.max[0] === 14, `X footprint 6..14 (got ${b.min[0]}..${b.max[0]})`);
   assert(b.min[2] === -7 && b.max[2] === -1, `Z footprint -7..-1 (got ${b.min[2]}..${b.max[2]})`);
 
-  // Cross-check via the perception skill: the entities really exist in the scene.
+  // Cross-check via the perception skill: the entities really exist (every part + the building-root).
   const ins = unwrap("scene.inspect", await reg.invoke("scene.inspect", {}, base));
-  assert(ins.entityCount === 8, `scene.inspect counts the 8 created building entities (got ${ins.entityCount})`);
+  assert(ins.entityCount === result.entityCount + 1, `scene.inspect counts the building parts + root (got ${ins.entityCount}, parts ${result.entityCount})`);
 
   // ── 2. The DOORWAY is genuinely open. ───────────────────────────────────────────────────────
   const zNeg = center[2] - 6 / 2 + 0.25 / 2; // -Z wall plane
   const doorCenter: V3 = [center[0], center[1] + 1.0, zNeg]; // mid-height, on the door wall
-  const southParts = parts.filter((p) => p.kind.startsWith("wall_south") || p.kind === "lintel");
+  const southParts = parts.filter((p) => p.kind.startsWith("wall_south") || p.kind.startsWith("lintel"));
   for (const p of southParts) {
     assert(!pointInBox(doorCenter, p.position, p.size), `the doorway opening must be clear of ${p.kind}`);
   }
-  // ...and a jamb genuinely occupies the wall beside the door (the opening isn't just the whole wall).
-  const leftJamb = parts.find((p) => p.kind === "wall_south_left")!;
-  assert(pointInBox(leftJamb.position, leftJamb.position, leftJamb.size), "the left jamb is a real solid box beside the door");
-  assert(leftJamb.position[0] < doorCenter[0], "the left jamb sits to -X of the doorway");
+  // ...and a solid pillar genuinely occupies the wall to -X of the door (the opening isn't the whole wall).
+  const leftJamb = parts.find((p) => p.kind === "wall_south" && p.position[0] < doorCenter[0]);
+  assert(leftJamb !== undefined, "a solid wall_south pillar sits to -X of the doorway");
+  assert(pointInBox(leftJamb!.position, leftJamb!.position, leftJamb!.size), "that pillar is a real solid box beside the door");
 }
 
 // ── 3. No roof when withRoof:false (and the AABB top drops accordingly). ──────────────────────
@@ -88,7 +90,12 @@ async function build(session: string, input: Record<string, unknown>): Promise<{
   const { result } = await build("ses_p15_arch_noroof", { position: [0, 0, 0], withRoof: false });
   const parts = result.parts as Part[];
   assert(!parts.some((p) => p.kind === "roof"), "withRoof:false omits the roof");
-  assert(result.entityCount === 7, `no-roof building has 7 parts (got ${result.entityCount})`);
+  assert(!parts.some((p) => p.kind === "gable"), "withRoof:false omits the gable pediments too");
+  const kinds = new Set(parts.map((p) => p.kind));
+  for (const kind of ["plinth", "floor", "wall_north", "wall_east", "wall_west", "wall_south", "lintel_south", "doorstep"]) {
+    assert(kinds.has(kind), `no-roof building retains structural part ${kind}`);
+  }
+  assert(result.entityCount >= 9, `no-roof building must retain the structural shell, got ${result.entityCount} parts`);
 }
 
 // ── 4. Replay-determinism: identical inputs ⇒ byte-identical geometry. ────────────────────────

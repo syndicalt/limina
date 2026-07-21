@@ -17,6 +17,7 @@ export function eventKind(type) {
   if (type === "agent.tool_result" || type === "skill.executed") return "action";
   if (type === "agent.toolcall.rejected") return "rejected";
   if (type.startsWith("skill.approval")) return "approval";
+  if (type.startsWith("director.pipeline")) return "pipeline";
   if (type.startsWith("policy.")) return "policy";
   if (type.startsWith("security.")) return "security";
   return "event";
@@ -36,7 +37,23 @@ function presentParents(ev, byId) {
  * @returns {{roots: TreeNode[], byId: Map<string, Ev>}}
  * @typedef {{event: Ev, kind: string, children: TreeNode[]}} TreeNode
  */
+/** Read-only introspection the editor + viewport poll every tick (worldlog.tail, inspector.snapshot,
+ *  trace.tail, approval.list, skills.*). It is infrastructure, not agent reasoning — drop it so the
+ *  panels' own polling can't flood the causal view. */
+const INTROSPECTION = new Set([
+  "worldlog.tail", "inspector.snapshot", "trace.tail", "approval.list",
+  "skills.list", "skills.search", "skills.browse", "skills.describe",
+]);
+const isIntrospection = (e) => e.type === "skill.executed" && INTROSPECTION.has(e.payload?.skill);
+
+/** True for a read-only introspection skill event (worldlog.tail, inspector.snapshot, …). The
+ *  roster uses this to exclude polling infrastructure from the "who authored a skill" builder set. */
+export function isIntrospectionEvent(e) {
+  return isIntrospection(e);
+}
+
 export function buildForest(events) {
+  events = events.filter((e) => !isIntrospection(e));
   const byId = new Map();
   for (const e of events) byId.set(e.id, e);
 

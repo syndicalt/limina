@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "_rationale": "Legacy monotonic MECHANICAL import floor for gates/design/asset-qc-gate.mjs. It rejects degenerate geometry and missing texture slots, but it is not a visual-quality verdict and cannot satisfy the Project Gorgon release floor. Final acceptance is governed by plans/visual-fidelity-release-contract.md and explicit human review.",
+  "ceilingTarget": "plans/visual-fidelity-release-contract.md",
+  "default": {
+    "minVertexCount": 100,
+    "minTriangleCount": 40,
+    "minMaterialCount": 1,
+    "requiresAlbedoMap": true,
+    "requiresNormalMap": false,
+    "minBboxDims": [0.5, 0.5, 0.5]
+  },
+  "class": {
+    "building": {
+      "_note": "Mechanical minimum only. It rejects a flat-box cottage but does not establish production visual fidelity, material richness, draw-call fitness, provenance, LOD coverage, composition, or reference quality.",
+      "minVertexCount": 500,
+      "minTriangleCount": 200,
+      "minMaterialCount": 2,
+      "requiresAlbedoMap": true,
+      "requiresNormalMap": false,
+      "minBboxDims": [3.0, 2.5, 3.0]
+    }
+  },
+  "provenance": {
+    "measuredFrom": "historical untracked assets/kit-building.glb (not valid current evidence)",
+    "evidenceStatus": "invalidated; source asset is absent from the repository",
+    "measured": {
+      "vertexCount": 4686,
+      "triangleCount": 894,
+      "materialCount": 3,
+      "hasAlbedoMap": true,
+      "hasNormalMap": false,
+      "bboxDims": [9.0, 6.15, 7.3]
+    },
+    "ratchetTargets": [
+      "requiresNormalMap: true remains a required ratchet — the #1 mechanical raise. The gate already enforces requiresNormalMap when true; flip it the moment a normal-mapped reference asset passes. This mechanical minimum is not dropped by the release-contract reframing: it may only be SUPERSEDED by a stronger requirement (e.g. verified PBR normal-detail evidence in the final material pipeline), never removed outright.",
+      "Replace the historical seed with a tracked, provenance-complete, optimized asset and measured QC evidence.",
+      "Add mesh/draw-call, texture-resolution, LOD, provenance, and stale-hash gates; raw triangle or vertex count is not a quality proxy.",
+      "Keep this mechanical floor orthogonal to the visual release contract and human reference review."
+    ]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "_comment": "Showcase #8: the ~1 km2 FMG-compiled streamed world (world.setTerrainSource kind:map, camera-following client stream) with the two whole-GLB burgs placed at the IR anchors (Highkeep manor, Fisherton cottage). Aerial over the main island, distance dissolving into the fog band. streamFollow carries no valid regionId on purpose — it only nudges the client stream radius (schema caps at 8); the live client streams around the camera regardless.",
+  "commands": [
+    { "kind": "physics", "op": "op_physics_create_world", "args": [-9.81] },
+    { "kind": "skill", "tool": "world.setTerrainSource", "input": { "kind": "map", "mapAssetId": "maps/fmg-1km.worldmap.json" } },
+    { "kind": "skill", "tool": "world.streamFollow", "input": { "regionId": "no-such-region", "anchor": [125, 0, -60], "radius": 8 } },
+    { "kind": "skill", "tool": "asset.place", "input": { "assetId": "norman-manor-building.glb", "position": [187.5, 1.944225390752157, -62.5], "rotation": [0, 0.4, 0], "ground": true } },
+    { "kind": "skill", "tool": "asset.place", "input": { "assetId": "cottage-authored.glb", "position": [62.5, 2.0452205075158005, 312.5], "rotation": [0, -0.6, 0], "ground": true } }
+  ],
+  "camera": { "center": [170, 3, -62.5], "radius": 95, "height": 42, "far": 1500, "autoSpin": 0 }
+}

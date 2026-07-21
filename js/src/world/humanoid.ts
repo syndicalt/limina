@@ -96,7 +96,7 @@ class HumanoidRig implements Humanoid {
     const limb = (x: number, y: number, len: number, radius: number, mat: unknown): { rotation: { x: number } } => {
       const pivot = new THREE.Group();
       pivot.position.set(x, y, 0);
-      const seg = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.85, radius, len, 10), mat);
+      const seg = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.85, radius, len, 10), mat as never);
       seg.position.y = -len / 2;
       seg.castShadow = true;
       pivot.add(seg);

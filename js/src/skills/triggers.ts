@@ -182,24 +182,61 @@ export class TriggerManager {
   }
 
   /** Deterministic, JSON-able snapshot (insertion order; Sets → sorted arrays) for
-   *  replay-equivalence checks + host inspection. */
-  snapshot(): {
-    seq: number;
-    triggers: { id: string; shape: string; center: number[]; size: number[]; actions: { onEnter: TriggerAction[]; onExit: TriggerAction[]; onStay: TriggerAction[] }; entitiesInside: string[]; config?: Record<string, unknown> }[];
-  } {
+   *  replay-equivalence checks + host inspection. Ids are `trigger_N` (dense, per-manager
+   *  seq) so insertion order IS id order — two captures of one world are byte-identical.
+   *  Also the world-snapshot participant capture (H2): restoreSnapshot round-trips it. */
+  snapshot(): TriggerManagerSnapshot {
     return {
       seq: this.seq,
       triggers: [...this.triggers.values()].map((t) => ({
         id: t.id,
         shape: t.shape,
-        center: [...t.center],
-        size: [...t.size],
+        center: [t.center[0], t.center[1], t.center[2]],
+        size: [t.size[0], t.size[1], t.size[2]],
         actions: { onEnter: [...t.actions.onEnter], onExit: [...t.actions.onExit], onStay: [...t.actions.onStay] },
         entitiesInside: [...t.entitiesInside].sort(),
         config: t.config,
       })),
     };
   }
+
+  /** Wholesale replace the zones + resume the id counter (participant restore, H2):
+   *  a post-restore trigger.create allocates the SAME next `trigger_N` it would have live. */
+  restoreSnapshot(snap: TriggerManagerSnapshot): void {
+    this.triggers.clear();
+    this.seq = snap.seq;
+    for (const t of snap.triggers) {
+      this.triggers.set(t.id, {
+        id: t.id,
+        shape: t.shape as TriggerZone["shape"],
+        center: [t.center[0], t.center[1], t.center[2]],
+        size: [t.size[0], t.size[1], t.size[2]],
+        actions: { onEnter: [...t.actions.onEnter], onExit: [...t.actions.onExit], onStay: [...t.actions.onStay] },
+        entitiesInside: new Set(t.entitiesInside),
+        config: t.config,
+      });
+    }
+  }
+}
+
+/** The whole TriggerManager state as the snapshot participant carries it (H2). */
+export interface TriggerManagerSnapshot {
+  seq: number;
+  triggers: {
+    id: string;
+    shape: string;
+    center: number[];
+    size: number[];
+    actions: { onEnter: TriggerAction[]; onExit: TriggerAction[]; onStay: TriggerAction[] };
+    entitiesInside: string[];
+    config?: Record<string, unknown>;
+  }[];
+}
+
+/** The whole EventManager state as the snapshot participant carries it (H2). */
+export interface EventManagerSnapshot {
+  seq: number;
+  listeners: { id: string; eventName: string; action: TriggerAction }[];
 }
 
 export class EventManager {
@@ -233,12 +270,21 @@ export class EventManager {
     return [...this.listeners.values()].map((l) => ({ id: l.id, eventName: l.eventName, type: l.action.type }));
   }
 
-  /** Deterministic, JSON-able snapshot (registration order) for replay-equivalence. */
-  snapshot(): { seq: number; listeners: { id: string; eventName: string; action: TriggerAction }[] } {
+  /** Deterministic, JSON-able snapshot (registration order — ids are dense `listener_N`,
+   *  so registration order IS id order) for replay-equivalence AND the world-snapshot
+   *  participant capture (H2). */
+  snapshot(): EventManagerSnapshot {
     return {
       seq: this.seq,
       listeners: [...this.listeners.values()].map((l) => ({ id: l.id, eventName: l.eventName, action: l.action })),
     };
+  }
+
+  /** Wholesale replace the listeners + resume the id counter (participant restore, H2). */
+  restoreSnapshot(snap: EventManagerSnapshot): void {
+    this.listeners.clear();
+    this.seq = snap.seq;
+    for (const l of snap.listeners) this.listeners.set(l.id, { id: l.id, eventName: l.eventName, action: l.action });
   }
 }
 

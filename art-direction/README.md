@@ -1,8 +1,9 @@
 # Art Direction — reference set
 
-This folder is the **visual target** for the limina demo suite + the Aethon halo. Drop reference
-images here and the agent builds scenes to match them (the agent can view images directly). These
-references define the OOB-quality bar — the look we're matching, not guessing at.
+This folder stores visual-direction evidence for the limina demo suite + the Aethon halo. For production
+building architecture, images are inspiration and cue provenance only: agents extract measurable
+relationships, construction logic, silhouette intent, and avoid cues, then BuildingProgram + compiler
+constraints own geometry. Pixel matching and image-to-3D output cannot satisfy architecture authority.
 
 ## How to use it
 
@@ -35,5 +36,6 @@ builds/iterates the scenes toward them, capturing the native window to compare a
 | Flat untextured boxes | Triplanar masonry/timber PBR tinted by colour |
 | Scattered, no focal point | A well/square/path layout; fences, carts, lanterns |
 
-The agent treats matching these as the bar — a scene isn't "done" until its capture reads like the
-reference, not just "renders without error."
+The locked Project Gorgon floor and exact engine/HITL evidence remain the release bar. References help a
+reviewer explain why a result succeeds or fails; they are not acceptance evidence by themselves. See
+`plans/architecture-program-synthesis.md` and `plans/staged-building-pipeline.md` for the active workflow.

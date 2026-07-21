@@ -36,9 +36,10 @@ export class McpError extends Error {
 }
 
 export class McpClient {
-  /** @param {string} url e.g. ws://localhost:8787/ */
-  constructor(url) {
+  /** @param {string} url e.g. ws://localhost:8787/ @param {string | undefined} authToken */
+  constructor(url, authToken = undefined) {
     this.url = url;
+    this.authToken = authToken;
     /** @type {WebSocket | undefined} */
     this.ws = undefined;
     this.nextId = 1;
@@ -48,8 +49,15 @@ export class McpClient {
     this.entityState = new Map();
     /** @type {undefined | (() => void)} */
     this.onSync = undefined;
+    /** @type {undefined | ((msg:any)=>void)} */
+    this.onChatMessage = undefined;
     /** @type {undefined | ((connected:boolean)=>void)} */
     this.onConnectionChange = undefined;
+    /** Generic router (K4) for server -> client notifications that aren't the built-in
+     *  state/snapshot, state/delta, or chat/* cases below -- e.g. worldlog/append. Method name ->
+     *  Set of callbacks, so more than one caller can listen to the same notification. */
+    /** @type {Map<string, Set<(params:any)=>void>>} */
+    this.notificationHandlers = new Map();
     this.session = undefined;
   }
 
@@ -93,11 +101,28 @@ export class McpClient {
     }
     // Read-only state-sync notifications (no id).
     if (msg.method === "state/snapshot" || msg.method === "state/delta") {
-      const entities = msg.method === "state/snapshot" ? msg.params?.entities : msg.params?.changes;
-      if (Array.isArray(entities)) {
-        for (const e of entities) this.entityState.set(e.id, e);
-        if (this.onSync) this.onSync();
-      }
+      // A snapshot is a fresh authoritative baseline (on subscribe/reconnect): REPLACE the
+      // cache so entities from a prior subscription don't linger. A delta is incremental:
+      // apply the changed set and DROP the `removed` ids. Applying removals is what keeps
+      // entityState bounded to the live entity count — without it, every despawned entity
+      // leaks forever (unbounded browser memory on a long editing session).
+      if (msg.method === "state/snapshot") this.entityState.clear();
+      const changes = msg.method === "state/snapshot" ? msg.params?.entities : msg.params?.changes;
+      if (Array.isArray(changes)) for (const e of changes) this.entityState.set(e.id, e);
+      const removed = msg.params?.removed;
+      if (Array.isArray(removed)) for (const id of removed) this.entityState.delete(id);
+      if (Array.isArray(changes) || Array.isArray(removed)) { if (this.onSync) this.onSync(); }
+      return;
+    }
+    if (typeof msg.method === "string" && msg.method.startsWith("chat/")) {
+      if (this.onChatMessage) this.onChatMessage(msg.params);
+      return;
+    }
+    // Generic notification router (K4): any other named server->client push (e.g.
+    // worldlog/append) with a registered handler. A notification carries no `id`, so it must be
+    // routed here rather than falling into the id-correlated request/response branch below.
+    if (typeof msg.method === "string" && this.notificationHandlers.has(msg.method)) {
+      for (const cb of this.notificationHandlers.get(msg.method)) cb(msg.params);
       return;
     }
     if (typeof msg.id === "number") {
@@ -123,8 +148,9 @@ export class McpClient {
   }
 
   /** Bind this session's identity + profile (-> permission set) server-side. */
-  async initialize(agentId, sessionId, profile) {
-    const msg = await this._request("initialize", { agentId, sessionId, profile });
+  async initialize(agentId, sessionId, profile, authToken = this.authToken) {
+    const params = authToken ? { agentId, sessionId, profile, authToken } : { agentId, sessionId, profile };
+    const msg = await this._request("initialize", params);
     if (msg.error) throw new McpError(msg.error.code, msg.error.message, msg.error.data);
     this.session = msg.result?.session;
     return this.session;
@@ -154,5 +180,32 @@ export class McpClient {
     if (mcp && mcp.success) return mcp.result;
     const err = mcp && mcp.error ? mcp.error : { code: "unknown", message: "tool call failed" };
     throw new McpError(0, err.message, mcp);
+  }
+
+  /** Register a callback for `chat/*` server notifications. */
+  onChat(cb) {
+    this.onChatMessage = cb;
+  }
+
+  /** Register a callback for a named server notification (K4 generic router), e.g.
+   *  "worldlog/append". Returns an unsubscribe function. Multiple callers may listen to the
+   *  same method name. */
+  onNotification(method, cb) {
+    let set = this.notificationHandlers.get(method);
+    if (!set) { set = new Set(); this.notificationHandlers.set(method, set); }
+    set.add(cb);
+    return () => { set.delete(cb); };
+  }
+
+  /** K4: opt into the authoring-stream PUSH (worldlog/append) from `since`, instead of polling
+   *  worldlog.tail. The server pushes the tail from `since` immediately (before this request even
+   *  acks), then again after every command that finalizes thereafter — register the
+   *  "worldlog/append" notification handler via onNotification BEFORE calling this so the initial
+   *  push is not missed. Resolves with {ok, next} (the ack; the initial batch itself arrives as a
+   *  notification, not in this result). */
+  async worldlogSubscribe(since) {
+    const msg = await this._request("worldlog/subscribe", { since });
+    if (msg.error) throw new McpError(msg.error.code, msg.error.message, msg.error.data);
+    return msg.result;
   }
 }

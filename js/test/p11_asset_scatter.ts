@@ -311,12 +311,15 @@ assert((replayRes.mounted as number) >= 1, "replay mounted no meshes (did not lo
 assert(sameInstances(replayRes.placements as AssetInstance[], authPlacements), "baked-tile replay recomputed DIFFERENT placements (not bit-identical)");
 assert((replayRes.assetHashes as Record<string, string>)[GLB] === authHashes[GLB], "replay resolved a different asset hash");
 
-// A swapped/mismatched committed hash is REJECTED on replay (pins authored identity).
-// Build a fresh package-backed world, regenerate the region from BAKED tiles, then
-// scatter with a wrong/right hash. FALSIFIABLE — removing the handler's hash check
-// makes the wrong-hash case succeed.
+// A swapped/mismatched committed hash is DETECTED + SURFACED on replay — never fatal.
+// Failure mode #12: op_sha256 is NOT byte-identical across hosts, so a cross-host replay of a
+// healthy scatter can mismatch its committed hashes; throwing quarantined whole settlements.
+// asset.scatter therefore WARNS via an asset.hash_mismatch event and continues (assetId pins
+// identity) — the same rule as asset.place. FALSIFIABLE — removing the handler's hash check
+// makes the mismatch event disappear.
 const pkgReg = AssetRegistry.fromBundle(exportAssetBundle(loaded), guardOps);
-const pinReg = new SkillRegistry(new LiminaTracer("ses_pin"));
+const pinTracer = new LiminaTracer("ses_pin");
+const pinReg = new SkillRegistry(pinTracer);
 registerCoreSkills(pinReg, { assets: pkgReg, terrainSource: makeCachedSource() });
 const pinWorld = makeWorld(guardOps);
 guardOps.op_physics_create_world(-9.81);
@@ -324,15 +327,21 @@ const pinCtx = { agentId: "a", sessionId: "s", permissions: BUILDER, tick: 0, wo
 ok(await pinReg.invoke("world.generateRegion", { seed: WORLD_SEED, bounds: REGION, lod: 0 }, pinCtx));
 const goodHash = authHashes[GLB];
 const badHash = authHashes[GLTF]; // a real-but-WRONG hash for GLB
-const pinBad = await pinReg.invoke("asset.scatter", { regionId, config: skillConfig, assetHashes: { [GLB]: badHash } }, pinCtx);
-assert(!pinBad.success && JSON.stringify(pinBad.error).includes("content hash mismatch"), "replay did NOT verify a committed palette hash (a swapped asset would scatter)");
+// Correct committed hash -> scatters, no mismatch event.
 const pinOk = ok(await pinReg.invoke("asset.scatter", { regionId, config: skillConfig, assetHashes: { [GLB]: goodHash } }, pinCtx));
 assert(sameInstances(pinOk.placements as AssetInstance[], authPlacements), "pinned baked-tile scatter diverged from authoring");
+assert(!pinTracer.trace("a").some((e) => e.type === "asset.hash_mismatch"), "a matching hash must not emit asset.hash_mismatch");
+// Wrong committed hash -> still scatters (assetId pins identity) BUT the mismatch is DETECTED.
+const pinBad = await pinReg.invoke("asset.scatter", { regionId, config: skillConfig, assetHashes: { [GLB]: badHash } }, pinCtx);
+assert(pinBad.success, `a mismatched committed hash must not quarantine the scatter (warn-not-throw): ${JSON.stringify(pinBad.error)}`);
+const scatterMismatches = pinTracer.trace("a").filter((e) => e.type === "asset.hash_mismatch");
+assert(scatterMismatches.length === 1, `a swapped palette hash MUST surface exactly one asset.hash_mismatch event (got ${scatterMismatches.length})`);
+assert(sameInstances((pinBad.result as { placements: AssetInstance[] }).placements, authPlacements), "mismatch-warned scatter must still recompute identical placements");
 
 ops.op_log(
   `p11_asset_scatter OK: scatterAssets deterministic + seed-sensitive (${r1.length} instances); ` +
   `${surfaceChecked} surface-checked vs collider + sampleHeight; tree line falsifiable (uncapped ${uncapped.length} -> capped ${capped.length}, 0 above, subset-reproducible; below-floor -> 0); ` +
   `slope thins steep (${steepAll.length}->${steepFlatOnly.length}); biome filter reads climate (CLIMATE_* contract); render matrices reproduce scatter; ` +
   `asset.scatter BOUND to regionId (${regionId}; ungenerated region rejected), logs regionId+ScatterConfig (no transforms) + commits ${Object.keys(committed).length} pinned hashes; ` +
-  `export carries ${REGION_TILES} region tiles + asset bytes; replay over BAKED tiles (author source ABSENT, model-free CachedTerrainSource) recomputes bit-identical placements + rejects a swapped hash.`,
+  `export carries ${REGION_TILES} region tiles + asset bytes; replay over BAKED tiles (author source ABSENT, model-free CachedTerrainSource) recomputes bit-identical placements + DETECTS a swapped hash (asset.hash_mismatch event, warn-not-throw).`,
 );

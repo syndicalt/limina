@@ -1,0 +1,87 @@
+{
+  "schema": "limina.building-cue-profile/v2",
+  "id": "building/functional-hall-house/fb4-v3",
+  "visualDesign": {
+    "path": "art-direction/functional-hall-house-v4-v3-visual-design.json",
+    "sha256": "sha256:40b4fbd08a60dc785bdea286bea920f1b6b6cd649fe9fb2afe24e0279f9f272c",
+    "contractHash": "sha256:448d0292ef7a7202b125d170781f9cc05e024f4aeeea869a5e56ec7c6999936b"
+  },
+  "program": {
+    "path": "assets/buildings/programs/functional-hall-house-fb4-program-v3.json",
+    "sha256": "sha256:108a7bbb21b6843f7cb569045b6b5db513270f4dac08c446a80d7ab0e0d15fba",
+    "programHash": "sha256:14daddd5098cfcacd8cbf82532c2369872b47d3646b03031647b03f180732963"
+  },
+  "mappings": [
+    {
+      "cueId": "functional-cross-gable-massing",
+      "owner": "rulebook.massing.functional-cross-gable",
+      "verification": "compiler-and-cpu",
+      "assertions": [
+        {"fact": "massing/service-cross-gable-count", "operator": "equals", "value": 1},
+        {"fact": "massing/service-room-traversable", "operator": "equals", "value": true},
+        {"fact": "massing/positive-area-shell-overlap-count", "operator": "equals", "value": 0}
+      ]
+    },
+    {
+      "cueId": "cross-gable-headwall-weather-layer",
+      "owner": "compiler.attached-bay.roof-wall-abutment",
+      "verification": "compiler",
+      "assertions": [
+        {"fact": "roof/service-headwall-abutment-count", "operator": "equals", "value": 2},
+        {"fact": "roof/buried-service-closure-count", "operator": "equals", "value": 0},
+        {"fact": "roof/wall-through-roof-count", "operator": "equals", "value": 0},
+        {"fact": "roof/headwall-weather-face-offset-mm", "operator": "equals", "value": 0}
+      ]
+    },
+    {
+      "cueId": "visible-edge-touching-foundation",
+      "owner": "compiler.attached-bay.foundation",
+      "verification": "compiler-and-cpu",
+      "assertions": [
+        {"fact": "foundation/service-bearing-count", "operator": "equals", "value": 1},
+        {"fact": "foundation/positive-area-overlap-count", "operator": "equals", "value": 0}
+      ]
+    },
+    {
+      "cueId": "braced-primary-entry",
+      "owner": "compiler.entrance-canopy.joinery",
+      "verification": "compiler",
+      "assertions": [
+        {"fact": "canopy/knee-brace-count", "operator": "equals", "value": 2},
+        {"fact": "canopy/door-sweep-intersection-count", "operator": "equals", "value": 0}
+      ]
+    },
+    {
+      "cueId": "centerline-chimney-closure",
+      "owner": "compiler.roof-penetration",
+      "verification": "compiler",
+      "assertions": [
+        {"fact": "chimney/complete-assembly-count", "operator": "equals", "value": 1},
+        {"fact": "chimney/centerline-offset-mm", "operator": "equals", "value": 0},
+        {"fact": "chimney/hearth-transition-closed-count", "operator": "equals", "value": 1},
+        {"fact": "chimney/hearth-transition-max-gap-mm", "operator": "equals", "value": 0},
+        {"fact": "chimney/hearth-transition-clear-flue-count", "operator": "equals", "value": 1}
+      ]
+    },
+    {
+      "cueId": "occupied-daylight-integrity",
+      "owner": "program.requirements.daylight",
+      "verification": "compiler",
+      "assertions": [
+        {"fact": "daylight/upper-bedroom-window-count", "operator": "minimum", "value": 4},
+        {"fact": "daylight/service-gable-window-count", "operator": "minimum", "value": 1}
+      ]
+    },
+    {
+      "cueId": "semantic-evidence-coverage",
+      "owner": "review.semantic-evidence",
+      "verification": "cpu-and-human",
+      "assertions": [
+        {"fact": "evidence/required-claim-view-count", "operator": "minimum", "value": 5},
+        {"fact": "evidence/unresolved-semantic-target-count", "operator": "equals", "value": 0},
+        {"fact": "evidence/clipped-required-target-count", "operator": "equals", "value": 0},
+        {"fact": "circulation/clear-landing-and-approach-count", "operator": "equals", "value": 5}
+      ]
+    }
+  ]
+}

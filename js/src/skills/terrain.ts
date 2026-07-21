@@ -23,11 +23,23 @@ import { z } from "../../build/zod.bundle.mjs";
 import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
 import type { Transformable } from "../ecs/world.ts";
 import type { TerrainSource, TerrainTile, TileRequest } from "../terrain/types.ts";
-import { TILE_SIZE } from "../terrain/procedural.ts";
-import { TERRAIN_TYPE_NAMES, terrainTypeHints, type RegionBounds, type TerrainTypeName } from "../terrain/terrain-types.ts";
+import { ProceduralTerrainSource, TILE_SIZE } from "../terrain/procedural.ts";
+import { MapTerrainSource } from "../terrain/map-source.ts";
+import { MapErosionRecipeSchema } from "../world/pipeline/erosion-schema.ts";
+import { NO_EROSION_RECIPE } from "../world/pipeline/erosion.mjs";
+import { SwappableTerrainSource } from "../terrain/swappable.ts";
+import { WorldMapSchema, verifyWorldMap, migrateWorldMap, type WorldMap } from "../world/worldmap.ts";
+import type { PreparedWaterContactBinding, WaterContactBindingSpec } from "../world/water-contact.ts";
+import type { AssetRegistry } from "../asset-registry.ts";
+import {
+  TERRAIN_TYPE_NAMES,
+  terrainTypeHints,
+  type RegionBounds,
+  type TerrainTypeName,
+} from "../terrain/terrain-types.ts";
 import { requestKey, tileContentHash, TileCache } from "../terrain/tilecache.ts";
 import { buildTerrainMesh, disposeTerrainMesh, type TerrainMeshOptions } from "../terrain/render.ts";
-import { scatterBiomeContent } from "../terrain/biome-content.ts";
+import { scatterBiomeContent, EMPTY_BIOME_PACK, type BiomePack } from "../terrain/biome-content.ts";
 import type { InvokeBase, SkillDefinition, SkillRegistry } from "./registry.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -70,10 +82,30 @@ export interface RegionState {
    *  every tile — and any later streamed-in tile — bands consistently). Undefined when
    *  the region was generated with `render:false` (colliders/data only, no visible mesh). */
   meshOpts?: TerrainMeshOptions;
+  /** Render-only resources mounted for this whole region (for example asset.scatter
+   *  InstancedMeshes). These are not sim/log state; they must be removed/disposed
+   *  when the region's applied tile set is replaced or streamed away. */
+  renderDisposables?: (() => void)[];
+}
+
+/** Optional per-world contact binding injected by registerCoreSkills. The terrain skill keeps map
+ * verification authoritative; the contact runtime prepares before source mutation and activates only
+ * after the new source is ready. */
+export interface TerrainWaterContactHooks {
+  prepareVerifiedMap(worldMap: WorldMap, spec: WaterContactBindingSpec): PreparedWaterContactBinding;
+  activate(
+    prepared: PreparedWaterContactBinding,
+    sampleTerrainHeight: (worldX: number, worldZ: number) => number,
+  ): void;
+  clear(bindingId: string): boolean;
 }
 
 /** A stable region handle derived from the request (deterministic across runs). */
-function regionIdOf(seed: number, lod: number, b: { minTx: number; minTz: number; maxTx: number; maxTz: number }): string {
+function regionIdOf(
+  seed: number,
+  lod: number,
+  b: { minTx: number; minTz: number; maxTx: number; maxTz: number },
+): string {
   return `rgn_${seed | 0}_l${lod | 0}_${b.minTx}_${b.minTz}_${b.maxTx}_${b.maxTz}`;
 }
 
@@ -108,30 +140,37 @@ const surfaceSchema = z.object({
   minY: z.number().optional(),
   maxY: z.number().optional(),
   /** OPT-IN wet-shore band for the "pbr" surface (texture-terminates the waterline). */
-  waterline: z.object({
-    seaLevel: z.number().optional(),
-    wetBand: z.number().optional(),
-    foamBand: z.number().optional(),
-    darken: z.number().optional(),
-    wetRoughness: z.number().optional(),
-    foam: z.number().optional(),
-    foamColor: z.number().int().optional(),
-  }).optional(),
+  waterline: z
+    .object({
+      seaLevel: z.number().optional(),
+      wetBand: z.number().optional(),
+      foamBand: z.number().optional(),
+      darken: z.number().optional(),
+      wetRoughness: z.number().optional(),
+      foam: z.number().optional(),
+      foamColor: z.number().int().optional(),
+    })
+    .optional(),
   /** Tropical shoreline band overrides for the "shoreline" surface. */
-  shoreline: z.object({
-    seaLevel: z.number().optional(),
-    foamColor: z.number().int().optional(),
-    wetColor: z.number().int().optional(),
-    wetBand: z.number().optional(),
-    foamBand: z.number().optional(),
-  }).optional(),
+  shoreline: z
+    .object({
+      seaLevel: z.number().optional(),
+      foamColor: z.number().int().optional(),
+      wetColor: z.number().int().optional(),
+      wetBand: z.number().optional(),
+      foamBand: z.number().optional(),
+    })
+    .optional(),
   /** Render-only vertical exaggeration of the rendered geometry (collider untouched). */
   exaggerateY: z.object({ factor: z.number(), pivot: z.number() }).optional(),
 });
 type SurfaceInput = z.infer<typeof surfaceSchema>;
 
 /** The surveyed world-Y relief of a region (the bands' normalisation range). */
-interface Relief { minY: number; maxY: number }
+interface Relief {
+  minY: number;
+  maxY: number;
+}
 
 /** World-Y extent of one tile (origin.y + h·scaleY over its raw heights). Used to band the
  *  visible mesh (render-only). NOTE: this is a SEPARATE relief from the one biome-content's
@@ -140,9 +179,15 @@ interface Relief { minY: number; maxY: number }
  *  use the scatter survey (surveyRegionRelief) — not this mesh-banding extent — as the
  *  source of truth for placement gates. (Follow-up: unify if they ever diverge materially.) */
 function tileWorldYExtent(tile: TerrainTile): Relief {
-  const oy = tile.origin[1], sy = tile.scale[1];
-  let lo = Infinity, hi = -Infinity;
-  for (let i = 0; i < tile.heights.length; i++) { const h = tile.heights[i]; if (h < lo) lo = h; if (h > hi) hi = h; }
+  const oy = tile.origin[1],
+    sy = tile.scale[1];
+  let lo = Infinity,
+    hi = -Infinity;
+  for (let i = 0; i < tile.heights.length; i++) {
+    const h = tile.heights[i];
+    if (h < lo) lo = h;
+    if (h > hi) hi = h;
+  }
   return { minY: oy + lo * sy, maxY: oy + hi * sy };
 }
 
@@ -150,11 +195,14 @@ function tileWorldYExtent(tile: TerrainTile): Relief {
  *  every tile mesh is built with. Pure; the same recipe + relief always yields the same
  *  options, so the auto-surface is deterministic (render-only). Also returns the derived
  *  sea level (for the skill output). */
-function resolveSurfaceMeshOpts(surface: SurfaceInput | undefined, relief: Relief): { opts: TerrainMeshOptions; seaLevel: number } {
+function resolveSurfaceMeshOpts(
+  surface: SurfaceInput | undefined,
+  relief: Relief,
+): { opts: TerrainMeshOptions; seaLevel: number } {
   const mode = surface?.mode ?? "pbr";
   const minY = surface?.minY ?? relief.minY;
   const maxY = surface?.maxY ?? relief.maxY;
-  const seaLevel = surface?.seaLevel ?? (minY + (surface?.seaFraction ?? 0) * (maxY - minY));
+  const seaLevel = surface?.seaLevel ?? minY + (surface?.seaFraction ?? 0) * (maxY - minY);
   const opts: TerrainMeshOptions = {};
   if (surface?.color !== undefined) opts.color = surface.color;
   if (surface?.roughness !== undefined) opts.roughness = surface.roughness;
@@ -163,14 +211,18 @@ function resolveSurfaceMeshOpts(surface: SurfaceInput | undefined, relief: Relie
   const band = { seaLevel, minY, maxY };
   if (mode === "pbr") opts.pbr = surface?.waterline !== undefined ? { ...band, waterline: surface.waterline } : band;
   else if (mode === "palette") opts.palette = band;
-  else if (mode === "shoreline") opts.shoreline = { ...(surface?.shoreline ?? {}), seaLevel: surface?.shoreline?.seaLevel ?? seaLevel };
+  else if (mode === "shoreline")
+    opts.shoreline = { ...(surface?.shoreline ?? {}), seaLevel: surface?.shoreline?.seaLevel ?? seaLevel };
   // mode "flat": plain colour/roughness only (no banded surface node).
   if (surface?.exaggerateY !== undefined) opts.exaggerateY = surface.exaggerateY;
   return { opts, seaLevel };
 }
 
 /** Minimal scene surface the auto-surface mounts onto (THREE.Scene / a headless stub). */
-interface SceneAdd { add(child: unknown): void; remove(child: unknown): void }
+interface SceneAdd {
+  add(child: unknown): void;
+  remove(child: unknown): void;
+}
 
 /** Build + mount the visible terrain mesh for one applied tile (render-only). No-op when
  *  the region isn't rendering (`meshOpts` unset), the tile is already mounted, or the
@@ -194,16 +246,36 @@ function unmountTileMesh(applied: AppliedTile, scene: unknown): void {
   applied.mesh = undefined;
 }
 
+function clearRegionRenderDisposables(region: RegionState): void {
+  const disposables = region.renderDisposables;
+  if (disposables === undefined || disposables.length === 0) return;
+  region.renderDisposables = [];
+  const errors: unknown[] = [];
+  for (const dispose of disposables) {
+    try {
+      dispose();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0)
+    throw new AggregateError(errors, `region render disposal failed in ${errors.length} operation(s)`);
+}
+
 /** Register the terrain.* / world.* skills bound to a source + cache. The default
  *  core wiring passes a ProceduralTerrainSource; a runtime can pass the cached
- *  source (replay) or the model-backed source (authoring) instead. */
+ *  source (replay) or the model-backed source (authoring) instead. When `source` is
+ *  a SwappableTerrainSource (registerCoreSkills' default wrapping) the RECORDED
+ *  world.setTerrainSource skill can rebind it (e.g. to a MapTerrainSource) — `assets`
+ *  is the registry that resolves the map IR bytes for that command. */
 export function registerTerrainSkills(
   registry: SkillRegistry,
   source: TerrainSource,
   cache: TileCache = new TileCache(),
   regions: Map<string, RegionState> = new Map(),
+  assets?: AssetRegistry,
+  waterContact?: TerrainWaterContactHooks,
 ): { cache: TileCache; regions: Map<string, RegionState> } {
-
   /** Resolve + apply one tile: build the native heightfield collider, register a
    *  terrain entity, record it in the region, and emit terrain.tile.ready. */
   async function applyTile(
@@ -220,7 +292,17 @@ export function registerTerrainSkills(
     const tile = await cache.resolve(req, source);
     const [ox, oy, oz] = tile.origin;
     const [sx, sy, sz] = tile.scale;
-    const bodyId = ctx.world.ops.op_physics_add_heightfield(ox, oy, oz, tile.nrows, tile.ncols, sx, sy, sz, tile.heights);
+    const bodyId = ctx.world.ops.op_physics_add_heightfield(
+      ox,
+      oy,
+      oz,
+      tile.nrows,
+      tile.ncols,
+      sx,
+      sy,
+      sz,
+      tile.heights,
+    );
     const eid = spawnRenderable(ctx.world.ecs, inertTransform(), ox, oy, oz);
     if (eid >= MAX_ENTITIES) {
       despawnRenderable(ctx.world.ecs, eid);
@@ -231,19 +313,28 @@ export function registerTerrainSkills(
     const applied: AppliedTile = { bodyId, entity, eid, tx, tz };
     region.tiles.set(key, applied);
     ctx.emit("terrain.tile.ready", {
-      regionId, tx, tz, key, hash: tileContentHash(tile), bodyId, entity,
-      origin: tile.origin, source: source.name,
+      regionId,
+      tx,
+      tz,
+      key,
+      hash: tileContentHash(tile),
+      bodyId,
+      entity,
+      origin: tile.origin,
+      source: source.name,
     });
     return { key, bodyId, entity, applied, tile };
   }
 
   // ---- world.generateRegion ------------------------------------------------
-  const boundsSchema = z.object({
-    minTx: z.number().int(),
-    minTz: z.number().int(),
-    maxTx: z.number().int(),
-    maxTz: z.number().int(),
-  }).refine((b) => b.maxTx >= b.minTx && b.maxTz >= b.minTz, "bounds max must be >= min")
+  const boundsSchema = z
+    .object({
+      minTx: z.number().int(),
+      minTz: z.number().int(),
+      maxTx: z.number().int(),
+      maxTz: z.number().int(),
+    })
+    .refine((b) => b.maxTx >= b.minTx && b.maxTz >= b.minTz, "bounds max must be >= min")
     .refine((b) => (b.maxTx - b.minTx + 1) * (b.maxTz - b.minTz + 1) <= 256, "region too large (>256 tiles)");
   const generateRegionInput = z.object({
     seed: z.number().int(),
@@ -279,7 +370,13 @@ export function registerTerrainSkills(
   const generateRegion: SkillDefinition<z.infer<typeof generateRegionInput>, z.infer<typeof generateRegionOutput>> = {
     name: "world.generateRegion",
     version: "1.0.0",
-    description: "Generate a rectangular region of terrain: build the heightfield COLLIDERS from a deterministic source AND (by default) the VISIBLE procedural-PBR terrain mesh per tile, so the region renders a textured landscape out of the box. High-cost; streams tiles, emitting terrain.tile.ready per tile. Returns a region handle + the surveyed relief/seaLevel. The world log records this REQUEST; the tile bytes ride the cache/export; the visible meshes are RENDER-ONLY (rebuilt from the same tiles on replay). Opt out of the mesh with render:false (colliders/data only); tune the look with `surface`.",
+    description:
+      "Generate a rectangular region of terrain: build the heightfield COLLIDERS from a deterministic source " +
+      "AND (by default) the VISIBLE procedural-PBR terrain mesh per tile, so the region renders a textured " +
+      "landscape out of the box. High-cost; streams tiles, emitting terrain.tile.ready per tile. Returns a region " +
+      "handle + the surveyed relief/seaLevel. The world log records this REQUEST; the tile bytes ride the " +
+      "cache/export; the visible meshes are RENDER-ONLY (rebuilt from the same tiles on replay). Opt out of the " +
+      "mesh with render:false (colliders/data only); tune the look with `surface`.",
     category: "world",
     permissions: ["terrain.generate"],
     input: generateRegionInput,
@@ -288,18 +385,25 @@ export function registerTerrainSkills(
       // Resolve a named terrain TYPE into the full shaping+climate hint map, then let any
       // explicit `hints` override individual knobs. Pure + deterministic, so replay (which
       // re-invokes this skill with the recorded request) re-derives the identical hints.
-      const typed = input.type !== undefined ? terrainTypeHints(input.type as TerrainTypeName, input.bounds) : undefined;
-      const merged = (typed !== undefined || input.hints !== undefined)
-        ? { ...(typed ?? {}), ...(input.hints ?? {}) }
-        : undefined;
+      const typed =
+        input.type !== undefined ? terrainTypeHints(input.type as TerrainTypeName, input.bounds) : undefined;
+      const merged =
+        typed !== undefined || input.hints !== undefined ? { ...(typed ?? {}), ...(input.hints ?? {}) } : undefined;
       const regionId = regionIdOf(input.seed, input.lod, input.bounds);
       let region = regions.get(regionId);
       if (region === undefined) {
-        region = { seed: input.seed, lod: input.lod, hints: merged, type: input.type as TerrainTypeName | undefined, tiles: new Map() };
+        region = {
+          seed: input.seed,
+          lod: input.lod,
+          hints: merged,
+          type: input.type as TerrainTypeName | undefined,
+          tiles: new Map(),
+        };
         regions.set(regionId, region);
       } else if (region.type === undefined && input.type !== undefined) {
         region.type = input.type as TerrainTypeName;
       }
+      clearRegionRenderDisposables(region);
       const bodies: number[] = [];
       const keys: string[] = [];
       // Deterministic apply order (tz outer, tx inner) so body-id allocation is
@@ -330,12 +434,18 @@ export function registerTerrainSkills(
         let minY = input.surface?.minY;
         let maxY = input.surface?.maxY;
         if (minY === undefined || maxY === undefined || input.surface?.seaLevel === undefined) {
-          let lo = Infinity, hi = -Infinity;
+          let lo = Infinity,
+            hi = -Infinity;
           for (const { applied: at, tile } of applied) {
             // Fresh tile in hand → use it; an already-cached tile (re-gen) → cheap cache hit,
             // so the band is ALWAYS real (never the degenerate 0..0 that would mis-colour a
             // later streamFollow tile banding against it).
-            const t = tile ?? await cache.resolve({ seed: region.seed, tx: at.tx, tz: at.tz, lod: region.lod, hints: region.hints }, source);
+            const t =
+              tile ??
+              (await cache.resolve(
+                { seed: region.seed, tx: at.tx, tz: at.tz, lod: region.lod, hints: region.hints },
+                source,
+              ));
             const e = tileWorldYExtent(t);
             if (e.minY < lo) lo = e.minY;
             if (e.maxY > hi) hi = e.maxY;
@@ -366,7 +476,145 @@ export function registerTerrainSkills(
       }
 
       ctx.emit("terrain.region.ready", { regionId, tiles: bodies.length, meshes: meshCount });
-      return { regionId, tiles: bodies.length, bodies, keys, meshes: meshCount, relief: reliefOut, seaLevel: seaLevelOut };
+      return {
+        regionId,
+        tiles: bodies.length,
+        bodies,
+        keys,
+        meshes: meshCount,
+        relief: reliefOut,
+        seaLevel: seaLevelOut,
+      };
+    },
+  };
+
+  // ---- world.setTerrainSource ------------------------------------------------
+  // Map Phase 3.2: binding a map to the STREAMED world is a RECORDED command, so the
+  // replay log is self-describing — replay re-invokes this skill, re-resolves the IR
+  // asset, re-verifies its content hash (pure-JS sha256 via verifyWorldMap; a mismatch
+  // THROWS — maps are load-bearing), and reconstructs the MapTerrainSource FROM the
+  // log, never out-of-band. The recorder COMMITS the resolved IR hash back into the
+  // recorded command (commitFields, like terrain.create's mapHash / asset.place's
+  // hash), so a different-but-internally-consistent map swapped in at the same asset
+  // id is rejected on replay. Requires the SwappableTerrainSource holder registerCore-
+  // Skills wraps the bound source in; rebinding propagates to generateRegion /
+  // streamFollow / asset.scatter / world.addWater at once (they share the holder).
+  //
+  // ORDERING RULE (documented + gated): the source must be set BEFORE any region is
+  // generated. Rebinding mid-session would mix two sources' tiles inside live regions
+  // AND serve stale tiles from the request-keyed cache (keys carry no source identity),
+  // so the command REJECTS when regions already exist — reset the world (or a fresh
+  // session) to change terrain sources.
+  const setTerrainSourceInput = z.object({
+    kind: z.enum(["procedural", "map"]),
+    /** The WorldMap IR asset id (kind "map" only), e.g. "maps/primary.worldmap.json". */
+    mapAssetId: z.string().min(1).optional(),
+    /** The IR's provenance.contentHash. Absent at authoring (resolved + returned as
+     *  output.hash, then committed into the recorded command); present on replay,
+     *  where a mismatch against the resolved IR THROWS (identity pin). */
+    hash: z.string().optional(),
+    /** Map raster seed. Omitted legacy commands replay with seed 1. */
+    seed: z.number().int().min(-2147483648).max(2147483647).optional(),
+    /** Absolute-meter relief amplitude. Omitted legacy commands replay with 12m. */
+    baseAmplitude: z.number().finite().positive().optional(),
+    /** Versioned authoring-time master erosion. Omission means strict disabled
+     * compatibility, preserving every pre-erosion streamed world. */
+    erosion: MapErosionRecipeSchema.optional(),
+  });
+  const setTerrainSourceOutput = z.object({
+    kind: z.enum(["procedural", "map"]),
+    source: z.string(),
+    hash: z.string().optional(),
+  });
+  const setTerrainSource: SkillDefinition<
+    z.infer<typeof setTerrainSourceInput>,
+    z.infer<typeof setTerrainSourceOutput>
+  > = {
+    name: "world.setTerrainSource",
+    version: "1.0.0",
+    description:
+      "Bind the streamed-terrain source for this world: kind 'map' resolves + verifies a committed WorldMap IR asset and records its raster seed, amplitude, and optional versioned master-erosion recipe; omission preserves legacy no-erosion bytes. Replay reconstructs the same once-baked MapTerrainSource. kind 'procedural' restores the default generator. Must run BEFORE any world.generateRegion. Map tiles sample the baked master and are never export-retained.",
+    category: "world",
+    permissions: ["scene.write"],
+    // Pin the AUTHORED map identity into the replay log (mirrors terrain.create's mapHash).
+    commitFields: ["hash"],
+    input: setTerrainSourceInput,
+    output: setTerrainSourceOutput,
+    handler: (input, ctx) => {
+      if (!(source instanceof SwappableTerrainSource)) {
+        throw new Error(
+          "world.setTerrainSource: this runtime binds a FIXED terrain source (no SwappableTerrainSource holder) — rebinding is unavailable",
+        );
+      }
+      if (regions.size > 0) {
+        throw new Error(
+          "world.setTerrainSource: terrain regions already exist in this session — reset the world, or set the terrain source BEFORE world.generateRegion (rebinding mid-session would mix sources under the same tile-cache keys)",
+        );
+      }
+      if (input.kind === "procedural") {
+        if (input.seed !== undefined || input.baseAmplitude !== undefined || input.erosion !== undefined) {
+          throw new Error("world.setTerrainSource: seed, baseAmplitude, and erosion are map-only inputs");
+        }
+        waterContact?.clear("terrain-source");
+        source.swap(new ProceduralTerrainSource());
+        ctx.emit("terrain.source_changed", { kind: "procedural", source: source.name });
+        return { kind: "procedural" as const, source: source.name };
+      }
+      if (input.mapAssetId === undefined) {
+        throw new Error("world.setTerrainSource: kind 'map' requires mapAssetId");
+      }
+      if (assets === undefined) {
+        throw new Error(
+          "world.setTerrainSource: kind 'map' requires an AssetRegistry (thread one via registerTerrainSkills)",
+        );
+      }
+      const resolved = assets.resolve(input.mapAssetId);
+      let parsedJson: unknown;
+      try {
+        parsedJson = JSON.parse(new TextDecoder().decode(resolved.bytes));
+      } catch (e) {
+        throw new Error(
+          `world.setTerrainSource: map asset '${input.mapAssetId}' is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+      // Zod-parse as WorldMap (THROWS on malformed shape), forward-migrated to the current
+      // version first (migrateWorldMap — a no-op for an already-current map), then verify the
+      // embedded content hash with the pure-JS sha256 path — a mismatch THROWS: maps are load-
+      // bearing (deliberately stricter than asset.place's warn-not-throw).
+      const worldMap = WorldMapSchema.parse(migrateWorldMap(parsedJson));
+      const verify = verifyWorldMap(worldMap);
+      if (!verify.ok) {
+        throw new Error(
+          `world.setTerrainSource: map asset '${input.mapAssetId}' content hash mismatch (expected ${verify.expected}, actual ${verify.actual}) — refusing a tampered/corrupted map`,
+        );
+      }
+      if (input.hash !== undefined && input.hash !== worldMap.provenance.contentHash) {
+        throw new Error(
+          `world.setTerrainSource: map asset '${input.mapAssetId}' identity mismatch (committed ${input.hash}, resolved ${worldMap.provenance.contentHash}) — the map changed since this world was authored`,
+        );
+      }
+      const hash = worldMap.provenance.contentHash;
+      const nextSource = new MapTerrainSource({
+        worldMap,
+        ...(input.seed !== undefined ? { seed: input.seed } : {}),
+        ...(input.baseAmplitude !== undefined ? { baseAmplitude: input.baseAmplitude } : {}),
+        ...(input.erosion !== undefined ? { erosionRecipe: input.erosion } : {}),
+      });
+      const preparedWater = waterContact?.prepareVerifiedMap(worldMap, { bindingId: "terrain-source" });
+      if (preparedWater !== undefined) {
+        waterContact!.activate(preparedWater, (x, z) => nextSource.sampleHeight(input.seed ?? 1, x, z, 0));
+      }
+      source.swap(nextSource);
+      ctx.emit("terrain.source_changed", {
+        kind: "map",
+        source: source.name,
+        mapAssetId: input.mapAssetId,
+        hash,
+        seed: input.seed ?? 1,
+        baseAmplitude: input.baseAmplitude ?? 12,
+        erosion: input.erosion ?? NO_EROSION_RECIPE,
+      });
+      return { kind: "map" as const, source: source.name, hash };
     },
   };
 
@@ -385,7 +633,8 @@ export function registerTerrainSkills(
   const streamFollow: SkillDefinition<z.infer<typeof streamFollowInput>, z.infer<typeof streamFollowOutput>> = {
     name: "world.streamFollow",
     version: "1.0.0",
-    description: "Stream terrain tiles in a square window around an anchor (agent/camera): generate+apply tiles entering the window, remove tiles leaving a keep-margin. Returns the loaded/removed tile keys. Off-loop in production; synchronous here.",
+    description:
+      "Stream terrain tiles in a square window around an anchor (agent/camera): generate+apply tiles entering the window, remove tiles leaving a keep-margin. Returns the loaded/removed tile keys. Off-loop in production; synchronous here.",
     category: "world",
     permissions: ["terrain.generate"],
     input: streamFollowInput,
@@ -417,8 +666,13 @@ export function registerTerrainSkills(
       }
       // Remove tiles outside the keep-margin (and dispose their visible mesh).
       const removed: string[] = [];
+      let clearedRegionRender = false;
       for (const [key, t] of [...region.tiles]) {
         if (Math.abs(t.tx - atx) > keep || Math.abs(t.tz - atz) > keep) {
+          if (!clearedRegionRender) {
+            clearRegionRenderDisposables(region);
+            clearedRegionRender = true;
+          }
           unmountTileMesh(t, ctx.world.scene);
           ctx.world.ops.op_physics_remove_body(t.bodyId);
           despawnRenderable(ctx.world.ecs, t.eid);
@@ -442,9 +696,11 @@ export function registerTerrainSkills(
   const sampleHeight: SkillDefinition<z.infer<typeof sampleHeightInput>, { y: number }> = {
     name: "terrain.sampleHeight",
     version: "1.0.0",
-    description: "O(1) deterministic surface-elevation query at a world (x,z) for a seed/lod (snapping/placement). Returns world Y.",
+    description:
+      "O(1) deterministic surface-elevation query at a world (x,z) for a seed/lod (snapping/placement). Returns world Y.",
     category: "terrain",
     permissions: ["terrain.read"],
+    effect: "read",
     input: sampleHeightInput,
     output: z.object({ y: z.number() }),
     handler: (input) => ({ y: source.sampleHeight(input.seed, input.x, input.z, input.lod) }),
@@ -459,12 +715,17 @@ export function registerTerrainSkills(
     // the perceived biome matches the shaped tiles; omit for the byte-identical base.
     hints: z.record(z.string(), z.number()).optional(),
   });
-  const sampleClimate: SkillDefinition<z.infer<typeof sampleClimateInput>, { tempC: number; precipMm: number; biome: number }> = {
+  const sampleClimate: SkillDefinition<
+    z.infer<typeof sampleClimateInput>,
+    { tempC: number; precipMm: number; biome: number }
+  > = {
     name: "terrain.sampleClimate",
     version: "1.0.0",
-    description: "Deterministic per-coordinate climate (tempC, precipMm, biome) for agent perception. Pass the region's terrain hints to read the per-type biome.",
+    description:
+      "Deterministic per-coordinate climate (tempC, precipMm, biome) for agent perception. Pass the region's terrain hints to read the per-type biome.",
     category: "terrain",
     permissions: ["terrain.read"],
+    effect: "read",
     input: sampleClimateInput,
     output: z.object({ tempC: z.number(), precipMm: z.number(), biome: z.number().int() }),
     handler: (input) => source.sampleClimate(input.seed, input.x, input.z, input.hints),
@@ -484,6 +745,37 @@ export function registerTerrainSkills(
   // double-record). On replay this skill is re-invoked and re-drives the SAME
   // asset.scatter calls deterministically (asset.scatter itself recomputes its placements
   // over the same baked/cached tiles), so the placement set is bit-identical.
+  // One concrete content asset a biome-pack role can bind — shared between the single-entry
+  // (back-compat) form and each weighted archetype variant. Mirrors BiomePackSingleEntry
+  // (terrain/biome-content.ts); this zod object is the single source of truth for the wire shape.
+  const biomePackAssetFields = z.object({
+    id: z.string(),
+    embedRadius: z.number().nonnegative().optional(),
+    lods: z
+      .array(
+        z.object({
+          id: z.string(),
+          distance: z.number().positive(),
+          hysteresis: z.number().min(0).max(1).optional(),
+        }),
+      )
+      .min(1)
+      .optional(),
+    treeLod: z
+      .object({
+        reducedId: z.string().min(1),
+        reducedDistance: z.number().positive(),
+        impostorId: z.string().min(1),
+        impostorDistance: z.number().positive(),
+        cullDistance: z.number().positive(),
+        hysteresis: z.number().min(0).max(1).optional(),
+      })
+      .refine(
+        (value) => value.reducedDistance < value.impostorDistance && value.impostorDistance < value.cullDistance,
+        { message: "treeLod distances must be strictly increasing" },
+      )
+      .optional(),
+  });
   const populateBiomeInput = z.object({
     /** The region from world.generateRegion to populate (binds the scatter to its tiles). */
     regionId: z.string(),
@@ -495,23 +787,64 @@ export function registerTerrainSkills(
     waterLevel: z.number().optional(),
     /** Dry margin (world Y) added ABOVE the water level for waterGated layers. Default 0. */
     waterMargin: z.number().optional(),
+    /** Spatial population render-cell size. Smaller cells improve LOD distance
+     *  accuracy; for non-LOD assets they trade culling granularity for draw calls. */
+    cellSize: z.number().positive().optional(),
     /** Override the scatter seed (default: the region's generation seed). */
     seed: z.number().int().optional(),
+    /** The project's role→asset binding for the scatter (conifer/broadleaf/boulder/…). The engine
+     *  ships NO pack — an absent/partial pack scatters nothing for unmapped roles (graceful). When
+     *  omitted, the effective pack is read from the project's `biome-pack.json` (missing/invalid →
+     *  empty), so a project supplies content either inline here or as that file. */
+    // partialRecord (NOT record): a project supplies SOME roles, not all seven. zod v4's
+    // z.record over an enum is EXHAUSTIVE — it silently rejected every partial pack (a real
+    // project's biome-pack.json failed safeParse → EMPTY_BIOME_PACK → nothing scattered), which
+    // defeated the whole "graceful partial pack" contract of the engine↔content decoupling.
+    biomePack: z
+      .partialRecord(
+        z.enum(["conifer", "broadleaf", "boulder", "bush", "grass", "cactus", "palm"]),
+        // A role binds EITHER a single asset (the original shape — back-compat, parses unchanged)
+        // OR weighted archetype `variants` so one role scatters a population of distinct
+        // silhouettes. The single-entry branch comes FIRST so existing packs take the exact
+        // parse they always did; a `{variants}` object has no `id` and falls to the second.
+        z.union([
+          biomePackAssetFields,
+          z.object({
+            variants: z
+              .array(
+                biomePackAssetFields.extend({
+                  /** Relative archetype share WITHIN the role (default 1). The per-instance pick is
+                   *  the seeded cumulative-weight draw in scatterAssets — deterministic, replayable. */
+                  weight: z.number().positive().optional(),
+                }),
+              )
+              .min(1),
+          }),
+        ]),
+      )
+      .optional(),
   });
   const populateBiomeOutput = z.object({
     regionId: z.string(),
     type: z.string(),
     /** Total instances placed across all layers. */
     instances: z.number().int(),
+    /** Total render meshes mounted across all layers. */
+    mounted: z.number().int(),
     /** Surveyed relief the fractional elevation gates resolved against. */
     relief: z.object({ minY: z.number(), maxY: z.number() }),
-    /** Per-layer summary (instances + mounted InstancedMesh count). */
+    /** Per-layer summary (instances + mounted level-mesh count). */
     layers: z.array(z.object({ instances: z.number().int(), mounted: z.number().int() })),
   });
   const populateBiome: SkillDefinition<z.infer<typeof populateBiomeInput>, z.infer<typeof populateBiomeOutput>> = {
     name: "world.populateBiome",
     version: "1.0.0",
-    description: "Scatter a terrain TYPE's biome content (trees/rocks/grass/cacti/palms, biome- and elevation-gated) over an ALREADY-GENERATED region (by regionId), via the deterministic asset.scatter seam. Surveys the region's relief with the hints it was generated with, resolves the type's content layers, and drives asset.scatter per layer. Deterministic + replay-safe: the world log records THIS request; the nested asset.scatter calls are recomputed on replay (no double-record). Returns the placement count + per-layer summary.",
+    description:
+      "Scatter a terrain TYPE's biome content (trees/rocks/grass/cacti/palms, biome- and elevation-gated) over " +
+      "an ALREADY-GENERATED region (by regionId), via the deterministic asset.scatter seam. Surveys the " +
+      "region's relief with the hints it was generated with, resolves the type's content layers, and drives " +
+      "asset.scatter per layer. Deterministic + replay-safe: the world log records THIS request; the nested " +
+      "asset.scatter calls are recomputed on replay (no double-record). Returns the placement count + per-layer summary.",
     category: "world",
     permissions: ["scene.write"],
     input: populateBiomeInput,
@@ -519,17 +852,25 @@ export function registerTerrainSkills(
     handler: async (input, ctx) => {
       const region = regions.get(input.regionId);
       if (region === undefined) {
-        throw new Error(`world.populateBiome: unknown region '${input.regionId}' — generate it with world.generateRegion first`);
+        throw new Error(
+          `world.populateBiome: unknown region '${input.regionId}' — generate it with world.generateRegion first`,
+        );
       }
       const type = (input.type as TerrainTypeName | undefined) ?? region.type;
       if (type === undefined) {
-        throw new Error(`world.populateBiome: region '${input.regionId}' has no terrain type — pass an explicit \`type\``);
+        throw new Error(
+          `world.populateBiome: region '${input.regionId}' has no terrain type — pass an explicit \`type\``,
+        );
       }
       if (region.tiles.size === 0) {
         throw new Error(`world.populateBiome: region '${input.regionId}' has no applied tiles`);
       }
+      clearRegionRenderDisposables(region);
       // Derive the region's tile-grid bounds from its applied tiles (single source of truth).
-      let minTx = Infinity, minTz = Infinity, maxTx = -Infinity, maxTz = -Infinity;
+      let minTx = Infinity,
+        minTz = Infinity,
+        maxTx = -Infinity,
+        maxTz = -Infinity;
       for (const t of region.tiles.values()) {
         if (t.tx < minTx) minTx = t.tx;
         if (t.tx > maxTx) maxTx = t.tx;
@@ -539,22 +880,59 @@ export function registerTerrainSkills(
       const bounds: RegionBounds = { minTx, minTz, maxTx, maxTz };
       const seed = input.seed ?? region.seed;
       // Build the nested-invoke base from this skill's execution context (the SAME registry
-      // the terrain skills were registered on — the recorder's patched invoke, so the nested
-      // asset.scatter calls run at depth > 0 and are not separately recorded).
+      // the terrain skills were registered on — the recorder's patched invoke). Thread
+      // `ctx.chainId` so the nested asset.scatter calls are FOLDED into this populateBiome
+      // command (reproduced on replay), NOT recorded as separate top-level commands.
       const base: InvokeBase = {
-        agentId: ctx.agentId, sessionId: ctx.sessionId, permissions: ctx.permissions, tick: ctx.tick, world: ctx.world,
+        agentId: ctx.agentId,
+        sessionId: ctx.sessionId,
+        permissions: ctx.permissions,
+        tick: ctx.tick,
+        world: ctx.world,
+        chainId: ctx.chainId,
+        chainToken: ctx.chainToken,
       };
+      // Effective role→asset pack: the inline input wins; otherwise read the project's
+      // biome-pack.json via the host asset op (the SAME sandboxed read asset-catalog.ts uses for
+      // catalog.json). Missing/invalid → EMPTY_BIOME_PACK, so an engine with no project pack
+      // scatters nothing rather than throwing. Sync host op (no async I/O in the handler), and the
+      // file is static project content, so replay re-reads the same bytes → deterministic.
+      let pack: BiomePack = input.biomePack ?? EMPTY_BIOME_PACK;
+      if (input.biomePack === undefined) {
+        try {
+          const bytes = ctx.world.ops.op_read_asset("biome-pack.json");
+          const parsed = populateBiomeInput.shape.biomePack.safeParse(JSON.parse(new TextDecoder().decode(bytes)));
+          if (parsed.success && parsed.data !== undefined) pack = parsed.data;
+        } catch {
+          pack = EMPTY_BIOME_PACK;
+        }
+      }
       const res = await scatterBiomeContent({
-        registry, source, regions, regionId: input.regionId, type, bounds, seed, base,
-        waterLevel: input.waterLevel, waterMargin: input.waterMargin,
+        registry,
+        source,
+        regions,
+        regionId: input.regionId,
+        type,
+        pack,
+        bounds,
+        seed,
+        base,
+        waterLevel: input.waterLevel,
+        waterMargin: input.waterMargin,
+        cellSize: input.cellSize,
       });
       ctx.emit("terrain.region.populated", {
-        regionId: input.regionId, type, instances: res.instances, layers: res.layers.length,
+        regionId: input.regionId,
+        type,
+        instances: res.instances,
+        mounted: res.mounted,
+        layers: res.layers.length,
       });
       return {
         regionId: input.regionId,
         type,
         instances: res.instances,
+        mounted: res.mounted,
         relief: { minY: res.survey.minY, maxY: res.survey.maxY },
         layers: res.layers.map((l) => ({ instances: l.instances, mounted: l.mounted })),
       };
@@ -562,6 +940,7 @@ export function registerTerrainSkills(
   };
 
   registry.register(generateRegion);
+  registry.register(setTerrainSource);
   registry.register(streamFollow);
   registry.register(sampleHeight);
   registry.register(sampleClimate);

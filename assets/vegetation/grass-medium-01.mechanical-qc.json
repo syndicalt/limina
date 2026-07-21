@@ -1,0 +1,15 @@
+{
+  "schema": "limina.asset-mechanical-evidence/1",
+  "assetId": "polyhaven-grass-medium-01",
+  "status": "candidate-mechanical-only",
+  "source": { "url": "https://polyhaven.com/a/grass_medium_01", "licenseSpdx": "CC0-1.0", "attribution": "grass_medium_01 by Poly Haven (CC0 1.0)" },
+  "models": [{ "level": 0, "path": "vegetation/grass-medium-01-lod0.glb", "sha256": "sha256:f94a28d73e494fe4ee41918df74aaaa69fe9d6161a95608518da7cdda0a1edfa", "boundsM": [5.604984, 0.342582, 0.326559], "vertexCount": 26820, "triangleCount": 24730, "meshCount": 1, "primitiveCount": 1, "materialCount": 1, "textureSlots": ["baseColor", "metallicRoughness", "normal"], "textureResolution": [1024, 1024] }],
+  "checks": { "glbReadable": true, "selfContained": true, "textureResolutionPreserved": true, "texturePayloadsPreserved": true, "materialContractsPreserved": true, "classMeshLimit": true, "classPrimitiveDrawLimit": true },
+  "optimization": { "schema": "limina.vegetation-flatten/1", "tool": "tools/asset/flatten-vegetation-glb.mjs", "meshCountBefore": 17, "meshCountAfter": 1, "vertexCountPreserved": true, "triangleCountPreserved": true, "maxBoundsDeltaM": 0.000001 },
+  "lodChain": [],
+  "lodStatus": "not-generated",
+  "optimizationStatus": "mesh-consolidated-losslessly-lod-required",
+  "internalContactSheet": { "path": "qc/internal/polyhaven-groundcover-candidates.png", "sha256": "sha256:41368d04113b36fc1eff2b3b0d2f234cda9e0d2550d876baf7c2f2a576489abc" },
+  "humanVisualApproval": false,
+  "releaseEligible": false
+}

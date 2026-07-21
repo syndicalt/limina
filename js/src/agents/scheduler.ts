@@ -57,6 +57,11 @@ function ordered(agents: AgentRecord[]): AgentRecord[] {
 export class AgentScheduler {
   private readonly budget: SchedulerBudget;
   private readonly states = new Map<string, AgentRuntimeState>();
+  /** Memoized per-agent budgets. `agentBudget` is called per candidate, per sweep
+   *  and per action, each time double-spreading a fresh object; the budget config
+   *  (`this.budget`) is fixed at construction, so a given agent id's budget is
+   *  static and cached here indefinitely. */
+  private readonly budgets = new Map<string, AgentBudget>();
   private decisionCursor = 0;
 
   constructor(budget: Partial<SchedulerBudget> = {}) {
@@ -69,7 +74,12 @@ export class AgentScheduler {
   }
 
   agentBudget(agent: AgentRecord): AgentBudget {
-    return { ...this.budget.defaultAgentBudget, ...(this.budget.agents?.[agent.id] ?? {}) };
+    let budget = this.budgets.get(agent.id);
+    if (budget === undefined) {
+      budget = { ...this.budget.defaultAgentBudget, ...(this.budget.agents?.[agent.id] ?? {}) };
+      this.budgets.set(agent.id, budget);
+    }
+    return budget;
   }
 
   runtimeState(agent: AgentRecord): AgentRuntimeState {
@@ -107,7 +117,10 @@ export class AgentScheduler {
 
     const admitted: DecisionAdmission[] = [];
     let visits = 0;
-    while (admitted.length < cap && visits < candidates.length * 2) {
+    // A candidate may start at most one decision per tick. Re-visiting an
+    // admitted candidate creates duplicate provider work and makes the later
+    // generation invalidate the earlier result.
+    while (admitted.length < cap && visits < candidates.length) {
       const index = this.decisionCursor % candidates.length;
       const agent = candidates[index];
       const state = this.runtimeState(agent);

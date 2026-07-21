@@ -16,11 +16,30 @@
 //                                                       server pushes a snapshot now
 //                                                       + a per-tick delta thereafter
 //   aoi/declare {center:[x,y,z], radius}             -> update the area-of-interest
+//                                                       (pushes a `removed` delta for
+//                                                       entities the new AoI drops)
+//   worldlog/subscribe {since}                       -> opt-in to the AUTHORING command-stream
+//                                                       push (K4): server computes the tail from
+//                                                       `since` (see skills/worldlog.ts
+//                                                       worldlogTail(), the SAME helper
+//                                                       worldlog.tail polls with) and pushes it
+//                                                       NOW as worldlog/append, then again after
+//                                                       every command that FINALIZES thereafter
+//                                                       (WorldRecorder.onFinalized) -- a live
+//                                                       viewport no longer has to poll
+//                                                       worldlog.tail on a timer to stay current.
 //   shutdown {}                                      -> close
 //
 // Server -> Client notifications (no `id`, only to SUBSCRIBED clients):
-//   state/snapshot {tick, entities[]}                -> AoI-filtered join view
-//   state/delta    {tick, causedBy[], changes[]}     -> AoI-filtered changed set
+//   state/snapshot   {tick, entities[]}               -> AoI-filtered join view
+//   state/delta      {tick, causedBy[], changes[], removed[]} -> AoI-filtered changed
+//                                                        set + ids no longer relevant
+//   worldlog/append  {commands, next, reset}          -> an authoring-command batch for a
+//                                                        worldlog/subscribe connection; `next` is
+//                                                        the cursor to send back on the NEXT
+//                                                        worldlog/subscribe (a reconnect), `reset`
+//                                                        mirrors worldlog.tail's meaning (the
+//                                                        cursor fell behind a compacted prefix).
 //
 // A client that never subscribes (e.g. a plain MCP tool caller) receives no
 // pushes -- the existing single-client tools/call path is unchanged.
@@ -44,11 +63,15 @@ export interface SnapshotParams {
 
 /** Pushed each tick to a subscriber: only the entities that changed this tick AND
  *  fall inside the client's AoI. `causedBy` lists the server-assigned ids of the
- *  intents applied on this tick (intent -> applied -> synced correlation). */
+ *  intents applied on this tick (intent -> applied -> synced correlation).
+ *  `removed` lists entity ids that left the client's relevant set (world removal, an
+ *  entity moving out of AoI, or the client shrinking/moving its AoI via aoi/declare)
+ *  so the client view converges; absent/[] on old streams. */
 export interface DeltaParams {
   tick: number;
   causedBy: number[];
   changes: EntityState[];
+  removed?: string[];
 }
 
 export const SYNC_METHODS = {
@@ -58,14 +81,26 @@ export const SYNC_METHODS = {
   declareAoi: "aoi/declare",
 } as const;
 
+/** K4 (worldlog poll -> subscribe): the authoring-stream push channel, separate from the
+ *  entity-transform sync channel above and from the `worldlog.tail` SKILL name (a dotted `tools/
+ *  call` name a client polls) -- these are raw top-level JSON-RPC methods dispatched directly by
+ *  AuthoritativeServer, mirroring the slash convention SYNC_METHODS uses. */
+export const WORLDLOG_METHODS = {
+  subscribe: "worldlog/subscribe",
+  append: "worldlog/append",
+} as const;
+
 /** The host net ops the server/client transports drive (real WebSocket sockets:
  *  server listen/accept + client connect, then per-connection recv/send/close). */
 export interface NetOps {
   op_net_listen(port: number): Promise<number>;
   op_net_listener_port(listenerId: number): number;
   op_net_accept(listenerId: number): Promise<number>;
+  op_net_accept_allowed_origins(listenerId: number, allowedOriginsJson: string): Promise<number>;
   op_net_close_listener(listenerId: number): void;
   op_net_accept_host(): Promise<number>;
+  op_net_host_port(): number;
+  op_net_host_auth_token(): string;
   op_net_connect(url: string): Promise<number>;
   op_net_recv(connId: number): Promise<string>;
   op_net_send(connId: number, line: string): Promise<void>;
@@ -110,7 +145,7 @@ const entityStateSchema = z.object({
   body: z.tuple([num, num, num, num, num, num, num]).optional(),
 });
 const snapshotParamsSchema = z.object({ tick: z.number(), entities: z.array(entityStateSchema) });
-const deltaParamsSchema = z.object({ tick: z.number(), causedBy: z.array(z.number()), changes: z.array(entityStateSchema) });
+const deltaParamsSchema = z.object({ tick: z.number(), causedBy: z.array(z.number()), changes: z.array(entityStateSchema), removed: z.array(z.string()).optional() });
 
 /** Validate a pushed `state/snapshot` payload; undefined if malformed. */
 export function parseSnapshotParams(value: unknown): SnapshotParams | undefined {

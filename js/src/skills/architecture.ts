@@ -14,6 +14,7 @@
 import * as THREE from "../../build/three.bundle.mjs";
 import { z } from "../../build/zod.bundle.mjs";
 import { MAX_ENTITIES, Rotation, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
+import type { EntityOrigin, SceneObject } from "../engine.ts";
 import { applyProceduralPbr } from "../materials/procedural-pbr.ts";
 import type { SkillDefinition, SkillRegistry, WorldContext } from "./registry.ts";
 
@@ -37,8 +38,11 @@ export function pbrMat(grain: string, color: number, roughness: number): THREE.M
 }
 
 /** Register a pre-built static mesh as a collidable entity with a box collider of half-extents `half`
- *  centered at `pos`. Generalizes the box path so custom geometry (the gabled roof) is a real entity. */
-export function spawnStaticMesh(world: WorldContext, mesh: THREE.Mesh, pos: V3, half: V3, yaw = 0): string {
+ *  centered at `pos`. Generalizes the box path so custom geometry (the gabled roof) is a real entity.
+ *  `origin` (the create command, e.g. {tool, input}) is stored on the entity so a self-sufficient
+ *  snapshot can rebuild the mesh after the create command is compacted out of the live log — pass it
+ *  for agent-authored geometry (scene.createMesh); omit for internal composites. */
+export function spawnStaticMesh(world: WorldContext, mesh: THREE.Mesh, pos: V3, half: V3, yaw = 0, origin?: EntityOrigin): string {
   const [x, y, z] = pos;
   world.scene.add(mesh);
   const eid = spawnRenderable(world.ecs, mesh, x, y, z);
@@ -51,7 +55,7 @@ export function spawnStaticMesh(world: WorldContext, mesh: THREE.Mesh, pos: V3, 
   // mesh.rotation directly is overwritten). Box collider stays axis-aligned (an AABB approximation).
   if (yaw !== 0) { Rotation.y[eid] = Math.sin(yaw / 2); Rotation.w[eid] = Math.cos(yaw / 2); }
   const bodyId = world.ops.op_physics_add_static_box(x, y, z, half[0], half[1], half[2], 0.85, 0);
-  return world.entities.create({ eid, mesh, bodyId });
+  return world.entities.create({ eid, mesh: mesh as unknown as SceneObject, bodyId, origin });
 }
 
 /** A static box mesh + collider, with a given material. */
@@ -62,8 +66,13 @@ function spawnStaticBox(world: WorldContext, pos: V3, size: V3, material: THREE.
 
 /** Build a GABLED roof as a triangular prism (flat-shaded, crisp ridge), centered on the X/Z origin
  *  with its eaves at y=0 and the ridge at y=pitch. The ridge runs along the LONGER footprint axis.
- *  Returns the geometry + the collider half-extents of its bounding box. */
-export function gableRoofGeometry(W: number, D: number, pitch: number, overhang: number): { geo: THREE.BufferGeometry; half: V3 } {
+ *  Returns the geometry + the collider half-extents of its bounding box.
+ *
+ *  `closeGableEnds` (default true, legacy): fill the two triangular gable-END faces INTO the roof mesh.
+ *  Pass FALSE for the enterable-building path — those end faces carry the roof-cover (slate) material and,
+ *  sitting outboard of the plaster gable infill, read as SLATE ON A VERTICAL WALL (the texture-orientation
+ *  bug). With the ends open the cover stays on the SLOPES only and the plaster infill is the gable wall. */
+export function gableRoofGeometry(W: number, D: number, pitch: number, overhang: number, closeGableEnds = true): { geo: THREE.BufferGeometry; half: V3 } {
   const ridgeAlongX = W >= D;
   const long = (ridgeAlongX ? W : D) / 2 + overhang; // L: half-length along the ridge
   const short = (ridgeAlongX ? D : W) / 2 + overhang; // B: half-span across the slopes
@@ -71,18 +80,42 @@ export function gableRoofGeometry(W: number, D: number, pitch: number, overhang:
   const bNL: V3 = [-long, 0, -short], bFL: V3 = [-long, 0, short], aL: V3 = [-long, pitch, 0];
   const bNR: V3 = [long, 0, -short], bFR: V3 = [long, 0, short], aR: V3 = [long, pitch, 0];
   const tri = (...vs: V3[]): number[] => vs.flat();
-  const pos = new Float32Array([
+  const slopes = [
     ...tri(bNL, bNR, aR), ...tri(bNL, aR, aL),   // -Z slope
     ...tri(bFL, aL, aR), ...tri(bFL, aR, bFR),   // +Z slope
-    ...tri(bNL, aL, bFL),                        // -X gable end
-    ...tri(bNR, bFR, aR),                        // +X gable end
-  ]);
+  ];
+  const ends = closeGableEnds
+    ? [...tri(bNL, aL, bFL), ...tri(bNR, bFR, aR)] // -X + +X gable ends (legacy; slate-on-vertical)
+    : [];
+  const pos = new Float32Array([...slopes, ...ends]);
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
   geo.computeVertexNormals();
   if (!ridgeAlongX) geo.rotateY(Math.PI / 2); // re-orient so the ridge follows the longer (Z) axis
   const half: V3 = ridgeAlongX ? [long, pitch / 2, short] : [short, pitch / 2, long];
   return { geo, half };
+}
+
+/** Build a GABLE-END infill: the triangular pediment wall that fills between a rectangular end-wall top
+ *  (y=0 here) and the sloping roof (apex at y=pitch), so the building is CLOSED at the gable ends. Base
+ *  runs along local X (width `baseWidth`), apex up local Y, extruded by `thickness` along local Z — a
+ *  solid triangular prism. Rendered double-sided by the caller (seen from outside AND the interior). */
+export function gableTriangleGeometry(baseWidth: number, pitch: number, thickness: number): { geo: THREE.BufferGeometry; half: V3 } {
+  const hw = baseWidth / 2, hz = thickness / 2;
+  const BLf: V3 = [-hw, 0, hz], BRf: V3 = [hw, 0, hz], Af: V3 = [0, pitch, hz];
+  const BLb: V3 = [-hw, 0, -hz], BRb: V3 = [hw, 0, -hz], Ab: V3 = [0, pitch, -hz];
+  const tri = (...vs: V3[]): number[] => vs.flat();
+  const pos = new Float32Array([
+    ...tri(BLf, BRf, Af),                       // front face (+Z)
+    ...tri(BRb, BLb, Ab),                       // back face (-Z)
+    ...tri(BLb, BRb, BRf), ...tri(BLb, BRf, BLf), // base
+    ...tri(BLb, BLf, Af), ...tri(BLb, Af, Ab),   // left slope
+    ...tri(BRf, BRb, Ab), ...tri(BRf, Ab, Af),   // right slope
+  ]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geo.computeVertexNormals();
+  return { geo, half: [hw, pitch / 2, hz] };
 }
 
 export interface Part { kind: string; entity: string; position: V3; size: V3; }
@@ -197,6 +230,11 @@ function makeBuilding(): SkillDefinition<z.infer<typeof buildingInput>, Building
   };
 }
 
-export function registerArchitectureSkills(registry: SkillRegistry): void {
-  registry.register(makeBuilding());
+// architecture.building is now KIT-BACKED and registered by registerBuildingSkills (js/src/skills/
+// building/skill.ts), which delegates to assembleBuilding — so this module never imports building-
+// recipe.ts (no import cycle). This registrar is kept (index.ts calls it) but registers nothing; the
+// exported helpers below (spawnStaticMesh / gableRoofGeometry / gableTriangleGeometry / pbrMat / shade)
+// remain the shared geometry primitives the kit builds on.
+export function registerArchitectureSkills(_registry: SkillRegistry): void {
+  // no-op — see note above.
 }

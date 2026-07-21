@@ -13,6 +13,8 @@ import { scatterProps } from "./scatter.ts";
 import { buildTilePropMeshes, disposePropMesh } from "./props-render.ts";
 import { StreamFollower, tileKey, type StreamFollowOptions, type TileCoord, type TileKey } from "./stream.ts";
 import { applyPbrMaterial, type TerrainPbrOptions } from "./material-pbr.ts";
+import { TERRAIN_PAINT_ALBEDO_HEX } from "./material-palette.ts";
+export { TERRAIN_PAINT_ALBEDO_HEX } from "./material-palette.ts";
 export type { TerrainPbrOptions } from "./material-pbr.ts";
 
 export interface TerrainMeshOptions {
@@ -74,6 +76,21 @@ export interface TerrainMeshOptions {
    * placed at TRUE heights assume `factor: 1`; only exaggerate for a bare-DEM look.
    */
   exaggerateY?: { factor: number; pivot: number };
+  /**
+   * OPT-IN elevation-based VERTEX COLORS (dependency-free — no TSL, no climate texture).
+   * When set, each vertex is tinted by its world-Y + local slope with the SAME sand → grass →
+   * rock → snow bands the eroded pipeline (world/pipeline/terrain.mjs) uses, so a generated
+   * heightfield reads as real ground instead of a flat mottled slab. This is the lightweight
+   * counterpart to the TSL `palette` ramp — it just writes a `color` attribute + flips the
+   * material to vertexColors, which works on any backend. Omit for the flat matte default.
+   */
+  elevationColors?: { seaLevel: number; amplitude: number; snowFrac?: number };
+  /**
+   * Optional world-scoped material owner for elevation-coloured tiles. Supplying a pool
+   * shares byte-identical materials between sibling tiles without extending their lifetime
+   * beyond the world. Callers that omit it retain ordinary per-mesh material ownership.
+   */
+  materialPool?: TerrainMaterialPool;
 }
 
 /**
@@ -177,6 +194,20 @@ export interface BakedClimate {
   bounds: { minX: number; minZ: number; maxX: number; maxZ: number };
 }
 
+const OWNED_TEXTURES_KEY = "liminaOwnedTextures";
+// Marks a material owned by a TerrainMaterialPool. Individual tile disposal must not free it;
+// the owning world releases it through TerrainMaterialPool.dispose().
+const POOLED_MATERIAL_KEY = "liminaTerrainMaterialPoolOwned";
+
+/** Track render-only textures captured by node graphs so mesh disposal can release them. */
+export function trackMaterialTexture(material: THREE.Material, texture: THREE.Texture): void {
+  const userData = material.userData as Record<string, unknown>;
+  const current = userData[OWNED_TEXTURES_KEY];
+  const textures = Array.isArray(current) ? current as THREE.Texture[] : [];
+  if (!textures.includes(texture)) textures.push(texture);
+  userData[OWNED_TEXTURES_KEY] = textures;
+}
+
 /** Bake the tile's own per-cell climate grid into an RGBA texture (linear-filtered, so the
  *  bands vary smoothly between cells). Self-contained: reads the tile's `climate` channels
  *  in the canonical CLIMATE_* layout (falls back to a neutral temperate field if absent). */
@@ -201,7 +232,9 @@ export function bakeTileClimate(tile: TerrainTile, tempRange: [number, number], 
       data[o] = Math.round(Math.min(1, Math.max(0, (tempC - tMin) / tSpan)) * 255);
       data[o + 1] = Math.round(Math.min(1, Math.max(0, precipMm / precipMax)) * 255);
       data[o + 2] = Math.round(Math.min(1, Math.max(0, biome / 6)) * 255);
-      data[o + 3] = 255;
+      // Alpha carries the per-cell BLIGHT mask (0 clean .. 1 corrupt) — free channel, read by the
+      // ramp for the caesura color-drain. LinearFilter interpolates it → a soft blight frontier.
+      data[o + 3] = Math.round(Math.min(1, Math.max(0, tile.blight ? tile.blight[idx] : 0)) * 255);
     }
   }
   const texture = new THREE.DataTexture(data, ncols, nrows, THREE.RGBAFormat, THREE.UnsignedByteType);
@@ -209,6 +242,7 @@ export function bakeTileClimate(tile: TerrainTile, tempRange: [number, number], 
   texture.magFilter = THREE.LinearFilter;
   texture.wrapS = THREE.ClampToEdgeWrapping;
   texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.name = "limina:terrain-climate";
   texture.needsUpdate = true;
   // Climate cell (r,c) → tile-local UV (rows→z, cols→x), the geometry's world mapping.
   const [ox, oy, oz] = tile.origin;
@@ -253,6 +287,7 @@ function applyBiomeRamp(material: THREE.MeshStandardNodeMaterial, tile: TerrainT
 
   // Climate sampled at the fragment's world (x,z) (mirrors water.ts's world-XZ read).
   const baked = bakeTileClimate(tile, tempRange, precipMax);
+  trackMaterialTexture(material, baked.texture);
   const { minX, minZ, maxX, maxZ } = baked.bounds;
   const u = T.positionWorld.x.sub(minX).div(maxX - minX);
   const v = T.positionWorld.z.sub(minZ).div(maxZ - minZ);
@@ -296,11 +331,22 @@ function applyBiomeRamp(material: THREE.MeshStandardNodeMaterial, tile: TerrainT
   const subMask = T.smoothstep(0.0, subBand, T.float(sea).sub(y));
   col = T.mix(col, subSeaV, subMask);
 
+  // BLIGHT (caesura) corruption — the climate texture's ALPHA carries the per-cell blight mask
+  // (0 clean .. 1 corrupt); LinearFilter gives the soft frontier. Inside the blight the ground
+  // drains to a dark, desaturated ash with a faint sickly cast — the game's "meaning leaked away"
+  // read. World-space, so the *gradient* is visible within one frame (never a hard line).
+  const blightAmt = T.smoothstep(0.15, 0.85, clim.a);
+  const lum = col.r.mul(0.299).add(col.g.mul(0.587)).add(col.b.mul(0.114));
+  const ash = T.vec3(lum, lum, lum).mul(0.5).add(T.vec3(0.035, 0.030, 0.024));
+  col = T.mix(col, ash, blightAmt);
+
   material.colorNode = col;
 
-  // Roughness: snow a touch glossier (catches a sky sheen), submerged silt glossier (wet).
+  // Roughness: snow a touch glossier (catches a sky sheen), submerged silt glossier (wet), blighted
+  // ground bone-dry + matte (dead, no sheen).
   let rough = T.mix(T.float(baseRough), T.float(0.6), snowMask);
   rough = T.mix(rough, T.float(0.5), subMask);
+  rough = T.mix(rough, T.float(0.97), blightAmt);
   material.roughnessNode = T.clamp(rough, 0, 1);
 }
 
@@ -310,16 +356,222 @@ function applyBiomeRamp(material: THREE.MeshStandardNodeMaterial, tile: TerrainT
 // shows a real edge would expose a raw, untextured skirt. A future pass should generate + texture
 // a downward termination skirt (or fog/clip the boundary) so a shown edge reads intentionally.
 // Out of scope for the demo (whose answer is the falloff); logged so it isn't lost.
+/** The eroded-pipeline elevation palette (world/pipeline/terrain.mjs COL) — the SAME band
+ *  colors so a generated engine tile matches the preview's terrain look. */
+export const TERRAIN_ELEVATION_ALBEDO_HEX = Object.freeze({
+  sand: 0xc4b68e,
+  grass: 0x5f7f3c,
+  grassDark: 0x44602a,
+  rock: 0x736b60,
+  rockDark: 0x554f46,
+  snow: 0xe2e7ec,
+});
+
+const ELEV_COL = {
+  sand: new THREE.Color(TERRAIN_ELEVATION_ALBEDO_HEX.sand),
+  grass: new THREE.Color(TERRAIN_ELEVATION_ALBEDO_HEX.grass),
+  grassDark: new THREE.Color(TERRAIN_ELEVATION_ALBEDO_HEX.grassDark),
+  rock: new THREE.Color(TERRAIN_ELEVATION_ALBEDO_HEX.rock),
+  rockDark: new THREE.Color(TERRAIN_ELEVATION_ALBEDO_HEX.rockDark),
+  snow: new THREE.Color(TERRAIN_ELEVATION_ALBEDO_HEX.snow),
+} as const;
+
+/** Write a per-vertex `color` attribute onto a tile geometry from world-Y + local slope, using
+ *  the SAME sand/grass/rock/snow banding as the eroded pipeline. Deterministic (pure arithmetic
+ *  over the tile heights). Caller flips the material to vertexColors. */
+export interface ElevationColorRamp { seaLevel: number; amplitude: number; snowFrac?: number }
+
+// Surface-material palette painted by terrain.paint, keyed to the same albedo families as the
+// elevation ramp so painted patches sit naturally in the world. Index = tile.paintMat id.
+const PAINT_ALBEDO: (THREE.Color | null)[] = TERRAIN_PAINT_ALBEDO_HEX.map((hex) => (
+  hex === null ? null : new THREE.Color(hex)
+));
+
+/** Blend a tile's paint channel into an existing per-vertex `color` attribute (the one
+ *  applyElevationColors built). A PURE function of tile.paintMat/paintW, so replay recomputes the
+ *  identical colors. Vertices are row-major (index = grid index), matching the paint grid. */
+export function applyPaintOverlay(geom: THREE.BufferGeometry, tile: TerrainTile): void {
+  const { paintMat, paintW } = tile;
+  if (paintMat === undefined || paintW === undefined) return;
+  const attr = geom.getAttribute("color") as THREE.BufferAttribute | undefined;
+  if (attr === undefined) return;
+  const arr = attr.array as Float32Array;
+  const n = Math.min(attr.count, paintMat.length);
+  for (let i = 0; i < n; i++) {
+    const w = paintW[i];
+    if (w <= 0) continue;
+    const col = PAINT_ALBEDO[paintMat[i]];
+    if (col === null || col === undefined) continue;
+    const j = i * 3;
+    arr[j] += (col.r - arr[j]) * w;
+    arr[j + 1] += (col.g - arr[j + 1]) * w;
+    arr[j + 2] += (col.b - arr[j + 2]) * w;
+  }
+  attr.needsUpdate = true;
+}
+
+export function applyElevationColors(geom: THREE.BufferGeometry, tile: TerrainTile, ramp: ElevationColorRamp): void {
+  const { nrows, ncols, origin, scale, heights } = tile;
+  const [ox, oy, oz] = origin;
+  const [sx, sy, sz] = scale;
+  const x0 = ox - sx / 2, z0 = oz - sz / 2;
+  const dxStep = sx / (ncols - 1), dzStep = sz / (nrows - 1);
+  const clamp = (v: number, a: number, b: number): number => Math.min(b, Math.max(a, v));
+  const heightAt = (x: number, z: number): number => {
+    const fc = clamp((x - x0) / dxStep, 0, ncols - 1);
+    const fr = clamp((z - z0) / dzStep, 0, nrows - 1);
+    const c0 = Math.floor(fc), r0 = Math.floor(fr);
+    const c1 = Math.min(ncols - 1, c0 + 1), r1 = Math.min(nrows - 1, r0 + 1);
+    const tx = fc - c0, tz = fr - r0;
+    const h = (r: number, c: number): number => oy + heights[r * ncols + c] * sy;
+    const a = h(r0, c0) + (h(r0, c1) - h(r0, c0)) * tx;
+    const b = h(r1, c0) + (h(r1, c1) - h(r1, c0)) * tx;
+    return a + (b - a) * tz;
+  };
+  const step = Math.max(1e-3, dxStep);
+  const slopeAt = (x: number, z: number): number =>
+    Math.hypot(heightAt(x + step, z) - heightAt(x - step, z), heightAt(x, z + step) - heightAt(x, z - step)) / (2 * step);
+  // Per-vertex BLIGHT amount (0 clean .. 1 corrupt), bilinear over the tile's per-cell caesura mask
+  // — the interpolation gives the soft frontier so the drain reads as a gradient, not a hard line.
+  const blightGrid = tile.blight;
+  const blightAt = (x: number, z: number): number => {
+    if (blightGrid === undefined) return 0;
+    const fc = clamp((x - x0) / dxStep, 0, ncols - 1);
+    const fr = clamp((z - z0) / dzStep, 0, nrows - 1);
+    const c0 = Math.floor(fc), r0 = Math.floor(fr);
+    const c1 = Math.min(ncols - 1, c0 + 1), r1 = Math.min(nrows - 1, r0 + 1);
+    const tx = fc - c0, tz = fr - r0;
+    const g = (r: number, cc: number): number => blightGrid[r * ncols + cc];
+    const a = g(r0, c0) + (g(r0, c1) - g(r0, c0)) * tx;
+    const b = g(r1, c0) + (g(r1, c1) - g(r1, c0)) * tx;
+    return a + (b - a) * tz;
+  };
+
+  const pos = geom.getAttribute("position") as THREE.BufferAttribute;
+  const count = pos.count;
+  const colors = new Float32Array(count * 3);
+  const c = new THREE.Color();
+  const rc = new THREE.Color(); // per-vertex mottled rock shade (reused)
+  const sea = ramp.seaLevel;
+  // Snow line, keyed to the tile's ACTUAL sea-relative relief (not the nominal config
+  // amplitude). village.build caps a focal terrace at ≈0.82 of THIS same sea→peak relief
+  // (see snowSafeFocalTop), so measuring the snow line the same way keeps the inhabited
+  // knoll BELOW the snow band — the settlement reads grass/rock while only a genuine crest
+  // above the settled ground snows. Using the nominal `amplitude` (from origin.y) instead
+  // put the line at a fixed 15.2 that the leveled peak sat right on → the harsh white cap.
+  let maxY = -Infinity;
+  for (let i = 0; i < heights.length; i++) { const h = oy + heights[i] * sy; if (h > maxY) maxY = h; }
+  const relief = Math.max(1e-3, maxY - sea);
+  const snowY = sea + relief * (ramp.snowFrac ?? 0.82);
+  for (let i = 0; i < count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const slope = Math.min(1, slopeAt(x, z) * 1.2);
+    // Sand only on the GENTLE shore (a beach); a steep low face falls through to rock below.
+    if (y < sea + 0.6 && slope < 0.35) {
+      c.copy(ELEV_COL.sand);
+    } else {
+      c.copy(ELEV_COL.grass).lerp(ELEV_COL.grassDark, (Math.sin((x + z) * 0.2) * 0.5 + 0.5) * 0.3);
+      // SNOW is gated by elevation AND genuine flatness: it caps only the HIGH, near-level
+      // crest. The flatness gate is TIGHT (slope < 0.2) so graded terrace banks / mountain
+      // flanks — which are only mildly sloped but sit high — do NOT get snow; they stay grass
+      // and pick up rock below. This is the harsh-white-scree fix: snow no longer drapes the
+      // steep or graded high faces (the white streaks down the settled knoll are gone).
+      if (y > snowY && slope < 0.2) c.lerp(ELEV_COL.snow, 1 - Math.min(1, slope / 0.2));
+      // ROCK/SCREE is SLOPE-driven and now ramps in from a MODERATE grade (gradient ≈0.18) to
+      // full by ≈0.5 — so moderate-to-steep mountainsides read as rock instead of flat green/grey
+      // (was slope>0.35, which left moderate slopes green). Mottled between two rock shades by a
+      // deterministic value over world XZ, so the slope is textured scree, not a uniform grey slab.
+      // Overrides any partial snow, so steep terrain reads rock, never white.
+      const rockT = Math.min(1, Math.max(0, (slope - 0.18) / 0.32));
+      if (rockT > 0) {
+        const rm = Math.sin(x * 0.7 - z * 0.9) * 0.5 + 0.5;
+        rc.copy(ELEV_COL.rock).lerp(ELEV_COL.rockDark, rm * 0.6);
+        c.lerp(rc, rockT);
+      }
+    }
+    // BLIGHT drain: inside a painted caesura the ground loses its colour to a dark, desaturated
+    // ash (the "meaning leaked away" read). Lerp the elevation band toward its own luminance,
+    // darkened, with a faint sickly cast — by the per-vertex blight amount (soft at the frontier).
+    const bl = blightAt(x, z);
+    if (bl > 0) {
+      const t = Math.min(1, bl);
+      // Caesura drain: the ground's colour has "leaked away" — strip it to a dark, desaturated ash
+      // (luminance-only, darkened well below the living terrain) with a faint putrid warm cast
+      // (r ≥ g ≥ b) so the blight reads as dead earth, legible even at the overview zoom.
+      const lum = c.r * 0.299 + c.g * 0.587 + c.b * 0.114;
+      const ash = lum * 0.42 + 0.03;
+      c.setRGB(
+        c.r + (ash - 0.005 - c.r) * t,
+        c.g + (ash - 0.002 - c.g) * t,
+        c.b + (ash + 0.012 - c.b) * t,
+      );
+    }
+    colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+  }
+  geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+}
+
 /** Build a THREE BufferGeometry sitting on the tile's world surface. */
 export function terrainTileBufferGeometry(tile: TerrainTile): THREE.BufferGeometry {
-  const { positions, indices, normals } = terrainTileGeometry(tile);
+  const { positions, indices, normals, uvs } = terrainTileGeometry(tile);
   const geom = new THREE.BufferGeometry();
   geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geom.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+  geom.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
   geom.setIndex(new THREE.BufferAttribute(indices, 1));
   geom.computeBoundingSphere();
   geom.computeBoundingBox();
   return geom;
+}
+
+const MAX_TERRAIN_MATERIAL_POOL_ENTRIES = 32;
+
+function pooledUnitValue(value: number, name: string): number {
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new RangeError(`${name} must be a finite number in [0, 1]`);
+  }
+  return Object.is(value, -0) ? 0 : value;
+}
+
+/**
+ * World-scoped owner for the byte-identical material used by elevation-coloured terrain.
+ * Keys include every material-affecting input and are exact after finite range validation.
+ * The hard entry cap prevents adversarial authored values from turning this optimization into
+ * an unbounded GPU-resource cache.
+ */
+export class TerrainMaterialPool {
+  private readonly materials = new Map<string, THREE.MeshStandardMaterial>();
+  private disposed = false;
+
+  acquire(roughness: number, metalness: number, doubleSide: boolean): THREE.MeshStandardMaterial {
+    if (this.disposed) throw new Error("TerrainMaterialPool is disposed");
+    const normalizedRoughness = pooledUnitValue(roughness, "terrain material roughness");
+    const normalizedMetalness = pooledUnitValue(metalness, "terrain material metalness");
+    const key = `${normalizedRoughness}|${normalizedMetalness}|${doubleSide ? 1 : 0}`;
+    const existing = this.materials.get(key);
+    if (existing !== undefined) return existing;
+    if (this.materials.size >= MAX_TERRAIN_MATERIAL_POOL_ENTRIES) {
+      throw new RangeError(`TerrainMaterialPool is limited to ${MAX_TERRAIN_MATERIAL_POOL_ENTRIES} exact material variants`);
+    }
+    const material = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: normalizedRoughness,
+      metalness: normalizedMetalness,
+      vertexColors: true,
+    });
+    if (doubleSide) material.side = THREE.DoubleSide;
+    (material.userData as Record<string, unknown>)[POOLED_MATERIAL_KEY] = true;
+    this.materials.set(key, material);
+    return material;
+  }
+
+  /** Release every pooled material exactly once. Safe to call repeatedly. */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const material of this.materials.values()) material.dispose();
+    this.materials.clear();
+  }
 }
 
 /**
@@ -332,18 +584,39 @@ export function buildTerrainMesh(tile: TerrainTile, opts: TerrainMeshOptions = {
   const geom = terrainTileBufferGeometry(tile);
   const baseColor = opts.color ?? 0x4a6b3a;
   const baseRough = opts.roughness ?? 0.95;
-  const material = new THREE.MeshStandardNodeMaterial({
-    color: baseColor,
-    roughness: baseRough,
-    metalness: opts.metalness ?? 0.0,
-  });
-  if (opts.doubleSide === true) material.side = THREE.DoubleSide;
-  // Opt-in procedural PBR (supersedes the flat ramp/shoreline) else opt-in elevation+biome
-  // ramp (supersedes shoreline) else opt-in tropical shoreline. ALL are no-ops when absent →
-  // the material is byte-identical to the flat-colour default (no regression to default path).
-  if (opts.pbr !== undefined) applyPbrMaterial(material, tile, baseRough, opts.pbr);
-  else if (opts.palette !== undefined) applyBiomeRamp(material, tile, baseRough, opts.palette);
-  else if (opts.shoreline !== undefined) applyShoreline(material, baseColor, baseRough, opts.shoreline);
+  // The elevation-colors path writes ALL per-tile variation (elevation bands + blight drain) into
+  // geometry vertex colours. A caller-supplied world pool may therefore share its material between
+  // sibling tiles. Without a pool the material remains local to the mesh and is disposed normally.
+  const useElevationColors = opts.pbr === undefined && opts.palette === undefined
+    && opts.shoreline === undefined && opts.elevationColors !== undefined;
+  let material: THREE.MeshStandardMaterial | THREE.MeshStandardNodeMaterial;
+  if (useElevationColors) {
+    // Sand/grass/rock/snow bands (+ blight ash) are written to the `color` attribute. A white
+    // vertex-colour material shows them true whether it is pooled or owned by this mesh.
+    applyElevationColors(geom, tile, opts.elevationColors as ElevationColorRamp);
+    const metalness = opts.metalness ?? 0.0;
+    const doubleSide = opts.doubleSide === true;
+    material = opts.materialPool?.acquire(baseRough, metalness, doubleSide)
+      ?? new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        roughness: baseRough,
+        metalness,
+        vertexColors: true,
+        side: doubleSide ? THREE.DoubleSide : THREE.FrontSide,
+      });
+  } else {
+    material = new THREE.MeshStandardNodeMaterial({
+      color: baseColor,
+      roughness: baseRough,
+      metalness: opts.metalness ?? 0.0,
+    });
+    if (opts.doubleSide === true) material.side = THREE.DoubleSide;
+    // Opt-in procedural PBR (supersedes the flat ramp/shoreline) else opt-in elevation+biome
+    // ramp (supersedes shoreline) else opt-in tropical shoreline.
+    if (opts.pbr !== undefined) applyPbrMaterial(material, tile, baseRough, opts.pbr);
+    else if (opts.palette !== undefined) applyBiomeRamp(material, tile, baseRough, opts.palette);
+    else if (opts.shoreline !== undefined) applyShoreline(material, baseColor, baseRough, opts.shoreline);
+  }
   // Opt-in render-only vertical exaggeration (geometry only; identity when factor === 1).
   if (opts.exaggerateY !== undefined && opts.exaggerateY.factor !== 1) {
     const { factor, pivot } = opts.exaggerateY;
@@ -363,8 +636,18 @@ export function buildTerrainMesh(tile: TerrainTile, opts: TerrainMeshOptions = {
 /** Dispose a terrain mesh's GPU resources after it's removed from the scene. */
 export function disposeTerrainMesh(mesh: THREE.Mesh): void {
   mesh.geometry?.dispose?.();
-  const mat = mesh.material as { dispose?: () => void } | undefined;
-  mat?.dispose?.();
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  for (const material of materials) {
+    const userData = (material as THREE.Material | undefined)?.userData as Record<string, unknown> | undefined;
+    // A world-scoped pool owns this material. Freeing it with one tile would blank its siblings.
+    if (userData?.[POOLED_MATERIAL_KEY]) continue;
+    const textures = userData?.[OWNED_TEXTURES_KEY];
+    if (Array.isArray(textures)) {
+      for (const texture of textures) (texture as { dispose?: () => void }).dispose?.();
+      userData![OWNED_TEXTURES_KEY] = [];
+    }
+    (material as { dispose?: () => void } | undefined)?.dispose?.();
+  }
 }
 
 /** Minimal scene surface this renderer needs (matches THREE.Scene / Object3DLike). */
@@ -377,7 +660,7 @@ export interface TerrainStreamRendererOptions extends StreamFollowOptions {
   /** Resolve the tile for a coord (cache / snapshot / fake generator). */
   getTile(coord: TileCoord): TerrainTile;
   /** Mesh appearance. */
-  mesh?: TerrainMeshOptions;
+  mesh?: Omit<TerrainMeshOptions, "materialPool">;
   /** Seed for the deterministic prop scatter (Phase 9.1). Required when `props` is on. */
   seed?: number;
   /** Scatter + mount trees/rocks/grass on each tile (recomputed from the tile, render-only). Default off. */
@@ -397,13 +680,15 @@ export class TerrainStreamRenderer {
   private readonly meshes = new Map<TileKey, THREE.Mesh>();
   private readonly propsEnabled: boolean;
   private readonly seed: number;
+  private readonly materialPool = new TerrainMaterialPool();
+  private disposed = false;
   // Per-tile prop InstancedMeshes (one per present kind), mounted/disposed with the tile.
   private readonly propMeshes = new Map<TileKey, THREE.InstancedMesh[]>();
 
   constructor(private readonly scene: SceneAddRemove, opts: TerrainStreamRendererOptions) {
     this.follower = new StreamFollower(opts);
     this.getTile = opts.getTile;
-    this.meshOpts = opts.mesh ?? {};
+    this.meshOpts = { ...(opts.mesh ?? {}), materialPool: this.materialPool };
     this.propsEnabled = opts.props === true;
     this.seed = opts.seed ?? 0;
   }
@@ -415,6 +700,7 @@ export class TerrainStreamRenderer {
 
   /** Advance the anchor to a world position; mounts/unmounts terrain meshes to match. */
   update(anchorX: number, anchorZ: number): { loaded: number; unloaded: number } {
+    if (this.disposed) throw new Error("TerrainStreamRenderer is disposed");
     const diff = this.follower.update(anchorX, anchorZ);
     for (const t of diff.unload) {
       const k = tileKey(t.tx, t.tz);
@@ -451,6 +737,8 @@ export class TerrainStreamRenderer {
 
   /** Remove + dispose every mounted tile (teardown). */
   clear(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     for (const mesh of this.meshes.values()) {
       this.scene.remove(mesh);
       disposeTerrainMesh(mesh);
@@ -460,5 +748,6 @@ export class TerrainStreamRenderer {
       for (const pm of props) { this.scene.remove(pm); disposePropMesh(pm); }
     }
     this.propMeshes.clear();
+    this.materialPool.dispose();
   }
 }

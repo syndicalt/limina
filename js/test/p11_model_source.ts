@@ -39,7 +39,19 @@ import { ModelTerrainSource, encodeBase64, type TileTransport } from "../src/ter
 import { ProceduralTerrainSource } from "../src/terrain/procedural.ts";
 import { CachedTerrainSource } from "../src/terrain/tilecache.ts";
 import { Biome, CLIMATE_BIOME, type TileRequest } from "../src/terrain/types.ts";
-import { BIOME_CONTENT, BIOME_DESERT, CACTUS_ASSET, resolveLayer } from "../src/terrain/biome-content.ts";
+import { BIOME_CONTENT, BIOME_DESERT, resolveLayer, type BiomePack } from "../src/terrain/biome-content.ts";
+
+// The engine ships NO biome pack; this gate supplies a TEST PACK binding the cactus role to the SAME
+// glb the catalog hardcoded before decoupling, so the resolved desert scatter is byte-identical.
+const TEST_PACK: BiomePack = {
+  conifer: { id: "pine.glb", embedRadius: 1.2 },
+  broadleaf: { id: "broadleaf.glb", embedRadius: 1.3 },
+  boulder: { id: "rock.glb", embedRadius: 0.5 },
+  bush: { id: "bush.glb" },
+  grass: { id: "grass.glb" },
+  cactus: { id: "cactus.glb" },
+  palm: { id: "palm.glb" },
+};
 import { scatterAssets } from "../src/terrain/asset-scatter.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
@@ -128,7 +140,13 @@ const recTracer = new LiminaTracer("ses_p11model_record");
 const registry = new SkillRegistry(recTracer);
 const authModel = makeModelSource(mockTransport);
 const core = registerCoreSkills(registry, { terrainSource: authModel });
-assert(core.terrain.source === authModel, "the model source was not wired as the terrain source");
+// Map Phase 3.2: registerCoreSkills wraps the bound source in ONE SwappableTerrainSource
+// holder (so the recorded world.setTerrainSource can rebind it); the injected model source
+// must be the holder's CURRENT delegate.
+assert(
+  (core.terrain.source as { current?: unknown }).current === authModel,
+  "the model source was not wired as the terrain source (holder delegate)",
+);
 
 const recorder = new WorldRecorder("ses_p11model_record");
 recorder.attach(registry);
@@ -267,20 +285,32 @@ const corrupted: WorldCommand[] = recorder.commands.map((c) =>
   (c.kind === "skill" && c.tool === "world.generateRegion")
     ? { ...c, input: { ...(c.input as object), seed: TERRAIN_SEED ^ 0x1 } }
     : c);
-const badReplay = await replayCommands(corrupted, {
-  makeWorld: () => makeHeadlessWorld(ops),
-  makeRegistry: (tracer) => makeReplayRegistry(tracer as LiminaTracer, makeCached()),
-  tracer: new LiminaTracer("ses_p11model_badseed"),
-});
-assert(!compareWorldState(nativeFinal, badReplay.state).identical, "corrupting the generateRegion seed did NOT diverge — replay isn't bound to the baked tiles");
+let badSeedRejectedOrDiverged = false;
+try {
+  const badReplay = await replayCommands(corrupted, {
+    makeWorld: () => makeHeadlessWorld(ops),
+    makeRegistry: (tracer) => makeReplayRegistry(tracer as LiminaTracer, makeCached()),
+    tracer: new LiminaTracer("ses_p11model_badseed"),
+  });
+  badSeedRejectedOrDiverged = !compareWorldState(nativeFinal, badReplay.state).identical;
+} catch (err) {
+  badSeedRejectedOrDiverged = /no cached tile|world replay/.test((err as Error).message);
+}
+assert(badSeedRejectedOrDiverged, "corrupting the generateRegion seed did NOT reject/diverge — replay isn't bound to the baked tiles");
 
 // Drop one baked tile from the package: the region can't fully rebuild → divergence.
-const droppedReplay = await replayCommands(recorder.commands, {
-  makeWorld: () => makeHeadlessWorld(ops),
-  makeRegistry: (tracer) => makeReplayRegistry(tracer as LiminaTracer, makeCached(pkg.tiles.slice(1))),
-  tracer: new LiminaTracer("ses_p11model_droptile"),
-});
-assert(!compareWorldState(nativeFinal, droppedReplay.state).identical, "dropping a baked tile did NOT diverge — replay silently regenerated a missing tile");
+let droppedTileRejectedOrDiverged = false;
+try {
+  const droppedReplay = await replayCommands(recorder.commands, {
+    makeWorld: () => makeHeadlessWorld(ops),
+    makeRegistry: (tracer) => makeReplayRegistry(tracer as LiminaTracer, makeCached(pkg.tiles.slice(1))),
+    tracer: new LiminaTracer("ses_p11model_droptile"),
+  });
+  droppedTileRejectedOrDiverged = !compareWorldState(nativeFinal, droppedReplay.state).identical;
+} catch (err) {
+  droppedTileRejectedOrDiverged = /no cached tile|world replay/.test((err as Error).message);
+}
+assert(droppedTileRejectedOrDiverged, "dropping a baked tile did NOT reject/diverge — replay silently regenerated a missing tile");
 
 // ============================================================================
 // (e) BIOME INTEGRATION GUARD — the model source's biome CLASSIFIER and the
@@ -329,12 +359,12 @@ for (let i = CLIMATE_BIOME; i < desertTile.climate!.length; i += desertTile.clim
 
 // NON-VACUOUS: resolve the catalog's DESERT cacti layer (biome-gated to BIOME_DESERT) and scatter
 // it over the MODEL tile. Cacti must LAND (the gate's whitelist matches the model's biome integer).
-const cactusLayer = BIOME_CONTENT.desert.find((l) => l.biomes?.includes(BIOME_DESERT) && l.assets.some((a) => a.id === CACTUS_ASSET));
+const cactusLayer = BIOME_CONTENT.desert.find((l) => l.biomes?.includes(BIOME_DESERT) && l.assets.some((a) => a.role === "cactus"));
 assert(cactusLayer !== undefined, "no biome-gated cacti layer in BIOME_CONTENT.desert");
-const cactusConfig = resolveLayer(cactusLayer, { minY: 0, maxY: 1 }); // cacti layer has no elev gates → survey irrelevant
+const cactusConfig = resolveLayer(cactusLayer, TEST_PACK, { minY: 0, maxY: 1 }); // cacti layer has no elev gates → survey irrelevant
 const cacti = scatterAssets(desertTile, TERRAIN_SEED, cactusConfig);
 assert(cacti.length > 0, "cacti VANISHED on the model's desert tile — the model biome integer doesn't match the gate's BIOME_DESERT whitelist (enum integration broken)");
-assert(cacti.every((c) => c.assetId === CACTUS_ASSET), "desert scatter placed a non-cactus asset");
+assert(cacti.every((c) => c.assetId === TEST_PACK.cactus!.id), "desert scatter placed a non-cactus asset");
 // FALSIFIABLE the other way: the SAME scatter whitelisted to a NON-desert biome places nothing,
 // proving the gate genuinely reads the tile's biome channel (not coverage alone).
 const nonDesert = scatterAssets(desertTile, TERRAIN_SEED, { ...cactusConfig, biomes: [Biome.ICE] });

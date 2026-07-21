@@ -116,7 +116,7 @@ export class Locomotion {
     if (tgt === undefined) return undefined;
     const dx = tgt[0] - Position.x[actor.eid];
     const dz = tgt[2] - Position.z[actor.eid];
-    return Math.hypot(dx, dz);
+    return Math.sqrt(dx * dx + dz * dz); // sqrt: IEEE correctly-rounded, bit-stable (Math.hypot is not)
   }
 
   /** The actor's current facing (unit forward on the XZ plane), from its yaw. */
@@ -129,8 +129,9 @@ export class Locomotion {
   /** Advance every actor one fixed step: face the target, translate up to
    *  speed*dt toward it (clamped at talkDistance so it stops cleanly), set
    *  arrival, and tick the humanoid walk animation. */
-  step(world: WorldContext, dtMs: number): void {
+  step(world: WorldContext, dtMs: number): boolean {
     const dt = dtMs / 1000;
+    let positionsChanged = false;
     for (const actor of this.actors.values()) {
       if (actor.target === undefined) {
         actor.humanoid.update(dtMs, false);
@@ -145,7 +146,7 @@ export class Locomotion {
       const pz = Position.z[actor.eid];
       const dx = tgt[0] - px;
       const dz = tgt[2] - pz;
-      const dist = Math.hypot(dx, dz);
+      const dist = Math.sqrt(dx * dx + dz * dz);
 
       // Face the target even when standing still, so conversation partners turn
       // toward each other on arrival.
@@ -163,12 +164,14 @@ export class Locomotion {
         Position.x[actor.eid] = px + dx * inv * advance;
         Position.z[actor.eid] = pz + dz * inv * advance;
         moving = advance > EPS;
+        positionsChanged ||= moving;
         const ndx = tgt[0] - Position.x[actor.eid];
         const ndz = tgt[2] - Position.z[actor.eid];
-        actor.arrived = Math.hypot(ndx, ndz) <= actor.talkDistance + EPS;
+        actor.arrived = Math.sqrt(ndx * ndx + ndz * ndz) <= actor.talkDistance + EPS;
       }
       actor.humanoid.update(dtMs, moving);
     }
+    return positionsChanged;
   }
 
   private resolveTarget(world: WorldContext, target: MoveTarget): Vec3 | undefined {

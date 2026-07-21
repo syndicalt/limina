@@ -1,0 +1,13 @@
+{
+  "commands": [
+    { "kind": "physics", "op": "op_physics_create_world", "args": [-9.81] },
+    { "kind": "skill", "tool": "terrain.create", "input": { "size": 180, "resolution": 32, "color": 5926970 } },
+    { "kind": "skill", "tool": "asset.place", "input": { "assetId": "trees/oak-1.glb", "position": [-48, 0, 22], "ground": true } },
+    { "kind": "skill", "tool": "asset.place", "input": { "assetId": "trees/oak-1-lod1.glb", "position": [-8, 0, 22], "ground": true } },
+    { "kind": "skill", "tool": "asset.place", "input": { "assetId": "trees/oak-1-lod2.glb", "position": [32, 0, 22], "ground": true } },
+    { "kind": "skill", "tool": "asset.place", "input": { "assetId": "trees/pine-1.glb", "position": [-48, 0, -22], "ground": true } },
+    { "kind": "skill", "tool": "asset.place", "input": { "assetId": "trees/pine-1-lod1.glb", "position": [-8, 0, -22], "ground": true } },
+    { "kind": "skill", "tool": "asset.place", "input": { "assetId": "trees/pine-1-lod2.glb", "position": [32, 0, -22], "ground": true } }
+  ],
+  "camera": { "center": [-8, 9, 0], "radius": 105, "height": 32 }
+}

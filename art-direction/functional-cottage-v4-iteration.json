@@ -1,0 +1,482 @@
+{
+  "schema": "limina.functional-building-iteration/v1",
+  "iterationId": "functional-cottage/v4",
+  "subject": "Project Gorgon-quality Blender-authored functional cottage",
+  "status": "engine-review",
+  "selectedCycle": 13,
+  "referenceCues": [
+    {
+      "id": "gorgon-built-environment-floor",
+      "source": "locked Project Gorgon review set (local, non-redistributed)",
+      "cues": ["lived-in architectural silhouette", "material-scale separation", "authored threshold and interior depth", "weathered construction detail"],
+      "avoid": ["kit-house symmetry", "flat texture-only roof", "opaque placeholder windows", "empty grass-lit shell"]
+    },
+    {
+      "id": "functional-cottage-v4-concept-sheet",
+      "source": "art-direction/references/functional-cottage-v4-concept-sheet.png",
+      "sourceArtifact": { "path": "art-direction/references/functional-cottage-v4-concept-sheet.png", "sha256": "sha256:b5d38c8e675f36fd3562f5320529f112cbee44b0bee9cd5bb976ee8918e8c7f4", "role": "modeling-cue-only" },
+      "conceptPromptProvenance": {
+        "tool": "built-in image_gen.imagegen",
+        "modelVersion": "not-exposed",
+        "generatedSourcePath": "/home/cheapseatsecon/.codex/generated_images/019f5ce4-aa1a-7a01-8a79-62af54819e24/exec-96ae0201-3366-4d28-83d4-4a9d3306d46d.png",
+        "projectCopyPath": "art-direction/references/functional-cottage-v4-concept-sheet.png",
+        "exactPrompt": "Use case: stylized-concept\nAsset type: production modeling reference sheet for a real-time game house, to guide Blender authoring; not a final render\nPrimary request: create one cohesive high-fidelity architectural concept sheet for an asymmetric late-medieval temperate hall-house at the visual quality of a premium handcrafted fantasy RPG environment\nSubject: a 9.6 by 7.2 meter one-and-a-half-storey hall-house with an asymmetric cross-gable service bay, offset fieldstone chimney, steep layered slate roof, one dormer, deep eaves, continuous irregular stone foundation, and a small covered timber stoop\nComposition/framing: a clean four-panel reference sheet showing (1) exterior three-quarter hero view, (2) straight-on front elevation, (3) close doorway and recessed window construction detail, and (4) furnished main-hall interior looking toward the entrance; consistent architecture and proportions in every panel\nMaterials/textures: thick aged lime-plaster walls over coherent structural oak framing, genuinely recessed window apertures with deep plaster/stone reveals, beveled timber jambs and mullions, 2x3 leaded glass panes with varied cool reflections, layered overlapping slate courses and ridge caps, irregular mortared fieldstone, modeled joinery and ironwork, construction-aware damp/runoff/soot/wear, substantial tactile surface depth\nFunctional details: clearly modeled thick oak plank-and-frame front door shown partly open around 70 degrees on visible iron strap hinges and hinge knuckles; clean wall opening with no texture overlap; raised dry stone-and-oak threshold; unobstructed one-meter traversal aisle; visible warm furnished interior with hearth, table, benches, shelves, textiles, tools, floorboards, rafters\nStyle/medium: polished 3D game-environment concept art with physically plausible construction, cohesive art direction, high geometric detail, readable silhouettes, realistic material response; grounded medieval fantasy, not whimsical\nLighting/mood: neutral overcast daylight for material readability, restrained warm interior bounce, no dramatic darkness\nConstraints: all four panels depict exactly the same house; model-sheet clarity; no people; no labels or text; no watermark; no UI; no cutaway that breaks exterior consistency\nAvoid: Minecraft or voxel windows, face-mounted glass rectangles, flat roof slabs, uniformly repeated stone blocks, universal procedural noise, low-poly primitives, empty shell interior, exaggerated cartoon proportions, texture seams crossing apertures, photobashing incoherence"
+      },
+      "cues": ["asymmetric hall-house massing", "deep recessed leaded windows", "layered slate and ridge silhouette", "clean visibly hinged door", "raised threshold and furnished interior"],
+      "avoid": ["copying generated inconsistencies", "treating concept pixels as texture source", "accepting non-engine imagery"]
+    }
+  ],
+  "prompt": {
+    "intent": "Generate a production cottage that remains mechanically functional in Limina while meeting the locked built-environment visual floor.",
+    "text": "Author a cohesive asymmetric late-medieval hall-house with a cross-gable service bay, offset fieldstone chimney, dormer, covered stoop, thick layered walls, continuous foundation, constructed slate courses, deeply recessed leaded windows, a clean portal with a visibly hinged 95-degree inward oak door, raised dry threshold, and a complete furnished interior; preserve the exact Limina functional-building semantic contract.",
+    "constraints": ["Blender-authored GLB", "stable semantic ids", "decomposed collision", "canonical articulated door", "engine-native PBR", "no placeholder geometry", "production-engine acceptance only"]
+  },
+  "targetEngineViews": [
+    { "id": "exterior-closed", "state": "closed", "purpose": "articulation before-state and exterior quality" },
+    { "id": "exterior-open", "state": "open", "purpose": "primary exterior and unmistakable open leaf" },
+    { "id": "threshold-detail", "state": "open", "purpose": "hinge, leaf sweep, raised threshold, and portal clearance detail" },
+    { "id": "interior-open", "state": "open", "purpose": "interior authorship and traversal sightline" },
+    { "id": "hearth-detail", "state": "open", "purpose": "firebox depth, fuel stack, flame separation, mantel joinery, and local exposure" },
+    { "id": "lod-25m", "state": "closed", "purpose": "25 metre silhouette, material breakup, and LOD stability" }
+  ],
+  "cycles": [
+    {
+      "cycle": 1,
+      "constructionResponse": {
+        "summary": "Authored the asymmetric 9.6x7.2m functional hall-house, statically batched three geometric LODs, and produced a KHR_texture_basisu-only production GLB with 30 KTX2 textures.",
+        "changes": ["asymmetric cross-gable massing", "visible 70-degree hinged door", "furnished traversable interior", "LOD0/1/2 static batches", "extension-only KTX2 PBR textures"]
+      },
+      "artifact": {
+        "assetId": "buildings/functional-hall-house-v4-production.glb",
+        "rawSha256": "sha256:7271852515c5c2a38fdc4aca10d5b5f165afacc15dbea0e412748a3949b8adb0",
+        "engineContentHash": "sha256:6e8db1c59dfc6bce3f5e7bc537a2e5b5ab17d5192a728bc5774203e807e6670d"
+      },
+      "provenance": {
+        "generator": { "path": "tools/blender/functional-hall-house-v4.py", "sha256": "sha256:6a796bd3c4be013ce43081b7ab9875413700f29e731f6813f8621b4c398e191d" },
+        "authoredSource": { "path": "assets/buildings/functional-hall-house-v4.glb", "sha256": "sha256:b592e3383b419527fdffd9eb4c13b9b7fc2d45fecd0d5cb5db02bad491d0c053" },
+        "batcher": { "path": "tools/asset/batch-hall-house-v4.mjs", "sha256": "sha256:48045b0626e90dffa26f385914b9dea4796bd8bcc3bd7db01a8231669ea2e480" },
+        "batchedSource": { "path": "assets/buildings/functional-hall-house-v4-lod.glb", "sha256": "sha256:4e9996e334e04ae682232031b9a8e3498245dab8474d3b253292a2c5a6e84c75" }
+      },
+      "critiqueFindings": [
+        { "facet": "material response", "finding": "Production KTX2 normal maps used toktx --normal_mode, but the standard Three glTF normal shader does not reconstruct Z from that two-channel representation; all surfaces exhibited severe diagonal lighting bands.", "evidenceView": "threshold-detail" },
+        { "facet": "interior readability", "finding": "The interior camera looked outward and clipped the wall/window instead of proving furnishings and the clear aisle.", "evidenceView": "interior-open" }
+      ],
+      "decision": { "outcome": "rejected-after-internal-engine-review", "reason": "The exact engine capture exposed an incompatible normal-map channel encoding and a non-reviewable interior view." },
+      "status": "rejected"
+    },
+    {
+      "cycle": 2,
+      "constructionResponse": {
+        "summary": "Preserved conventional RGB tangent-space normals through KTX2 production and corrected the interior review direction while retaining the exact functional v4 geometry and LOD chain.",
+        "changes": ["removed incompatible two-channel normal encoding", "added decoded normal-direction regression gate", "reframed interior view toward furnishings and traversal aisle", "strengthened guarded output provenance"]
+      },
+      "artifact": {
+        "assetId": "buildings/functional-hall-house-v4-production.glb",
+        "rawSha256": "sha256:1e139547842bbbf762d3e0f8946ea6cb4e664e90879acb3569c59dd29b4454e0",
+        "engineContentHash": "sha256:162274cfa1885ed16a288bec78f7afe8253b7351b845a1ae4bffc40afcfd4a4a"
+      },
+      "provenance": {
+        "generator": { "path": "tools/blender/functional-hall-house-v4.py", "sha256": "sha256:6a796bd3c4be013ce43081b7ab9875413700f29e731f6813f8621b4c398e191d" },
+        "authoredSource": { "path": "assets/buildings/functional-hall-house-v4.glb", "sha256": "sha256:b592e3383b419527fdffd9eb4c13b9b7fc2d45fecd0d5cb5db02bad491d0c053" },
+        "batcher": { "path": "tools/asset/batch-hall-house-v4.mjs", "sha256": "sha256:48045b0626e90dffa26f385914b9dea4796bd8bcc3bd7db01a8231669ea2e480" },
+        "batchedSource": { "path": "assets/buildings/functional-hall-house-v4-lod.glb", "sha256": "sha256:4e9996e334e04ae682232031b9a8e3498245dab8474d3b253292a2c5a6e84c75" },
+        "compressor": { "path": "tools/asset/compress-hall-house-v4-ktx2.mjs", "sha256": "sha256:ce577d293707313ebf6375c38282da50fabd1e196f39f34cce09401985e922c6" },
+        "ktxManifest": { "path": "assets/buildings/functional-hall-house-v4-production.ktx2.json", "sha256": "sha256:2682d42621483f3e6820497ede6d230f79b65bc38e12eb6d1eb4439fc817ab53" }
+      },
+      "critiqueFindings": [],
+      "decision": { "outcome": "selected-for-internal-engine-review", "reason": "CPU decode proves conventional RGB tangent normals with bounded angular error; visual acceptance still requires a fresh guarded engine capture." },
+      "status": "engine-review"
+    },
+    {
+      "cycle": 3,
+      "constructionResponse": {
+        "summary": "Rebuilt the focal opening construction from the Blender source so every certified window is physically exposed, deeply recessed, and clear through the complete opaque scene geometry.",
+        "changes": [
+          "moved the dormer assembly from its erroneous ground-floor elevation into the dormer",
+          "split the south roof sheathing, slate skin, and courses around a real dormer penetration",
+          "added dormer cheek walls and paired roof planes",
+          "removed the cross-bay-occluded decorative south-east window and opened the hall-to-service-bay connection",
+          "made facade timber framing opening-aware instead of crossing window apertures",
+          "aligned the chimney stack with the authored hearth and removed the conflicting north-east window",
+          "moved interior shelving clear of the west window reveal",
+          "added all-opaque-triangle exterior and inward aperture corridor verification"
+        ]
+      },
+      "artifact": {
+        "assetId": "buildings/functional-hall-house-v4-production.glb",
+        "rawSha256": "sha256:7d4ea18efff8af51165dbae79ed1ea03f60686e6d66a6532ad6390fd37d10b7f",
+        "engineContentHash": "sha256:2b9b021b7d5c5178df7b5d9798ba40939a00416e746334bd12f22b9ff2ced4cb"
+      },
+      "provenance": {
+        "generator": { "path": "tools/blender/functional-hall-house-v4.py", "sha256": "sha256:ddb33b619bb9247d2b01f1f95c0f1b3ad423cc601e1c99afb63a94b2e99248ea" },
+        "authoredSource": { "path": "assets/buildings/functional-hall-house-v4.glb", "sha256": "sha256:6ab96f665d74ec4487bdee6db0db3bf4caae042a747a608d0a7be554153f4aac" },
+        "batcher": { "path": "tools/asset/batch-hall-house-v4.mjs", "sha256": "sha256:298469dda8b2c940d705825d349b78b5d5500c00b6ad5bfd49615336b7cd1394" },
+        "batchedSource": { "path": "assets/buildings/functional-hall-house-v4-lod.glb", "sha256": "sha256:646089c9f8681ddc60e3c02e1e4d7c55c6542576a719263f9ab23dd140e47942" },
+        "compressor": { "path": "tools/asset/compress-hall-house-v4-ktx2.mjs", "sha256": "sha256:0bda7c64752f0e536cf4308c4f4e09e4c94bfd5b17bd891bd6bc6c80140424cf" },
+        "ktxManifest": { "path": "assets/buildings/functional-hall-house-v4-production.ktx2.json", "sha256": "sha256:46fe469ddb1ff46813cdd30178ab660fa6633086869cdd86ee666553d3ab79d3" }
+      },
+      "critiqueFindings": [
+        { "facet": "material response", "finding": "Exterior plaster and timber retain strong repetitive diagonal/banded texture response that reads procedurally tiled rather than weathered construction.", "evidenceView": "exterior-open" },
+        { "facet": "window construction", "finding": "Leaded panes read as coarse opaque blue grids with block-scale cells and insufficient glass/reflection depth.", "evidenceView": "threshold-detail" },
+        { "facet": "interior enclosure", "finding": "The open portal reveals terrain vegetation and an exterior-lit opening instead of a sealed, coherent furnished room; production ground cover also intrudes across the interior floor.", "evidenceView": "interior-open" },
+        { "facet": "threshold construction", "finding": "Foundation and threshold remain visibly box-assembled with coarse repeated blocks and weak joinery hierarchy at the required detail distance.", "evidenceView": "threshold-detail" },
+        { "facet": "lod integrity", "finding": "LOD1 triangle decimation destroys the roof: large holes, floating slate strips, and broken dormer/slope surfaces are visible at 25 metres.", "evidenceView": "lod-25m" }
+      ],
+      "decision": { "outcome": "rejected-after-internal-engine-review", "reason": "The exact guarded GB10 engine set fails the locked built-environment floor in material coherence, interior enclosure, threshold craft, window response, and silhouette-preserving LOD integrity." },
+      "status": "rejected"
+    },
+    {
+      "cycle": 4,
+      "constructionResponse": {
+        "summary": "Replaced the rejected procedural texture system with six hash-pinned Poly Haven CC0 PBR packs, authored phase-continuous exported UV0, transparent leadlight, site exclusion, topology-safe LODs, and more construction-resolved portal, chimney, door, and window geometry.",
+        "changes": [
+          "removed synthesized sine/checker texture generation from the Blender authoring path",
+          "embedded six source-manifest hashes covering plaster, fieldstone, grey roof tile, medieval brick, structural oak, and worn plank PBR packs",
+          "authored building-space masonry/plaster/roof UVs and member-axis timber UVs after final transforms",
+          "replaced opaque textured glazing with restrained standard glTF alpha-blended glass and modeled diamond leadwork",
+          "split the foundation around the portal and rebuilt the approach as staggered individual stone steps",
+          "added an articulated housed diagonal door brace and staggered chimney face masonry",
+          "resolved the complete rotated building footprint against terrain and excluded discrete and continuous vegetation before population mount",
+          "replaced triangle deletion with whole-primitive semantic LOD filtering",
+          "added adversarial UV-phase and opaque-glass regression failures plus exact KTX source/payload closure"
+        ]
+      },
+      "artifact": {
+        "assetId": "buildings/functional-hall-house-v4-production.glb",
+        "rawSha256": "sha256:7847c00da1a78c9b7566f4e9c03a17437b77654d6caec6892f0848b189fa14f8",
+        "engineContentHash": "sha256:54b8116de1415ef172976ddaa509bdbccc6c7904b214dbae6095a608fba66061"
+      },
+      "provenance": {
+        "generator": { "path": "tools/blender/functional-hall-house-v4.py", "sha256": "sha256:b5af5fbb034c578e5a375c34e4e7464cc2bf2381c4b6fd2a9b881aac04b6d2b7" },
+        "authoredSource": { "path": "assets/buildings/functional-hall-house-v4.glb", "sha256": "sha256:6d1517e3c3118c5dffe8cc488b8a888d545aec88996b86bb55ae0e5389ccafaa" },
+        "batcher": { "path": "tools/asset/batch-hall-house-v4.mjs", "sha256": "sha256:fcc712ea6e49692b9b0f0ede2e408379c8d4fc8db06b738661235eda59f0d247" },
+        "batchedSource": { "path": "assets/buildings/functional-hall-house-v4-lod.glb", "sha256": "sha256:b681b5b32577530950cf9d82b55a3735d6df0d8e26fd8b92c9880928f19a86e9" },
+        "compressor": { "path": "tools/asset/compress-hall-house-v4-ktx2.mjs", "sha256": "sha256:526d7e86c804d8cfcd0175907c1a956f48f92123b3da289336221c18c18a534b" },
+        "ktxManifest": { "path": "assets/buildings/functional-hall-house-v4-production.ktx2.json", "sha256": "sha256:c1fbc868b56c974e9a4d2b99eaa50a5cb168e88c32e116a0d830eaf63bbe50a1" },
+        "materialClayPlaster": { "path": "assets/materials/cottage-clay-plaster/material-pack.json", "sha256": "sha256:4b29bacb34eefa7a9d5218fc223dbbfe367f905ff5d5ec98399d102c96fa5fe2" },
+        "materialFieldstone": { "path": "assets/materials/cottage-fieldstone/material-pack.json", "sha256": "sha256:aa8c4f49c2bb5cac151a8ae5dc8ae89008e1be3e33eeaffab2b148c2efb7cb55" },
+        "materialGreyRoof": { "path": "assets/materials/cottage-grey-roof/material-pack.json", "sha256": "sha256:edcb06c7e974489014e9f9e9968663244e2071f41d9c5791c4eda11bf45e335c" },
+        "materialMedievalBrick": { "path": "assets/materials/cottage-medieval-brick/material-pack.json", "sha256": "sha256:9a94255b2e2fc12ce5c1d228b7bc33535963c1179fd01f9d22d7116633156e77" },
+        "materialStructuralOak": { "path": "assets/materials/cottage-structural-oak/material-pack.json", "sha256": "sha256:04afd26f9f224c2cd2891c6b56740c657e4ccbcbe94526dd794f8854f004afe6" },
+        "materialWornPlanks": { "path": "assets/materials/cottage-worn-planks/material-pack.json", "sha256": "sha256:5bc1f60d7a009837ac388cb95fb116156b9d7babe847fc32142214efabcc429e" }
+      },
+      "critiqueFindings": [
+        { "facet": "site integration", "finding": "The terrain-valid footprint is visibly placed in the river; relief-only placement authority does not prove a dry buildable site.", "evidenceView": "exterior-open" },
+        { "facet": "plaster response", "finding": "The selected clay-plaster albedo reads as uniform ochre-brown rather than aged pale lime plaster, collapsing wall/timber separation.", "evidenceView": "exterior-open" },
+        { "facet": "timber mapping", "finding": "Structural posts, jambs, and rails show strong cross-member zebra bands because the source grain axis is mapped perpendicular to member length.", "evidenceView": "threshold-detail" },
+        { "facet": "door and furnishing mapping", "finding": "The door leaf, furniture, and floor repeat coarse striped/checkered plank cells rather than coherent authored boards and joinery.", "evidenceView": "interior-open" },
+        { "facet": "window construction", "finding": "Diamond leadwork and framing remain too heavy and black at hero distance, obscuring the glazing instead of reading as fine came construction.", "evidenceView": "exterior-open" },
+        { "facet": "interior authorship", "finding": "The room remains dark, sparse, and box-assembled, without the warm lived-in prop and lighting hierarchy required by the locked concept floor.", "evidenceView": "interior-open" }
+      ],
+      "decision": { "outcome": "rejected-after-internal-engine-review", "reason": "The guarded GB10 evidence set proves the new material/LOD pipeline works, but site eligibility, color separation, timber orientation, leadwork scale, and interior authorship still fail the locked built-environment floor." },
+      "status": "rejected"
+    },
+    {
+      "cycle": 5,
+      "constructionResponse": {
+        "summary": "Corrected the rejected site, palette, timber orientation, interior illumination, and doorway construction while preserving the Blender-authored functional hierarchy and production engine pipeline.",
+        "changes": [
+          "moved the review placement to the nearest dry footprint-valid site and deepened the continuous foundation plinth for measured terrain relief",
+          "replaced ochre clay plaster with hash-pinned Poly Haven white plaster for pale lime wall, mortar, and interior roles",
+          "mapped timber grain along each member's longest local axis and introduced a dedicated door-oak material role",
+          "added three bounded authored interior point lights exported through KHR_lights_punctual",
+          "reduced lead-came thickness while retaining the contracted diamond-pane construction",
+          "rebuilt the leaf as five near-contiguous full-height oak boards with contained stiles, ledges, brace, and attached ironwork",
+          "fixed the stale brace-parent transform that exported a 2.42 metre horizontal beam across the portal",
+          "corrected the segmented-step endpoint arithmetic that more than doubled and miscentered both threshold courses",
+          "increased the inward functional sweep from 70 to 95 degrees so the real rendered leaf parks at the hinge edge",
+          "added a native non-GPU integration gate proving one rigid 18-mesh rendered leaf, render/collider pose agreement, no static duplicate, and 81 clear aperture rays"
+        ]
+      },
+      "artifact": {
+        "assetId": "buildings/functional-hall-house-v4-production.glb",
+        "rawSha256": "sha256:d4d8e5055d1a1b8bef555ac02200be5e09373c88c753e167c73bdc7fe4545af4",
+        "engineContentHash": "sha256:78ca425e210a85b7d8bda87e8066dc6a9d1ea52dda804ec43b92088f8f33b120"
+      },
+      "provenance": {
+        "generator": { "path": "tools/blender/functional-hall-house-v4.py", "sha256": "sha256:4f1062ccb7fe446e635d79e773e66e6699c3c10e2363664a03215760e052c047" },
+        "authoredSource": { "path": "assets/buildings/functional-hall-house-v4.glb", "sha256": "sha256:eab2ddbda61f30e6b2c2df728f444cbdcb6e109c5a2572987871a2f76b4dec15" },
+        "batcher": { "path": "tools/asset/batch-hall-house-v4.mjs", "sha256": "sha256:d3e85e105708bd407bd3372ba068587f4b875217a2f66648226141fe04bf7d25" },
+        "batchedSource": { "path": "assets/buildings/functional-hall-house-v4-lod.glb", "sha256": "sha256:2215674bab96bdfd55669554cec4d74c305283121d3747b32390372527de8f2f" },
+        "compressor": { "path": "tools/asset/compress-hall-house-v4-ktx2.mjs", "sha256": "sha256:2532123770d94fe9fc706359cfe353cfe7278348094c1bcf9b42e21915640b0f" },
+        "ktxManifest": { "path": "assets/buildings/functional-hall-house-v4-production.ktx2.json", "sha256": "sha256:d7d7cdb0d36a2198608620d6a8e737e0240b418911af1c4bf047207558e82d5a" },
+        "materialWhitePlaster": { "path": "assets/materials/cottage-white-plaster/material-pack.json", "sha256": "sha256:45df87be504288f619e11fc62da731c77c8929797f49e4011bda63490affe1f5" },
+        "materialFieldstone": { "path": "assets/materials/cottage-fieldstone/material-pack.json", "sha256": "sha256:aa8c4f49c2bb5cac151a8ae5dc8ae89008e1be3e33eeaffab2b148c2efb7cb55" },
+        "materialGreyRoof": { "path": "assets/materials/cottage-grey-roof/material-pack.json", "sha256": "sha256:edcb06c7e974489014e9f9e9968663244e2071f41d9c5791c4eda11bf45e335c" },
+        "materialMedievalBrick": { "path": "assets/materials/cottage-medieval-brick/material-pack.json", "sha256": "sha256:9a94255b2e2fc12ce5c1d228b7bc33535963c1179fd01f9d22d7116633156e77" },
+        "materialStructuralOak": { "path": "assets/materials/cottage-structural-oak/material-pack.json", "sha256": "sha256:04afd26f9f224c2cd2891c6b56740c657e4ccbcbe94526dd794f8854f004afe6" },
+        "materialWornPlanks": { "path": "assets/materials/cottage-worn-planks/material-pack.json", "sha256": "sha256:5bc1f60d7a009837ac388cb95fb116156b9d7babe847fc32142214efabcc429e" }
+      },
+      "critiqueFindings": [
+        { "facet": "lighting and exposure", "finding": "Exported practical lights reach roughly 978 to 1902 candela without bounded ranges, clipping 60.3% of threshold pixels and every interior pixel in at least one channel; material and furnishing response is not reviewable.", "evidenceView": "interior-open" },
+        { "facet": "service-bay foundation", "finding": "The projecting cross-gable floor extends beyond the main subfloor and perimeter foundation without its own closed plinth or masonry return, leaving the bump-out corner visibly broken and unsupported.", "evidenceView": "exterior-open" },
+        { "facet": "roof construction", "finding": "Modeled slate course lips compete with the base roof texture and begin reading as perpendicular horizontal boards across the lower slope instead of one coherent overlapping shingle system.", "evidenceView": "exterior-open" },
+        { "facet": "cross-gable roof junction", "finding": "The service-bay gable apex rises through the cross-roof skin rather than terminating below the roof underside with a clean rake/verge closure.", "evidenceView": "lod-25m" }
+      ],
+      "decision": { "outcome": "rejected-after-internal-engine-review", "reason": "The guarded GB10 evidence proves the doorway repair, but unbounded practical-light conversion, an unsupported service-bay base, incoherent roof courses, and a gable-through-roof penetration remain below the locked construction and material floor." },
+      "status": "rejected"
+    },
+    {
+      "cycle": 6,
+      "constructionResponse": {
+        "summary": "Closed the rejected service-bay construction, roof junction, roof mapping, and practical-light exposure defects while retaining the proven functional doorway and production-engine review path.",
+        "changes": [
+          "added a continuous deep stone service-bay subfloor core plus exposed masonry front and side returns, with the main foundation segmented around the overlap",
+          "lowered and closed the service-bay wall construction against its new support instead of leaving a visible floating corner",
+          "removed the duplicate modeled roof-course bars that read as perpendicular boards across the lower slopes",
+          "authored explicit ridge/slope-local UV authority for every slate primitive and added adversarial phase-continuity verification",
+          "lowered the cross-gable apex beneath a rebuilt 54-degree cross roof and added a ridge cap with measured closure",
+          "added fitted west and east slate valley strips along the solved main/cross roof intersections",
+          "reduced the three Blender practical-light energies to bounded exported candela values and authored finite ranges",
+          "added sampled occupied-space illuminance limits and guarded post-capture pixel clipping rejection",
+          "added geometric regression gates for service-bay support, wall closure, gable containment, roof valleys, and absence of duplicate courses"
+        ]
+      },
+      "artifact": {
+        "assetId": "buildings/functional-hall-house-v4-production.glb",
+        "rawSha256": "sha256:8cbc5684140e234c6c74dd635f17bda7a2c3c3a1757ed2d95cac5a83017f3a2c",
+        "engineContentHash": "sha256:973be85059b52b783d2556a5638bb4ff295eb64e33241ca8ff6307601088aa0f"
+      },
+      "provenance": {
+        "generator": { "path": "tools/blender/functional-hall-house-v4.py", "sha256": "sha256:17f50adb47ffcd770aca2b6ecc1bd131bdab1079b550c997d9a9ac8aba0dd58c" },
+        "authoredSource": { "path": "assets/buildings/functional-hall-house-v4.glb", "sha256": "sha256:ea411aa9670eecc0e8f3f22af0f6654d81ca325b77b57d035197ff2910de96cb" },
+        "batcher": { "path": "tools/asset/batch-hall-house-v4.mjs", "sha256": "sha256:c21622ca2fb9a126ad52e3bc567b326cbee3ed4b98f6bf441598fc9b10cfcb7c" },
+        "batchedSource": { "path": "assets/buildings/functional-hall-house-v4-lod.glb", "sha256": "sha256:4718c22fd449c75d4109b593315e8b8ffb3a258220ba3872fe5764b61c4c03b2" },
+        "compressor": { "path": "tools/asset/compress-hall-house-v4-ktx2.mjs", "sha256": "sha256:9999bf5447e6c9a36a03a82989d3bf89b5d9e56df6b5e5e9f9d43ce0cb43bd10" },
+        "ktxManifest": { "path": "assets/buildings/functional-hall-house-v4-production.ktx2.json", "sha256": "sha256:f0d430c08fcb0fc8863a08124c9b92c3a65bc711f37fff67e79c4d412f477420" },
+        "materialWhitePlaster": { "path": "assets/materials/cottage-white-plaster/material-pack.json", "sha256": "sha256:45df87be504288f619e11fc62da731c77c8929797f49e4011bda63490affe1f5" },
+        "materialFieldstone": { "path": "assets/materials/cottage-fieldstone/material-pack.json", "sha256": "sha256:aa8c4f49c2bb5cac151a8ae5dc8ae89008e1be3e33eeaffab2b148c2efb7cb55" },
+        "materialGreyRoof": { "path": "assets/materials/cottage-grey-roof/material-pack.json", "sha256": "sha256:edcb06c7e974489014e9f9e9968663244e2071f41d9c5791c4eda11bf45e335c" },
+        "materialMedievalBrick": { "path": "assets/materials/cottage-medieval-brick/material-pack.json", "sha256": "sha256:9a94255b2e2fc12ce5c1d228b7bc33535963c1179fd01f9d22d7116633156e77" },
+        "materialStructuralOak": { "path": "assets/materials/cottage-structural-oak/material-pack.json", "sha256": "sha256:04afd26f9f224c2cd2891c6b56740c657e4ccbcbe94526dd794f8854f004afe6" },
+        "materialWornPlanks": { "path": "assets/materials/cottage-worn-planks/material-pack.json", "sha256": "sha256:5bc1f60d7a009837ac388cb95fb116156b9d7babe847fc32142214efabcc429e" }
+      },
+      "critiqueFindings": [
+        { "facet": "cross-gable roof junction", "finding": "The valley flashing continues roughly 1.60 metres beyond the bump-out roof substrate, leaving 89.5% of the apparent main/cross joint unsupported and visibly open.", "evidenceView": "exterior-open" },
+        { "facet": "dormer roof seating", "finding": "The dormer eave underside is buried 45 to 50 mm into the front head and gable wall, while the plaster apex also protrudes into the ridge closure.", "evidenceView": "exterior-open" },
+        { "facet": "main end-gable closure", "finding": "The independently pitched east end-gable plaster rises about 48 mm through the 48-degree slate skin at the lower-right eave corner.", "evidenceView": "exterior-open" },
+        { "facet": "hearth authorship", "finding": "The fireplace contains only a base, flat fireback, mantel, and point-light glow, with no completed firebox, fuel, ember bed, or visible flame.", "evidenceView": "interior-open" }
+      ],
+      "decision": { "outcome": "rejected-after-human-engine-review", "reason": "The guarded cycle-6 set closes the prior exposure and foundation defects but retains three visible roof-envelope failures and a light-only unfinished hearth." },
+      "status": "rejected"
+    },
+    {
+      "cycle": 7,
+      "constructionResponse": {
+        "summary": "Closed the complete roof envelope and replaced the light-only hearth with an authored firebox, crossed fuel, embers, emissive flame geometry, and fire-anchored bounded lighting.",
+        "changes": [
+          "extended the cross-gable roof skins and ridge behind the complete analytic valley so flashing is supported by both weather systems",
+          "raised and ridge-capped the dormer roof for 50 mm eave clearance and positive gable-apex cover",
+          "derived both main end-gables beneath the 48-degree roof envelope, providing roughly 72 mm cover at the former breakthrough",
+          "built a recessed sooted firebox with masonry jambs, lintel, hood, base, and mantel",
+          "added three fully contained horizontal crossed logs, an emissive ember bed, and three layered emissive flame meshes",
+          "moved the bounded hearth light inside the authored flame/firebox volume",
+          "added full-bounds roof-substrate, dormer-clearance, end-gable, fuel-orientation, containment, and emissive-fire regression gates"
+        ]
+      },
+      "artifact": { "assetId": "buildings/functional-hall-house-v4-production.glb", "rawSha256": "sha256:e91d82e8d0a921c69ec69e4027c95ccceb3be1affe350050caf65d8e46b0f209", "engineContentHash": "sha256:13c6d40a5899eb6f4210c042a4178d4ee5d26503bcc09959e33f64390e01f23e" },
+      "provenance": {
+        "generator": { "path": "tools/blender/functional-hall-house-v4.py", "sha256": "sha256:0d21dcb977283d2ee875fc121b0b3d46f9dabbdd9bcb25f4f9ea9eef0e457ce1" },
+        "authoredSource": { "path": "assets/buildings/functional-hall-house-v4.glb", "sha256": "sha256:ad27fdba15b46d8382a34cafec80c5dec75804abec24e064943668096fc07c7f" },
+        "batcher": { "path": "tools/asset/batch-hall-house-v4.mjs", "sha256": "sha256:77522811e2a8b52462e7b83cd1948d7c125262c8fa2d4c1ccd3259c865a0c4a9" },
+        "batchedSource": { "path": "assets/buildings/functional-hall-house-v4-lod.glb", "sha256": "sha256:e18f9b96035b1e26738ae7c694dc1d52ff37a165cd5f496f3ea4ae5d5c71cfbe" },
+        "compressor": { "path": "tools/asset/compress-hall-house-v4-ktx2.mjs", "sha256": "sha256:8d5e2e2e2692905512747e9cb15a027491f6a9f348eded247c1010ca428f5d0d" },
+        "ktxManifest": { "path": "assets/buildings/functional-hall-house-v4-production.ktx2.json", "sha256": "sha256:43d0ee6ec09fd9e327df8474d6e328294aa2a23d94d4951ba29e495f6015fc06" }
+      },
+      "critiqueFindings": [],
+      "decision": { "outcome": "selected-for-internal-engine-review", "reason": "Independent Fable and Opus probes plus strengthened non-GPU production gates close all four cycle-6 findings; visual acceptance still requires guarded native capture and human review." },
+      "status": "engine-review"
+    },
+    {
+      "cycle": 8,
+      "constructionResponse": {
+        "summary": "Rebuilt the cottage through the engine-owned architectural compiler with staged constraints, layered weather construction, semantic whole-primitive LOD, and runtime-owned distance switching.",
+        "changes": [
+          "replaced monolithic visual assembly with two supported architectural volumes and compiler-subtracted openings",
+          "compiled deep window reveals, dressed threshold courses, an articulated braced door, decomposed collision, and a clear circulation aisle",
+          "compiled main, service, and dormer roof systems with layered weather planes, fascia, bargeboards, rafter tails, ridge caps, valleys, dormer flashing, and gable clearance",
+          "rebuilt the chimney as an open four-wall shaft with open crown, raised liner, roof cut, flashing, and a two-sided water-diverting cricket",
+          "completed the hearth with masonry surround, firebox, crossed cylindrical fuel, ember bed, tapered emissive flames, and bounded fire-anchored light",
+          "added compiler-owned tables, benches, cupboard, shelf, and three bounded practical lights",
+          "pinned six Poly Haven-derived PBR packs with compiler-authored facade and roof UV frames",
+          "packaged deterministic LOD0, LOD1, and LOD2 by whole semantic primitive, isolated the operable door from static batches, and added camera-distance runtime switching with hysteresis and teardown ownership"
+        ]
+      },
+      "artifact": { "assetId": "buildings/functional-hall-house-v4-production.glb", "rawSha256": "sha256:de321a0434260aa8c7f19ac5253160005cadfc1024ae10728b807663174cedb5", "engineContentHash": "sha256:b3c008638c03fce31330f3a3016b4d171880f4806450775c0badccde66663a22" },
+      "provenance": {
+        "architectureSpec": { "path": "assets/buildings/functional-hall-house-architecture-v1.json", "sha256": "sha256:89b476e4157d86d34ae8a9613d85eb29b27a1b51fe186b0d7012f3fea4dd099a" },
+        "buildDriver": { "path": "tools/architecture/build-building.ts", "sha256": "sha256:d8d48b82f44258dc06047c27fd2b4a1c7f956473deb58a405747f0a110a8d3aa" },
+        "blenderAdapter": { "path": "tools/blender/architecture-adapter.py", "sha256": "sha256:c78f9cfe740d27cb82abc346800288173fa41990237ffb4e51c9bb23f010f021" },
+        "authoredSource": { "path": "assets/buildings/functional-hall-house-v4.glb", "sha256": "sha256:e4469d6e222dfd133f30e074409caccc24572bd75603b188b995bf7be74876fe" },
+        "batcher": { "path": "tools/asset/batch-architecture-building.mjs", "sha256": "sha256:6cd57a54561dc9da1c6336ea1439fdb6d1ffb8faf770b97d291f626c2cc14290" },
+        "batchedSource": { "path": "assets/buildings/functional-hall-house-v4-lod.glb", "sha256": "sha256:4f20f2fa47f4aaf9976aeb5f327379a9013c67faada1567fa4b9f5e5f8a9d7e1" },
+        "buildEvidence": { "path": "assets/buildings/functional-hall-house-v4-architecture-build.json", "sha256": "sha256:1da143afbc0b5f59db2344fb557a0b7ad5bd49fc9cfc4c7bcc4300bb28e90961" },
+        "compressor": { "path": "tools/asset/compress-hall-house-v4-ktx2.mjs", "sha256": "sha256:28d4547a2241832bf39ba9c3db8946c1e8ba121c7bf987b7d22a7eb16a6c17a7" },
+        "ktxManifest": { "path": "assets/buildings/functional-hall-house-v4-production.ktx2.json", "sha256": "sha256:d7a15d6376987ae9e6fffddea8373e2cf4e71497ab641bb054349f0902b19e27" }
+      },
+      "critiqueFindings": [
+        { "facet": "timber UV construction", "finding": "Object-wide timber projection collapses side faces to a thin texture column, producing severe barcode stretching across portal frames, window frames, fascia, and furnishings.", "evidenceView": "threshold-detail" },
+        { "facet": "window grammar", "finding": "Oversized full-corner diagonal black cames dominate each opening and read as boarded defensive crosses rather than leaded cottage glazing.", "evidenceView": "exterior-open" },
+        { "facet": "hearth visibility", "finding": "The full-depth opaque soot cavity occludes the authored logs, embers, and flame geometry, leaving a black rectangle lit by an apparently detached practical light.", "evidenceView": "interior-open" },
+        { "facet": "entrance joinery", "finding": "Gapped and jittered decorative threshold courses read as overlapping fractured slabs instead of one joined tread-and-riser assembly.", "evidenceView": "threshold-detail" }
+      ],
+      "decision": { "outcome": "rejected-after-internal-engine-review", "reason": "The cycle-8 engine capture proves the new structural pipeline but remains below the locked visual floor because of systematic UV collapse, window language, hidden fire, and fractured entrance finish." },
+      "status": "rejected"
+    },
+    {
+      "cycle": 9,
+      "constructionResponse": {
+        "summary": "Corrected the four systematic cycle-8 visual failures at compiler and adapter level while preserving the approved architectural massing and functional contracts.",
+        "changes": [
+          "replaced object-wide timber projection with face-local tangent mapping that preserves long-axis grain and non-degenerate UV area on every visible triangle",
+          "replaced oversized diagonal window crosses with two slender vertical lead divisions and one slender horizontal division",
+          "reduced the soot cavity to a rear firebox lining so fuel, embers, and tapered emissive flames remain visible in front",
+          "replaced gapped jittered threshold pieces with continuous equal-width landing and tread caps joined at exact depth boundaries",
+          "added byte-level gates for face-aware timber UV area, slender window leadwork, visible fire ordering, and continuous entrance joints"
+        ]
+      },
+      "artifact": { "assetId": "buildings/functional-hall-house-v4-production.glb", "rawSha256": "sha256:3bb241018c883a2297e651e1c7c363073fd43c8286babb8bad34ed6a41a6f432", "engineContentHash": "sha256:5b721d4de12b982049ddaaed7e4fa4f76eea2955a407a82aeab5980fa23d4a62" },
+      "provenance": {
+        "architectureSpec": { "path": "assets/buildings/functional-hall-house-architecture-v1.json", "sha256": "sha256:89b476e4157d86d34ae8a9613d85eb29b27a1b51fe186b0d7012f3fea4dd099a" },
+        "buildDriver": { "path": "tools/architecture/build-building.ts", "sha256": "sha256:d8d48b82f44258dc06047c27fd2b4a1c7f956473deb58a405747f0a110a8d3aa" },
+        "blenderAdapter": { "path": "tools/blender/architecture-adapter.py", "sha256": "sha256:351b02299e2747f3cf2543ac65ead3ccd1318446e20501d4011283a0a3a43019" },
+        "authoredSource": { "path": "assets/buildings/functional-hall-house-v4.glb", "sha256": "sha256:cb453c18b3d1f23f70b4b5b7949b2a38b30e68952e37c1aab25fe78881206df1" },
+        "batcher": { "path": "tools/asset/batch-architecture-building.mjs", "sha256": "sha256:6cd57a54561dc9da1c6336ea1439fdb6d1ffb8faf770b97d291f626c2cc14290" },
+        "batchedSource": { "path": "assets/buildings/functional-hall-house-v4-lod.glb", "sha256": "sha256:348e1a8c82a3a1923ae1ecdf3c1708f6ed02bc8c15dad2687ac336db9295badf" },
+        "buildEvidence": { "path": "assets/buildings/functional-hall-house-v4-architecture-build.json", "sha256": "sha256:9929f0026aaca0e9e8f376a3799115338fc4e04cc7410ea995179810e6e9fe5c" },
+        "compressor": { "path": "tools/asset/compress-hall-house-v4-ktx2.mjs", "sha256": "sha256:8741c4bebeac700eded2ec7197955f23f8fbd3bff97da24caed6906c26e5bec7" },
+        "ktxManifest": { "path": "assets/buildings/functional-hall-house-v4-production.ktx2.json", "sha256": "sha256:2de71515fadab30775404fabee5947f032dd647eca4b1897853dde69666c9602" }
+      },
+      "critiqueFindings": [
+        { "facet": "interior authorship", "finding": "The corrected shell remains too sparse to meet the locked lived-in architectural floor; the room lacks a visible structural load path, hearth-oriented furniture composition, and clustered domestic detail.", "evidenceView": "interior-open" },
+        { "facet": "hearth exposure", "finding": "The fireplace geometry is visible but excessive local light and emission clip the firebox toward white, erasing flame color separation and masonry depth.", "evidenceView": "interior-open" }
+      ],
+      "decision": { "outcome": "rejected-after-internal-engine-review", "reason": "Cycle 9 resolves the prior construction regressions but remains below the locked visual floor because the interior is sparse and the hearth is overexposed." },
+      "status": "rejected"
+    },
+    {
+      "cycle": 10,
+      "constructionResponse": {
+        "summary": "Authored a compiler-owned hall load path, cohesive hearth-facing furnishing plan, supported domestic prop clusters, and bounded fire exposure while preserving every functional and LOD contract.",
+        "changes": [
+          "added paired wall plates, five ceiling-clear tie beams, ten correctly bearing knee braces, and a room-facing oak mantel as architectural primitives",
+          "recomposed the hall with a paneled cupboard, open shelf, settle, stool, joined chest, log rack, table, and benches while preserving the one-metre entry aisle and all window sightlines",
+          "added supported ceramic vessels, open-loop mugs and jugs, layered bowls with visible interiors, candles, textiles, and hearth tools through deterministic compiler assemblies",
+          "reduced hearth practical lighting to 9 candela at 2.6 metres and bounded ember/flame emission for retained warm chromatic separation",
+          "added architecture-stage gates for load-path completeness, brace bearing direction, ceiling clearance, support authority, sightline clearance, material depth, UV integrity, and semantic LOD coverage"
+        ]
+      },
+      "artifact": { "assetId": "buildings/functional-hall-house-v4-production.glb", "rawSha256": "sha256:c0540db76baddf313a48674e4958bb83dace037bebe4b87c66d44026e7e9409f", "engineContentHash": "sha256:5deeaf65285bab4b70f6530c8e2c61852b27045084a3fdadb62c29e198c85ad3" },
+      "provenance": {
+        "architectureSpec": { "path": "assets/buildings/functional-hall-house-architecture-v1.json", "sha256": "sha256:5dae73b7138f7b17414a25f672d9426770041636ef68a6283503d6d44b5d2028" },
+        "buildDriver": { "path": "tools/architecture/build-building.ts", "sha256": "sha256:d8d48b82f44258dc06047c27fd2b4a1c7f956473deb58a405747f0a110a8d3aa" },
+        "blenderAdapter": { "path": "tools/blender/architecture-adapter.py", "sha256": "sha256:aaf3dbb0e7a0ba92c092478b5e5c39cbc1a1111390d6303c0097bf6c528e7e03" },
+        "authoredSource": { "path": "assets/buildings/functional-hall-house-v4.glb", "sha256": "sha256:8d5be475c614f1332e87062c212d6418160373929a1ba583e21c81d9095b27ba" },
+        "batcher": { "path": "tools/asset/batch-architecture-building.mjs", "sha256": "sha256:6cd57a54561dc9da1c6336ea1439fdb6d1ffb8faf770b97d291f626c2cc14290" },
+        "batchedSource": { "path": "assets/buildings/functional-hall-house-v4-lod.glb", "sha256": "sha256:d83e9e960b3ced32748dc4d9364839a04c681b68ca52a6bb9fb6b90aa4b90e57" },
+        "buildEvidence": { "path": "assets/buildings/functional-hall-house-v4-architecture-build.json", "sha256": "sha256:d032f236c3dbd3900b8f576e77ea760b3c57fca014f70c53ecef5a15a20428c5" },
+        "compressor": { "path": "tools/asset/compress-hall-house-v4-ktx2.mjs", "sha256": "sha256:1395434d379506fceb4baa120aa230abcfc26e516744aa5edf0d27cb1e8f57f2" },
+        "ktxManifest": { "path": "assets/buildings/functional-hall-house-v4-production.ktx2.json", "sha256": "sha256:02fa05ed52d921a4807fe9ce4080361e443b3026137862c6c0910cb3f56d9198" }
+      },
+      "critiqueFindings": [
+        { "facet": "furniture topology", "finding": "The settle silhouette reads as disconnected vertical boards and blocks the hearth composition instead of as credible joined furniture.", "evidenceView": "interior-open" },
+        { "facet": "domestic prop profiles", "finding": "Box-composed mugs and jugs expose the primitive generator and do not read as vessels.", "evidenceView": "interior-open" },
+        { "facet": "hearth presentation", "finding": "The rear brick plane dominates while the flame remains too small and obscured behind the logs.", "evidenceView": "interior-open" }
+      ],
+      "decision": { "outcome": "rejected-after-internal-engine-review", "reason": "Cycle 10 proves the structural and composition pipeline but its hard-edged furniture, primitive vessel profiles, and weak flame remain below the locked floor." },
+      "status": "rejected"
+    },
+    {
+      "cycle": 11,
+      "constructionResponse": {
+        "summary": "Replaced diagnostic interior primitives with eased joined furniture, lathed vessel profiles, role-specific furniture timber, and a layered visible flame composition.",
+        "changes": [
+          "added compiler-native lathed profiles for bowls, cups, and jugs plus open cylindrical handles",
+          "rebuilt the settle as a lower three-panel joined assembly with rails and relocated the log rack and hearth tools out of the fireplace composition",
+          "applied bounded two-segment edge easing to compiler-authored furnishings, interior structure, and domestic props in the Blender adapter",
+          "split furniture from floor timber with a finer-scale PBR furniture-oak role",
+          "expanded the hearth to four staggered visible flame tongues and reduced local spill to 7 candela at 2.3 metres"
+        ]
+      },
+      "artifact": { "assetId": "buildings/functional-hall-house-v4-production.glb", "rawSha256": "sha256:4ab8b7b68fb5e5f77c06963b5f76c390ff902c94af11574c05762b53db21d544", "engineContentHash": "sha256:4d44c356c9f1ee83534c46107ca33024fb471be02a761561edc8812a954c93f8" },
+      "provenance": {
+        "architectureSpec": { "path": "assets/buildings/functional-hall-house-architecture-v1.json", "sha256": "sha256:4d59bf32752f1ebe67b088563cc90c07910f21fe79c7f8861e9d1458e56ee2b3" },
+        "buildDriver": { "path": "tools/architecture/build-building.ts", "sha256": "sha256:d8d48b82f44258dc06047c27fd2b4a1c7f956473deb58a405747f0a110a8d3aa" },
+        "blenderAdapter": { "path": "tools/blender/architecture-adapter.py", "sha256": "sha256:3a9bc35b6bc6fc696ede718078d28b2a1351e9623fd1801581a32b9251ef1491" },
+        "authoredSource": { "path": "assets/buildings/functional-hall-house-v4.glb", "sha256": "sha256:9d3a60665a728a4e615deda8999e9dd1f64801a05549be94ad162591fb507f96" },
+        "batcher": { "path": "tools/asset/batch-architecture-building.mjs", "sha256": "sha256:6cd57a54561dc9da1c6336ea1439fdb6d1ffb8faf770b97d291f626c2cc14290" },
+        "batchedSource": { "path": "assets/buildings/functional-hall-house-v4-lod.glb", "sha256": "sha256:114a562b8c654076af08f70be79d21a57aaa619d2734d8c96a4051595f6eb9a1" },
+        "buildEvidence": { "path": "assets/buildings/functional-hall-house-v4-architecture-build.json", "sha256": "sha256:8c9dcc8e7086041f6819a066cc1d08ee26f1cb2e715fb8d2dbef5be7509277f6" },
+        "compressor": { "path": "tools/asset/compress-hall-house-v4-ktx2.mjs", "sha256": "sha256:a778e42c44da5deb7ea91650b45489c9f1a6fe7cbf20c1cfa8ef5aeb102b9ee7" },
+        "ktxManifest": { "path": "assets/buildings/functional-hall-house-v4-production.ktx2.json", "sha256": "sha256:e15fca5a9444416d5f9c3b787fdf3f13fd38773aab8e8ca7a99985beb36b148f" }
+      },
+      "critiqueFindings": [
+        { "facet": "settle topology", "finding": "Despite improved materials and vessel profiles, the rotated settle back and posts still read as disconnected bars and obstruct the hearth composition.", "evidenceView": "interior-open" }
+      ],
+      "decision": { "outcome": "rejected-after-internal-engine-review", "reason": "Cycle 11 substantially improves props and flame readability but the failed settle archetype remains a dominant below-floor silhouette." },
+      "status": "rejected"
+    },
+    {
+      "cycle": 12,
+      "constructionResponse": {
+        "summary": "Removed the failed settle from this house, replaced it with a connected hearth bench, enforced furniture topology, and added dedicated hearth close-view evidence.",
+        "changes": [
+          "replaced the obstructive settle with a low joined bench that preserves the entry-to-hearth composition",
+          "added canonical-part and connected-component validation for every furniture archetype",
+          "retargeted the interior evidence camera toward the hearth and activity zones",
+          "added a sixth guarded hearth-detail view with strict one-percent clipping authority"
+        ]
+      },
+      "artifact": { "assetId": "buildings/functional-hall-house-v4-production.glb", "rawSha256": "sha256:14482079baf569b220103031c22af8a29db95dbc1a4c92de9388fecec8bddf31", "engineContentHash": "sha256:12478c9acdb865a20c73abbda2530b29406f94dbcf2c5d882941decc5337961c" },
+      "provenance": {
+        "architectureSpec": { "path": "assets/buildings/functional-hall-house-architecture-v1.json", "sha256": "sha256:a976c66c56c60c7ea95459e0bbace8f5c74038b77f8da3ddd9456fe99fae6354" },
+        "buildDriver": { "path": "tools/architecture/build-building.ts", "sha256": "sha256:d8d48b82f44258dc06047c27fd2b4a1c7f956473deb58a405747f0a110a8d3aa" },
+        "blenderAdapter": { "path": "tools/blender/architecture-adapter.py", "sha256": "sha256:3a9bc35b6bc6fc696ede718078d28b2a1351e9623fd1801581a32b9251ef1491" },
+        "authoredSource": { "path": "assets/buildings/functional-hall-house-v4.glb", "sha256": "sha256:b9485d3923d3eb183d3737aa7a98bb98d3ea8571f74c251ce5c73a123a674767" },
+        "batcher": { "path": "tools/asset/batch-architecture-building.mjs", "sha256": "sha256:6cd57a54561dc9da1c6336ea1439fdb6d1ffb8faf770b97d291f626c2cc14290" },
+        "batchedSource": { "path": "assets/buildings/functional-hall-house-v4-lod.glb", "sha256": "sha256:dee82e841c85c29d7b1afc41606a38abb7d02888b178de49b5e48ef069749abc" },
+        "buildEvidence": { "path": "assets/buildings/functional-hall-house-v4-architecture-build.json", "sha256": "sha256:f5fa7d8e9cf624a367fdde87546d8018a36af868091d6c53167456d63a1e1bbf" },
+        "compressor": { "path": "tools/asset/compress-hall-house-v4-ktx2.mjs", "sha256": "sha256:e54aebee78479b12f8214e28e6fb865ec2599db97439df68b185a6d05e385d0c" },
+        "ktxManifest": { "path": "assets/buildings/functional-hall-house-v4-production.ktx2.json", "sha256": "sha256:c40598f4bb4f549e2e9605e7f435f0bb0686d34912609613441c1be1c276a1b7" }
+      },
+      "critiqueFindings": [
+        { "facet": "furniture silhouette", "finding": "The generic backless bench passed coarse AABB connectivity but read as a floating plank and detached blocks in the interior view.", "evidenceView": "interior-open" },
+        { "facet": "hearth exposure", "finding": "The hearth-detail view saturated 5.7816 percent of pixels in the red channel, exceeding the one-percent close-view authority.", "evidenceView": "hearth-detail" }
+      ],
+      "decision": { "outcome": "rejected-after-internal-engine-review", "reason": "Cycle 12 remained below the locked floor because furniture adjacency did not establish a credible constructed silhouette and the hearth close view failed exposure authority." },
+      "status": "rejected"
+    },
+    {
+      "cycle": 13,
+      "constructionResponse": {
+        "summary": "Replaced the ambiguous generic hearth bench with a canonical backed hearth-settle and added per-channel hearth emission authority.",
+        "changes": [
+          "introduced a dedicated hearth-settle archetype with continuous seat, aprons, legs, rear posts, back rails, panels, crest, and stretchers",
+          "moved the settle into an explicit hearth-facing composition and removed the isolated central stool",
+          "bounded combined hearth light chroma and candela so individually valid values cannot saturate one color channel",
+          "reduced ember and flame emission while preserving visible multi-tongue fire geometry"
+        ]
+      },
+      "artifact": { "assetId": "buildings/functional-hall-house-v4-production.glb", "rawSha256": "sha256:f199eaf6e401e448594146a16cee7bad6bb9e13283a4a9ddfe4c58bc9b3205b1", "engineContentHash": "sha256:cbc367e24b62df6d8a72266939c56ca62cd9bfe8e4d6885ec50caaade65df6d8" },
+      "provenance": {
+        "architectureSpec": { "path": "assets/buildings/functional-hall-house-architecture-v1.json", "sha256": "sha256:110cc10d5a88089b3a2148c0746b8764b9b04b2b9d449147c929274751bccb99" },
+        "buildDriver": { "path": "tools/architecture/build-building.ts", "sha256": "sha256:d8d48b82f44258dc06047c27fd2b4a1c7f956473deb58a405747f0a110a8d3aa" },
+        "blenderAdapter": { "path": "tools/blender/architecture-adapter.py", "sha256": "sha256:f696cc2940a3b3d8f9b9543de4d97c99cca0be6ea2b95e0c240870dc14281f0d" },
+        "authoredSource": { "path": "assets/buildings/functional-hall-house-v4.glb", "sha256": "sha256:90b66c071be6b5fcfcffc24acde3fc6abc22c9c1fb7201c90ecb175682b03c43" },
+        "batcher": { "path": "tools/asset/batch-architecture-building.mjs", "sha256": "sha256:6cd57a54561dc9da1c6336ea1439fdb6d1ffb8faf770b97d291f626c2cc14290" },
+        "batchedSource": { "path": "assets/buildings/functional-hall-house-v4-lod.glb", "sha256": "sha256:8fcb0c7df015d7681d078f3ec6619411f7ec368c87705f5bf963fbb528865493" },
+        "buildEvidence": { "path": "assets/buildings/functional-hall-house-v4-architecture-build.json", "sha256": "sha256:a04bc365ac7460ce2d5670781f4bd2a389f2f4a9e3935f4a70b84ec20866b961" },
+        "compressor": { "path": "tools/asset/compress-hall-house-v4-ktx2.mjs", "sha256": "sha256:a899f0f76c13bc3eed12dcdd08e4386050d286671bc843e264246913ffaf080c" },
+        "ktxManifest": { "path": "assets/buildings/functional-hall-house-v4-production.ktx2.json", "sha256": "sha256:b1cbedf54c43b751fcf543b7e53b30dc4211a405502a69ba60aa0c233ac7cbda" }
+      },
+      "critiqueFindings": [],
+      "decision": { "outcome": "selected-for-internal-engine-review", "reason": "Cycle 13 passes compiler, ARM64 Blender, material, UV, semantic LOD, and KTX packaging gates; six-view guarded native pixels remain mandatory." },
+      "status": "engine-review"
+    }
+  ],
+  "acceptance": {
+    "renderer": "native production engine only",
+    "humanApprovalRequired": true,
+    "automaticGalleryStaging": false
+  }
+}

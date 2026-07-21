@@ -12,7 +12,7 @@ use deno_core::{extension, Extension};
 use deno_web::{BlobStore, InMemoryBroadcastChannel};
 
 pub use surface::{
-    BUTTON_JUMP, BUTTON_RUN, FrameCallback, InputState, ResizeCallback, StepCallback, WindowTarget,
+    FrameCallback, InputState, ResizeCallback, StepCallback, WindowTarget, BUTTON_JUMP, BUTTON_RUN,
 };
 
 extension!(

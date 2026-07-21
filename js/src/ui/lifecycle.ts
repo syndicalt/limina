@@ -110,6 +110,11 @@ export class Lifetime {
     return this.remainingMs <= 0;
   }
 
+  /** Restart the countdown (e.g. a speaker spoke again — keep the bubble alive). */
+  reset(ttlMs: number): void {
+    this.remainingMs = ttlMs;
+  }
+
   get remaining(): number {
     return Math.max(0, this.remainingMs);
   }

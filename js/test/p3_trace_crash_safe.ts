@@ -40,6 +40,10 @@ function testAppendOnEmitPersistsWithoutExplicitFlush(): void {
   const next = emitTick(restarted, 3);
   assert(next.includes("_000000000003_"), "restart hydration should continue persisted sequence");
   assert(ticks(restarted).join(",") === "0,1,2,3", "restart hydration should preserve and extend complete history");
+  assert(restarted.inspect().eventCount === 2, "restart hydration should keep only the bounded hot window in memory");
+  const fullTail = restarted.tail({ afterSeq: -1, limit: 10 });
+  assert(fullTail.events.length === 4, "append-backed tail should read the full persisted history");
+  assert(restarted.durableEventCount() === 4, "append-backed durable count should reflect persisted history, not the hot window");
 }
 
 function testAppendOnEmitRecoversTornFinalWrite(): void {

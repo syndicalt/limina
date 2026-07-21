@@ -1,0 +1,108 @@
+import { createHash } from "node:crypto";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import {
+  compileArchitecture,
+  localizeFurniturePack,
+  partitionCompiledArchitecture,
+  serializeBlenderFurniturePackInput,
+  type ArchitectureSpec,
+} from "../../js/src/architecture/index.ts";
+import { resolveBlender } from "./blender-toolchain.mjs";
+
+const args = process.argv.slice(2),
+  at = (flag: string) => {
+    const index = args.indexOf(flag);
+    if (index < 0 || !args[index + 1])
+      throw new Error(
+        "usage: bun tools/architecture/build-furniture-pack.ts --spec <json> --id <furnishing-id> --out <glb> --blend-out <blend> --evidence <json>",
+      );
+    return flag === "--id" ? args[index + 1] : resolve(args[index + 1]);
+  };
+const specPath = at("--spec"),
+  id = at("--id"),
+  outputPath = at("--out"),
+  blendOutputPath = at("--blend-out"),
+  evidencePath = at("--evidence"),
+  toolchain = resolveBlender();
+const spec = JSON.parse(await readFile(specPath, "utf8")) as ArchitectureSpec,
+  compiled = compileArchitecture(spec),
+  partition = partitionCompiledArchitecture(spec, compiled),
+  pack = localizeFurniturePack(spec, partition, id),
+  inputPath = `${outputPath}.furniture.json`;
+await Promise.all([
+  mkdir(dirname(outputPath), { recursive: true }),
+  mkdir(dirname(blendOutputPath), { recursive: true }),
+  mkdir(dirname(evidencePath), { recursive: true }),
+]);
+await writeFile(inputPath, serializeBlenderFurniturePackInput(pack, compiled) + "\n", { mode: 0o600 });
+const adapterPath = new URL("../blender/architecture-adapter.py", import.meta.url).pathname,
+  run = Bun.spawnSync(
+    [
+      toolchain.binary,
+      "--background",
+      "--factory-startup",
+      "--python",
+      adapterPath,
+      "--",
+      "--input",
+      inputPath,
+      "--out",
+      outputPath,
+      "--blend-out",
+      blendOutputPath,
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+if (run.exitCode !== 0) throw new Error(`furniture Blender adapter failed (${run.exitCode})\n${run.stderr.toString()}`);
+const validatorPath = new URL("../blender/validate-architecture-blend.py", import.meta.url).pathname,
+  validation = Bun.spawnSync(
+    [
+      toolchain.binary,
+      "--background",
+      blendOutputPath,
+      "--python",
+      validatorPath,
+      "--",
+      "--spec-hash",
+      compiled.specHash,
+      "--ir-hash",
+      pack.payloadHash,
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+if (validation.exitCode !== 0)
+  throw new Error(`furniture source blend validation failed (${validation.exitCode})\n${validation.stderr.toString()}`);
+const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex"),
+  asset = await readFile(outputPath),
+  blend = await readFile(blendOutputPath),
+  bounds = pack.primitives.reduce(
+    (acc, primitive) => {
+      if (primitive.kind !== "box") return acc;
+      for (let axis = 0; axis < 3; axis++) {
+        acc.min[axis] = Math.min(acc.min[axis], primitive.center[axis] - primitive.halfExtents[axis]);
+        acc.max[axis] = Math.max(acc.max[axis], primitive.center[axis] + primitive.halfExtents[axis]);
+      }
+      return acc;
+    },
+    { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] },
+  );
+const repo = resolve(import.meta.dir, "../.."),
+  portable = (path: string) => (path.startsWith(repo + "/") ? path.slice(repo.length + 1) : path);
+const evidence = {
+  schema: "limina.building-furniture-pack-evidence/v1",
+  id: pack.id,
+  kind: pack.kind,
+  sourceSpecHash: compiled.specHash,
+  sourceIrHash: compiled.irHash,
+  payloadHash: pack.payloadHash,
+  toolchain,
+  asset: { path: portable(outputPath), sha256: `sha256:${digest(asset)}`, bytes: asset.length },
+  sourceBlend: { path: portable(blendOutputPath), sha256: `sha256:${digest(blend)}`, bytes: blend.length },
+  localOrigin: pack.origin,
+  sourcePlacement: pack.placement,
+  primitiveCount: pack.primitives.length,
+  bounds,
+};
+await writeFile(evidencePath, JSON.stringify(evidence, null, 2) + "\n", { mode: 0o600 });
+console.log(JSON.stringify(evidence, null, 2));

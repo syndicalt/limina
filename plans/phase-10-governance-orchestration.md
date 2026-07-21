@@ -11,7 +11,7 @@
 > **Builds on (shipped):** permission profiles (`skills/permissions.ts`), the policy engine
 > (`policy/engine.ts` — deny by profile/quota/revocation/budget), the **Phase 7 approval gate**
 > (`skills/approval.ts`), multi-turn agents (`runBoundedMultiTurn`), the causal trace + durable log.
-> **Status:** not started. **~70% of the primitives already exist** — this is mostly assembly + the exposure layer.
+> **Status:** COMPLETE — see the Status & outcomes section below and `plans/ROADMAP.md`.
 
 ## Why this comes first
 Today **invocation is gated but exposure is not**: `registry.list()` returns the *entire* catalog to every

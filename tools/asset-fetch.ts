@@ -38,6 +38,7 @@ import { AssetResolver } from "../js/src/asset/resolver.ts";
 import type { AssetRequest, AssetResult, AssetSource } from "../js/src/asset/types.ts";
 import { objArchiveToGlb } from "./obj-archive-to-glb.ts";
 import { curateResolve, DEFAULT_MAX_ATTEMPTS } from "./curate.ts";
+import { inspectGlbAsset, sha256, upsertAssetCandidate } from "./qc/asset-manifest.mjs";
 
 const LIBRARY_NAME = "library:polypizza";
 const GENERATIVE_NAME = "generative:3daistudio";
@@ -51,6 +52,46 @@ installOps({
   op_http_post: () => Promise.reject(new Error("op_http_post unused: a real fetch HttpClient is injected")),
 } as unknown as EngineOps);
 
+// Hard cap on a single downloaded GLB. A generative model result is a few MB; anything past this is a
+// misconfigured/hostile endpoint, so we abort rather than buffer it into memory.
+const MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024;
+
+// Best-effort SSRF guard for the binary download URL. This is DEFENCE-IN-DEPTH, not a full mitigation:
+// it does a plain hostname check and does NOT follow DNS rebinding or redirect targets. It keeps the
+// tool from being pointed at https://localhost/… style internal endpoints via a crafted API response.
+function isInternalHost(host: string): boolean {
+  const h = host.toLowerCase();
+  if (h === "localhost" || h.endsWith(".localhost")) return true;
+  if (h === "::1" || h === "::") return true;
+  // ULA (fc00::/7) + link-local (fe80::/10) — only meaningful on an actual IPv6
+  // literal, so gate on a colon. Otherwise dotted-domain hosts like fcdn.example.com
+  // or fd-assets.net would be false-positived by the raw prefix match.
+  if (h.includes(":") && (h.startsWith("fe80") || h.startsWith("fc") || h.startsWith("fd"))) return true;
+  const m = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const o = m.slice(1).map(Number);
+    if (o.some((n) => n > 255)) return true; // malformed dotted-quad -> reject
+    const [a, b] = o;
+    if (a === 0 || a === 127 || a === 10) return true; // this-host / loopback / private
+    if (a === 169 && b === 254) return true; // link-local
+    if (a === 172 && b >= 16 && b <= 31) return true; // private
+    if (a === 192 && b === 168) return true; // private
+  }
+  return false;
+}
+
+function assertPublicHttpsUrl(raw: string): void {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new Error(`refusing to fetch non-URL asset target: ${raw}`);
+  }
+  if (u.protocol !== "https:") throw new Error(`refusing non-https asset URL: ${raw}`);
+  const host = u.hostname.replace(/^\[|\]$/g, ""); // strip IPv6 brackets
+  if (isInternalHost(host)) throw new Error(`refusing to fetch internal/loopback host: ${host}`);
+}
+
 // ── 1. A real fetch-backed HttpClient for the generative backend (bun `fetch`; sends Bearer auth, does
 //       GET polls, and streams the binary GLB — all things the sandbox op_http_post can't). ───────────
 const fetchHttpClient: HttpClient = {
@@ -63,9 +104,42 @@ const fetchHttpClient: HttpClient = {
     return { status: res.status, body: await res.text() };
   },
   async fetchBinary(url: string, headers?: Record<string, string>): Promise<Uint8Array> {
+    assertPublicHttpsUrl(url);
     const res = await fetch(url, { headers });
     if (!res.ok) throw new Error(`GLB download HTTP ${res.status}`);
-    return new Uint8Array(await res.arrayBuffer());
+    // Fast pre-check on the advertised size, then enforce the cap on the ACTUAL streamed bytes so a
+    // missing/lying Content-Length can't slip past it.
+    const declared = Number(res.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > MAX_DOWNLOAD_BYTES) {
+      throw new Error(`GLB download too large: Content-Length ${declared} > cap ${MAX_DOWNLOAD_BYTES}`);
+    }
+    const body = res.body;
+    if (!body) {
+      const buf = new Uint8Array(await res.arrayBuffer());
+      if (buf.length > MAX_DOWNLOAD_BYTES) throw new Error(`GLB download exceeded cap ${MAX_DOWNLOAD_BYTES} bytes`);
+      return buf;
+    }
+    const reader = body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.length;
+      if (total > MAX_DOWNLOAD_BYTES) {
+        await reader.cancel();
+        throw new Error(`GLB download exceeded cap ${MAX_DOWNLOAD_BYTES} bytes`);
+      }
+      chunks.push(value);
+    }
+    const out = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) {
+      out.set(c, off);
+      off += c.length;
+    }
+    return out;
   },
 };
 
@@ -140,6 +214,22 @@ function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "asset";
 }
 
+/** The generative backend's image-to-3D expects the reference as a `data:image/...;base64,...` URI. Let
+ *  `--reference` name a local image FILE (the ergonomic form) and encode it here; a value that is already
+ *  a data:/http(s): URI is passed through untouched. */
+const IMG_MIME: Record<string, string> = {
+  ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif",
+};
+function referenceToDataUri(ref: string | undefined): string | undefined {
+  if (!ref) return undefined;
+  if (/^(data:|https?:)/i.test(ref)) return ref;
+  if (!existsSync(ref)) fail(`--reference file not found: ${ref}`);
+  const ext = ref.slice(ref.lastIndexOf(".")).toLowerCase();
+  const mime = IMG_MIME[ext];
+  if (!mime) fail(`--reference must be a .jpg/.jpeg/.png/.webp/.gif file or a data:/https: URI (got "${ref}")`);
+  return `data:${mime};base64,${readFileSync(ref).toString("base64")}`;
+}
+
 // ── 4. Main ────────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
@@ -175,11 +265,14 @@ async function main(): Promise<void> {
   // Build the request for a given seed (curation re-rolls the seed; everything else is fixed). The seed is
   // folded into the cache key, so each re-rolled seed is its own cache entry — and the curated seed that
   // wins is what gets cached, keeping re-rolls deterministic on replay.
+  // Encode a local --reference image file into the data: URI the generative image-to-3D backend expects
+  // (pass-through for values already data:/https:). Done once; folded into the request below.
+  const referenceImage = referenceToDataUri(args.reference);
   const reqFor = (seed: number): AssetRequest => ({
     kind: args.kind,
     seed,
     prompt: args.prompt,
-    referenceImage: args.reference,
+    referenceImage,
     ...(args.source ? { params: { source: args.source } } : {}),
   });
 
@@ -245,6 +338,27 @@ async function main(): Promise<void> {
   const assetId = `${args.kind}-${slug(args.prompt)}-${args.seed}.${result.format}`;
   writeFileSync(join(assetsDir, assetId), result.bytes);
 
+  // Retrieval persists provenance into the canonical manifest immediately, but NEVER self-approves.
+  // A candidate becomes an accepted `entry` only after hash-pinned QC evidence and separate human
+  // reference review are supplied. Unknown generator licenses remain explicit "unknown" and fail closed.
+  const candidate = {
+    id: assetId,
+    status: "candidate-awaiting-qc",
+    class: args.kind,
+    model: { path: assetId, sha256: sha256(result.bytes) },
+    provenance: {
+      source: result.meta.source,
+      sourceUrl: result.meta.sourceUrl ?? null,
+      licenseSpdx: result.meta.license ?? "unknown",
+      attribution: result.meta.attribution ?? null,
+    },
+    metrics: result.format === "glb" ? inspectGlbAsset(result.bytes) : null,
+    lods: [],
+    qc: null,
+    request: { prompt: args.prompt, requestedSeed: args.seed, selectedSeed: usedSeed, referenceImage: args.reference ?? null },
+  };
+  upsertAssetCandidate(join(assetsDir, "manifest.json"), candidate);
+
   // One machine-readable JSON line (bytes = the glb byte length; the raw bytes live on disk). `seed` is the
   // CURATED seed actually used (== requested seed unless curation re-rolled); bounds/aspect are the
   // footprint the curator measured (null when --no-curate).
@@ -259,6 +373,8 @@ async function main(): Promise<void> {
       license: result.meta.license ?? null,
       attribution: result.meta.attribution ?? null,
       sourceUrl: result.meta.sourceUrl ?? null,
+      manifest: "assets/manifest.json",
+      status: candidate.status,
       cached,
     }),
   );

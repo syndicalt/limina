@@ -19,6 +19,7 @@ import type { EngineEvent, LiminaTracer, TraceReplayResult } from "../observabil
 import type { SkillRegistry } from "../skills/registry.ts";
 
 const POLICY_TYPES: Record<string, true> = { "policy.decision": true, "policy.denied": true };
+const AUDIT_READ_PERMS = ["trace.read"];
 
 /** The recorded policy-event payload — parsed (not inline-cast) before any read so
  *  a malformed/foreign payload degrades to `null` instead of a silent wrong read. */
@@ -108,7 +109,7 @@ export function registerAuditSkills(registry: SkillRegistry): void {
     version: "1.0.0",
     description: "Answer 'why was action X allowed/denied': the governing policy decision (rule + reason + context + quota/budget), the provenance (agent/session/profile/package), and the causal-parent chain — all from the real recorded trace.",
     category: "system",
-    permissions: [],
+    permissions: AUDIT_READ_PERMS,
     input: z.object({ eventId: z.string() }),
     output: z.object({
       eventId: z.string(),
@@ -193,7 +194,7 @@ export function registerAuditSkills(registry: SkillRegistry): void {
     version: "1.0.0",
     description: "Query recorded policy decisions: filter by allow/deny, cap, rule, agent, session, or package (package provenance). Returns matching decision events plus an allow/deny + by-rule + by-cap summary.",
     category: "system",
-    permissions: [],
+    permissions: AUDIT_READ_PERMS,
     input: z.object({
       decision: z.enum(["allow", "deny", "all"]).default("all"),
       cap: z.string().optional(),
@@ -277,7 +278,7 @@ export function registerAuditSkills(registry: SkillRegistry): void {
     version: "1.0.0",
     description: "Resource usage from recorded decisions: allowed/denied call counts per session+cap, plus the latest quota and budget snapshots seen for each session — derived from the real policy events.",
     category: "system",
-    permissions: [],
+    permissions: AUDIT_READ_PERMS,
     input: z.object({ sessionId: z.string().optional() }),
     output: z.object({
       perSessionCap: z.array(z.object({

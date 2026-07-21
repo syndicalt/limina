@@ -1,0 +1,10 @@
+{
+  // FULL type surface — engine PLUS the leaf entry scripts tsconfig.check.json excludes
+  // (bootstrap/demo/demos/eyes). `npm run check:types:all` surfaces the debt those
+  // exclusions carry so "type-clean" is never a SILENTLY narrowed claim: the excluded
+  // errors are visible and tracked, not hidden. This config is expected to report the
+  // known demo/harness errors today (see tsconfig.check.json); driving it to zero folds
+  // those scripts back under the engine gate.
+  "extends": "./tsconfig.check.json",
+  "exclude": []
+}

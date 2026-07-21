@@ -1,0 +1,47 @@
+{
+  "schema": "limina.functional-building-review-scene/v1",
+  "asset": {
+    "assetId": "buildings/functional-hall-house-v4-production.glb",
+    "sha256": "sha256:f199eaf6e401e448594146a16cee7bad6bb9e13283a4a9ddfe4c58bc9b3205b1",
+    "assetHash": "sha256:cbc367e24b62df6d8a72266939c56ca62cd9bfe8e4d6885ec50caaade65df6d8"
+  },
+  "generator": {
+    "path": "tools/architecture/build-building.ts",
+    "sha256": "sha256:d8d48b82f44258dc06047c27fd2b4a1c7f956473deb58a405747f0a110a8d3aa",
+    "blenderVersion": "4.0.2"
+  },
+  "environmentAuthority": {
+    "path": "art-direction/temperate-fidelity-scene.json",
+    "sha256": "sha256:8ad4266675bda4c10bda3dd1fdbcbbd5e7d0516080f91b635202b6340b39d1c2"
+  },
+  "iterationAuthority": {
+    "path": "art-direction/functional-cottage-v4-iteration.json",
+    "sha256": "sha256:c1312519a0b384aaf7798f3169d92c147d94e3f37ae3ab58f027a177afdedb77"
+  },
+  "placement": {
+    "position": [30, 0, 113],
+    "yaw": 2.2531128816696446,
+    "doorOpen": true
+  },
+  "camera": {
+    "id": "functional-cottage-exterior-three-quarter",
+    "position": [25.066878616098997, 4.0, 130.31081492627366],
+    "target": [30, 2.4, 113],
+    "fovDeg": 50,
+    "near": 0.1,
+    "far": 180
+  },
+  "evidenceViews": [
+    { "id": "exterior-closed", "state": "closed", "role": "articulation-before", "camera": "hero", "lodLevel": 0, "distanceM": 18 },
+    { "id": "exterior-open", "state": "open", "role": "primary", "camera": "hero", "lodLevel": 0, "distanceM": 18 },
+    { "id": "threshold-detail", "state": "open", "role": "threshold-detail", "camera": { "position": [25.02122868925416, 1.7, 117.97295045574496], "target": [27.799716809670386, 1.25, 115.71542885790679], "fovDeg": 50 }, "lodLevel": 0, "distanceM": 3.58 },
+    { "id": "interior-open", "state": "open", "role": "interior-traversal", "camera": { "position": [28.591353089788978, 1.65, 115.07222438031043], "target": [30.24, 1.28, 110.10], "fovDeg": 66 }, "lodLevel": 0, "distanceM": 5.25 },
+    { "id": "hearth-detail", "state": "open", "role": "hearth-detail", "camera": { "position": [29.35, 1.45, 111.25], "target": [30.24, 1.10, 109.15], "fovDeg": 48 }, "lodLevel": 0, "distanceM": 2.31 },
+    { "id": "lod-25m", "state": "closed", "role": "lod-proof", "camera": { "position": [23.148442522359728, 5.2, 137.04279850871341], "target": [30, 2.6, 113], "fovDeg": 48 }, "lodLevel": 1, "distanceM": 25 }
+  ],
+  "presentation": {
+    "minimumResolution": [1920, 1080],
+    "fixedTimeSeconds": 12,
+    "warmupFrames": 8
+  }
+}

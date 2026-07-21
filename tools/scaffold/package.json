@@ -6,13 +6,16 @@
   "description": "A Limina world — author once in world.ts, export to a browser-playable bundle.",
   "scripts": {
     "dev": "node scripts/serve.mjs public 5173",
+    "editor": "node scripts/editor.mjs",
     "export": "node scripts/export.mjs",
-    "serve": "node scripts/serve.mjs dist 4173"
+    "serve": "node scripts/serve.mjs dist 4173",
+    "check": "tsc --noEmit"
   },
+  "packageManager": "npm@11.12.1",
   "engines": {
     "node": ">=18"
   },
   "devDependencies": {
-    "typescript": "^5.4.0"
+    "typescript": "5.9.3"
   }
 }

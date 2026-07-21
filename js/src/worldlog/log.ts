@@ -16,9 +16,11 @@
 // Replay-complete command set -- every source of world mutation / nondeterminism
 // the engine has (audited across Phase 0-3):
 //
-//   1. "seed"    -- the deterministic PRNG seed (uint32). Installed AS
-//                   `Math.random` (see installSeededRandom) so any randomness in
-//                   any skill handler is reproducible. Recorded ONCE, first.
+//   1. "seed"    -- the deterministic PRNG seed (uint32). Installs TWO streams
+//                   (see installSeededRandom): the global `Math.random` slot
+//                   (three/legacy consumers) and the world-owned SKILL stream
+//                   (`world.rng`, seed ^ SKILL_RNG_SEED_XOR) that skill handlers
+//                   draw from. Recorded ONCE, first.
 //   2. "physics" -- a native Rapier op issued OUTSIDE a skill (scenario/loop
 //                   bootstrap + the per-tick step): create_world (gravity),
 //                   add_ground, add_* (spawns), apply_impulse, remove_body, and
@@ -57,22 +59,60 @@
 
 import type { EngineOps } from "../engine.ts";
 import { Position, Rotation, Scale, syncPhysicsBodyTransform } from "../ecs/world.ts";
+import type { TransformStorage } from "../ecs/facade.ts";
+import { resolveProfile } from "../skills/permissions.ts";
 import { z } from "../../build/zod.bundle.mjs";
+
+/** The per-entity fields the world log can capture beyond eid/bodyId. All optional:
+ *  the real EntityTable's EntityEntry satisfies this structurally, and a minimal
+ *  stub table (tests, keyframe worlds) that resolves only {eid, bodyId} still
+ *  type-checks — absent fields are simply not captured. */
+export interface ResolvedEntityLike {
+  eid: number;
+  bodyId?: number;
+  generation?: number;
+  parent?: string;
+  material?: unknown;
+  resource?: unknown;
+  behavior?: unknown;
+}
 
 /** Minimal entity-table handle a recorder/replay reads from. The Engine and the
  *  skill-layer WorldContext both satisfy this structurally. */
 export interface EntityTableLike {
   ids(): string[];
-  resolve(id: string): { eid: number; bodyId?: number } | undefined;
+  resolve(id: string): ResolvedEntityLike | undefined;
 }
 
 /** The minimal world surface the world log reads (state capture + body sync). */
 export interface WorldLike {
   entities: EntityTableLike;
   ops: EngineOps;
+  /** Versioned transform writer. Live worlds provide this so physics sync also
+   * invalidates transform-derived indexes; legacy replay fixtures may omit it. */
+  transforms?: TransformStorage;
+  /** Gameplay tag map (eid -> tag set). Real WorldContexts carry it; a stub world
+   *  without it simply captures no tags. */
+  tags?: ReadonlyMap<number, ReadonlySet<string>>;
 }
 
-export const LOG_VERSION = 1;
+// v2: a skill line may carry the caller's permission PROFILE NAME (`profile`)
+// instead of the full permission array (`perms`) — the profile is resolved back to
+// the array on parse via skills/permissions.ts. v1 lines (full `perms` array, no
+// `profile`) parse forever; the change is additive, so parseWorldLog accepts any
+// logVersion in [1, LOG_VERSION].
+//
+// FROZEN PROFILE MAPPINGS (additive within v2, both fields already optional in the
+// line schema): pinning a profile NAME coupled replay to the CURRENT profile
+// definition — narrowing a profile broke old-log replay, widening silently granted
+// replayed commands more than the caller held. The FIRST line pinning each profile
+// now keeps its full `perms` array ALONGSIDE the name, freezing the mapping into
+// the log; later pinned lines stay name-only and parse resolves them from the
+// frozen mapping (in seq order; a later both-fields line re-freezes). Only logs
+// with NO frozen mapping for a profile (v2 logs written before this fix) fall back
+// to resolveProfile — accepted with a parse-time warning, since the live definition
+// may have drifted from what the caller held.
+export const LOG_VERSION = 2;
 
 /** Native Rapier ops recorded as raw `physics` commands (mutating only). */
 export type PhysicsOpName =
@@ -160,7 +200,15 @@ export interface SkillCommand {
   input: unknown;
   actorId: string;
   sessionId: string;
+  /** The caller's full permission set (sorted). ALWAYS populated in memory — a
+   *  line persisted with only `profile` has it materialized on parse — so every
+   *  in-process consumer (replay, worldlogTail, the kernel bridge) keeps working
+   *  on both formats. */
   perms: string[];
+  /** The caller's permission PROFILE NAME (skills/permissions.ts), recorded only
+   *  when `perms` is exactly that profile's set. When present, serialization
+   *  writes `profile` INSTEAD of the ~70-string `perms` array (v2 log format). */
+  profile?: string;
 }
 
 export type WorldCommand = SeedCommand | PhysicsCommand | SkillCommand;
@@ -169,6 +217,11 @@ export interface WorldLogMeta {
   kind: "meta";
   logVersion: number;
   sessionId: string;
+  /** Deterministic session marker ("tick:<maxTick>"), NOT a wall-clock time despite
+   *  the legacy name: the meta line rides byte-compared artifacts (durable-log
+   *  trailers, deterministic save/export headers — see skills/save.ts), so a real
+   *  timestamp here would break their byte-identity. Renaming is a coordinated
+   *  format change across save/publish/export consumers. */
   createdAt: string;
   commands: number;
   ticks: number;
@@ -177,12 +230,74 @@ export interface WorldLogMeta {
 export interface ParsedWorldLog {
   meta?: WorldLogMeta;
   commands: WorldCommand[];
+  /** Non-fatal parse findings — currently one entry per profile that had to be
+   *  resolved from the LIVE definition because the log carries no frozen mapping
+   *  (pre-freeze v2 logs). Empty/absent when the log is fully self-describing. */
+  warnings?: string[];
 }
 
-/** JSONL: meta header line, then one command per line (seq order preserved). */
+export interface ParseWorldLogOptions {
+  /** Ignore one malformed, unterminated final line. This is the only corruption
+   *  pattern an interrupted append can safely explain; malformed complete or
+   *  interior lines always fail closed. */
+  recoverPartialFinalLine?: boolean;
+  onRecoverableError?: (message: string) => void;
+  /** Receives each non-fatal warning as it is found (same strings as
+   *  ParsedWorldLog.warnings). */
+  onWarning?: (message: string) => void;
+}
+
+// Sorted-joined permission string per profile, cached: profiles are static data,
+// and the serializer/recorder compare against them once per skill command.
+const profilePermsKeyCache = new Map<string, string>();
+function profilePermsKey(profile: string): string {
+  let key = profilePermsKeyCache.get(profile);
+  if (key === undefined) {
+    key = [...resolveProfile(profile)].sort().join("\n");
+    profilePermsKeyCache.set(profile, key);
+  }
+  return key;
+}
+
+/** The profile name to pin into a recorded skill command: `profile` itself when the
+ *  caller's (sorted) permission set is EXACTLY that profile's set, else undefined
+ *  (a narrowed/custom set must keep recording the full array — resolving the
+ *  profile on replay would silently grant permissions the caller did not hold). */
+export function permissionProfileFor(profile: string | undefined, sortedPerms: readonly string[]): string | undefined {
+  if (profile === undefined) return undefined;
+  return profilePermsKey(profile) === sortedPerms.join("\n") ? profile : undefined;
+}
+
+/** One command as a JSONL line. A skill command whose `perms` is exactly its
+ *  pinned `profile`'s set persists the profile name INSTEAD of the array (v2);
+ *  parseWorldLog materializes `perms` back from the profile. Every other command
+ *  serializes unchanged (v1-identical bytes).
+ *
+ *  `pinnedProfiles` is the writer's freeze state (one Set per log/segment): a
+ *  pinned profile NOT yet in the set keeps its full `perms` array alongside the
+ *  name — the FROZEN MAPPING replay resolves later name-only lines from, so a
+ *  live-profile edit can never narrow or widen a recorded caller's permissions.
+ *  Callers without a set (single-line/legacy uses) emit name-only lines, exactly
+ *  the pre-freeze format. */
+export function serializeWorldCommand(cmd: WorldCommand, pinnedProfiles?: Set<string>): string {
+  if (cmd.kind === "skill" && cmd.profile !== undefined && permissionProfileFor(cmd.profile, cmd.perms) === cmd.profile) {
+    if (pinnedProfiles !== undefined && !pinnedProfiles.has(cmd.profile)) {
+      pinnedProfiles.add(cmd.profile);
+      return JSON.stringify(cmd); // first pin: freeze {profile -> perms} into the log
+    }
+    const { perms: _perms, ...rest } = cmd;
+    return JSON.stringify(rest);
+  }
+  return JSON.stringify(cmd);
+}
+
+/** JSONL: meta header line, then one command per line (seq order preserved).
+ *  The first line pinning each profile freezes its permission mapping (see
+ *  serializeWorldCommand). */
 export function serializeWorldLog(meta: WorldLogMeta, commands: WorldCommand[]): string {
+  const pinnedProfiles = new Set<string>();
   const lines: string[] = [JSON.stringify(meta)];
-  for (const cmd of commands) lines.push(JSON.stringify(cmd));
+  for (const cmd of commands) lines.push(serializeWorldCommand(cmd, pinnedProfiles));
   return lines.join("\n") + "\n";
 }
 
@@ -206,18 +321,25 @@ const lineSchema = z.discriminatedUnion("kind", [
   metaSchema,
   z.object({ kind: z.literal("seed"), seq: z.number(), seed: z.number() }),
   z.object({ kind: z.literal("physics"), seq: z.number(), tick: z.number(), op: physicsOpEnum, args: z.array(z.number()) }),
+  // v1 lines carry `perms` (full array); v2 lines may carry `profile` instead.
+  // Both optional here — parseWorldLog enforces that at least one is present and
+  // materializes `perms` from `profile`, so a parsed SkillCommand always has perms.
   z.object({
     kind: z.literal("skill"), seq: z.number(), tick: z.number(), tool: z.string(),
-    input: z.unknown(), actorId: z.string(), sessionId: z.string(), perms: z.array(z.string()),
+    input: z.unknown(), actorId: z.string(), sessionId: z.string(),
+    perms: z.array(z.string()).optional(), profile: z.string().optional(),
   }),
 ]);
 
-/** Parse a persisted world log. Tolerates a trailing newline; rejects a torn
- *  final line (partial JSON) loudly rather than silently dropping a command. */
-export function parseWorldLog(jsonl: string): ParsedWorldLog {
+/** Parse a persisted world log. Tolerates a trailing newline; by default rejects
+ *  malformed lines loudly. Boot recovery may ignore only an unterminated final
+ *  fragment left by an interrupted append. */
+export function parseWorldLog(jsonl: string, opts: ParseWorldLogOptions = {}): ParsedWorldLog {
   const out: WorldCommand[] = [];
   let meta: WorldLogMeta | undefined;
   const rawLines = jsonl.split("\n");
+  const canRecover = (lineIndex: number): boolean =>
+    opts.recoverPartialFinalLine === true && !jsonl.endsWith("\n") && lineIndex === rawLines.length - 1;
   for (let i = 0; i < rawLines.length; i++) {
     const line = rawLines[i];
     if (line.length === 0) continue; // trailing newline / blank separators
@@ -225,20 +347,70 @@ export function parseWorldLog(jsonl: string): ParsedWorldLog {
     try {
       json = JSON.parse(line);
     } catch (err) {
-      throw new Error(`world log: invalid JSON on line ${i + 1}: ${err instanceof Error ? err.message : String(err)}`);
+      const message = `world log: invalid JSON on line ${i + 1}: ${err instanceof Error ? err.message : String(err)}`;
+      if (canRecover(i)) {
+        opts.onRecoverableError?.(message);
+        continue;
+      }
+      throw new Error(message);
     }
     const result = lineSchema.safeParse(json);
     if (!result.success) {
-      throw new Error(`world log: malformed command on line ${i + 1}: ${result.error.message}`);
+      const message = `world log: malformed command on line ${i + 1}: ${result.error.message}`;
+      if (canRecover(i)) {
+        opts.onRecoverableError?.(message);
+        continue;
+      }
+      throw new Error(message);
     }
     if (result.data.kind === "meta") {
       meta = result.data;
       continue;
     }
-    out.push(result.data);
+    if (result.data.kind === "skill" && result.data.perms === undefined && result.data.profile === undefined) {
+      throw new Error(`world log: skill command on line ${i + 1} carries neither perms nor profile`);
+    }
+    out.push(result.data as WorldCommand);
   }
   out.sort((a, b) => a.seq - b.seq);
-  return { meta, commands: out };
+  // Materialize `perms` for profile-pinned lines, IN SEQ ORDER, from the log's
+  // own FROZEN mappings: a line carrying BOTH profile and perms (re)freezes that
+  // profile's mapping for every later name-only line, so replay grants exactly
+  // the set the caller held at record time — a live-profile edit after recording
+  // can neither narrow nor widen it. Only a profile with NO frozen mapping in
+  // the log (pre-freeze v2 logs) falls back to the CURRENT resolveProfile
+  // definition — accepted with a warning, because that definition may have
+  // drifted. An unknown profile with no frozen mapping still fails CLOSED —
+  // replaying with silently-empty permissions would fail partway through the
+  // stream with a far less diagnosable permission error.
+  const warnings: string[] = [];
+  const frozenProfiles = new Map<string, readonly string[]>();
+  const warnedProfiles = new Set<string>();
+  for (const cmd of out) {
+    if (cmd.kind !== "skill" || cmd.profile === undefined) continue;
+    if (cmd.perms !== undefined) {
+      frozenProfiles.set(cmd.profile, cmd.perms);
+      continue;
+    }
+    const frozen = frozenProfiles.get(cmd.profile);
+    if (frozen !== undefined) {
+      cmd.perms = [...frozen];
+      continue;
+    }
+    const resolved = resolveProfile(cmd.profile);
+    if (resolved.size === 0) {
+      throw new Error(`world log: skill command seq ${cmd.seq} names unknown permission profile '${cmd.profile}' with no frozen mapping in the log`);
+    }
+    cmd.perms = [...resolved].sort();
+    if (!warnedProfiles.has(cmd.profile)) {
+      warnedProfiles.add(cmd.profile);
+      const message = `world log: profile '${cmd.profile}' has no frozen permission mapping in this log (recorded pre-freeze); ` +
+        `replay uses the CURRENT profile definition, which may differ from what the caller held`;
+      warnings.push(message);
+      opts.onWarning?.(message);
+    }
+  }
+  return { meta, commands: out, warnings };
 }
 
 // ---- Deterministic PRNG ---------------------------------------------------
@@ -277,13 +449,52 @@ export function mulberry32(seed: number): () => number {
 // its live internal state and a restore can resume it (see installRandomState).
 let installedRng: SeededRng | undefined;
 
-/** Install a seeded PRNG AS the global `Math.random`, so ALL randomness in any
- *  skill handler (and any library it calls) becomes deterministic and replayable
- *  from the recorded seed. Returns the generator (also reachable via Math.random).
- *  Replay re-installs the SAME seed before re-applying commands. */
-export function installSeededRandom(seed: number): () => number {
+/** Derives the world-owned SKILL stream's seed from the recorded session seed
+ *  (golden-ratio constant; arbitrary, but it MUST NEVER CHANGE -- every skill
+ *  draw in every recorded session derives from it). */
+export const SKILL_RNG_SEED_XOR = 0x9e3779b9;
+
+// The world-owned SKILL RNG stream created alongside the global install (M4):
+// skills draw from `ctx.world.rng` (this generator, handed to the WorldContext by
+// the seeding/replay/recovery paths), NEVER from Math.random. The global stream
+// is position-contaminated by render-context-only consumers (three.js draws
+// Math.random for UUIDs whenever a mesh is created), so a skill draw or captured
+// state on the global stream depends on WHICH context ran, not on the command
+// stream. The skill stream has exactly one consumer class -- skill handlers --
+// so its position is a pure function of the recorded commands.
+let installedSkillRng: SeededRng | undefined;
+
+/** Install a seeded PRNG AS the global `Math.random` (legacy/three consumers) AND
+ *  create the world-owned SKILL stream from the same seed, so all randomness --
+ *  library draws on the global slot, skill draws on `world.rng` -- becomes
+ *  deterministic and replayable from the recorded seed. Returns the global
+ *  generator (also reachable via Math.random); the skill stream is read via
+ *  getInstalledSkillRng(). Replay re-installs the SAME seed before re-applying
+ *  commands.
+ *
+ *  SINGLE-WORLD-PER-PROCESS INVARIANT: `Math.random` and `installedRng` are a
+ *  MODULE SINGLETON, so exactly ONE seeded world may drive randomness in a process
+ *  at a time. Standing up a second live world in the same process would clobber the
+ *  first world's RNG stream. Re-installing is legitimate ONLY when the previous
+ *  world is being torn down and replaced (e.g. a fresh replay/recovery run): pass
+ *  `force: true` to declare that intent. An UNFORCED re-install (a generator is
+ *  already installed) is a probable multi-world bug and is warned about rather than
+ *  silently clobbering. (A full multi-world refactor -- an RNG owned by the world,
+ *  not the module -- is intentionally out of scope here.) The FIRST install in a
+ *  process is unaffected (identical to before). */
+export function installSeededRandom(seed: number, force = false): () => number {
+  if (installedRng !== undefined && !force && typeof console !== "undefined" && typeof console.warn === "function") {
+    console.warn(
+      "installSeededRandom: a seeded Math.random is already installed; re-installing WITHOUT force clobbers it. " +
+        "The seeded RNG is a module singleton (single world per process) -- pass force=true for an intentional re-seed (replay/recovery).",
+    );
+  }
   const gen = statefulMulberry32(seed >>> 0);
   installedRng = gen;
+  // The world-owned skill stream is created from the same recorded seed (see
+  // installedSkillRng above). Creating it consumes nothing from the global
+  // stream, so the global Math.random stream stays byte-identical to before.
+  installedSkillRng = statefulMulberry32((seed ^ SKILL_RNG_SEED_XOR) >>> 0);
   // Math.random is a writable method slot in V8; replace it with the seeded gen.
   Math.random = gen.next;
   return gen.next;
@@ -299,15 +510,65 @@ export function captureRandomState(): number {
   return installedRng.getState();
 }
 
+/** The seeded RNG currently installed as `Math.random` (undefined before any
+ *  install). Multi-world callers capture a world's generator after seeding it and
+ *  re-install it on activation (see setInstalledRng) so interleaved worlds each
+ *  advance their OWN RNG stream instead of sharing one global generator. */
+export function getInstalledRng(): SeededRng | undefined {
+  return installedRng;
+}
+
+/** Make `rng` the installed seeded generator AND the global `Math.random`, WITHOUT
+ *  reseeding it (unlike installSeededRandom, which starts a fresh stream). This is
+ *  the per-world activation swap: on entering a world's execution, install that
+ *  world's live generator so its randomness continues where it left off. Single-
+ *  world code never calls this; the module singleton stays as installSeededRandom
+ *  left it, so single-world determinism is unchanged. */
+export function setInstalledRng(rng: SeededRng): void {
+  installedRng = rng;
+  Math.random = rng.next;
+}
+
 /** Install a seeded PRNG resumed at a captured internal state (M2 recovery).
  *  The next draw continues the SAME stream the original run produced after the
- *  snapshot point -- the mid-stream RNG resume the delta replay depends on. */
+ *  snapshot point -- the mid-stream RNG resume the delta replay depends on.
+ *  Global stream only; recovery resumes the skill stream separately via
+ *  installSkillRandomState (restoreSnapshot installs both). */
 export function installRandomState(state: number): () => number {
   const gen = statefulMulberry32(0);
   gen.setState(state);
   installedRng = gen;
   Math.random = gen.next;
   return gen.next;
+}
+
+/** The world-owned SKILL RNG stream from the most recent seed install (undefined
+ *  before any install). Context assemblers hand it to the WorldContext (`world.rng`)
+ *  right after seeding, so skills draw from a stream no render-context consumer
+ *  can shift. */
+export function getInstalledSkillRng(): SeededRng | undefined {
+  return installedSkillRng;
+}
+
+/** Internal 32-bit state of the skill stream (for a world snapshot). Prefer the
+ *  world's own generator when the caller holds one (captureWorldSnapshot does);
+ *  this module-level read covers callers without a world handle. A process that
+ *  resumed only the LEGACY global stream (installRandomState from a snapshot
+ *  predating skillRngState) falls back to the global state -- the same seeding
+ *  rule restore applies for an absent field, exact because no skill draw predates
+ *  the skill stream. Throws when no seeded RNG is installed at all. */
+export function captureSkillRandomState(): number {
+  if (installedSkillRng !== undefined) return installedSkillRng.getState();
+  return captureRandomState();
+}
+
+/** Install the SKILL stream resumed at a captured internal state (M2 recovery).
+ *  Returns the generator so restore can hand it to the recovered WorldContext. */
+export function installSkillRandomState(state: number): SeededRng {
+  const gen = statefulMulberry32(0);
+  gen.setState(state);
+  installedSkillRng = gen;
+  return gen;
 }
 
 // ---- World-state snapshot + bit-identical comparison ----------------------
@@ -320,6 +581,20 @@ export interface EntityState {
   scale: [number, number, number];
   /** Native Rapier body transform [px,py,pz, rx,ry,rz,rw] when body-bound. */
   body?: [number, number, number, number, number, number, number];
+  // The per-entity GAMEPLAY component set — the same per-entity state view
+  // inspector.snapshot exposes (generation/parent/tags/material/resource), so the
+  // replay-equivalence comparator and the observability surface agree on ONE
+  // canonical notion of "the entity's state". `behavior` rides along because it is
+  // first-class entry state carried by v3 world snapshots. Captured by REFERENCE
+  // (these objects are replaced, not mutated, by the writing skills); compare two
+  // captures, not a capture against a world that kept authoring.
+  generation?: number;
+  parent?: string;
+  /** Sorted tag list (ecs.addComponent/removeComponent), omitted when untagged. */
+  tags?: string[];
+  material?: unknown;
+  resource?: unknown;
+  behavior?: unknown;
 }
 
 export interface WorldStateSnapshot {
@@ -328,11 +603,19 @@ export interface WorldStateSnapshot {
 
 /** Read the authoritative comparable state of every LIVE entity: its ECS
  *  Position/Rotation/Scale (JS-owned SoA) plus its native Rapier body transform
- *  (read fresh from the native world) when it has a body. Entities are returned
+ *  (read fresh from the native world) when it has a body, plus (by default) the
+ *  per-entity gameplay component set (generation/parent/tags/material/resource/
+ *  behavior — the inspector.snapshot per-entity view). Entities are returned
  *  sorted by their stable `ent_` id so two snapshots line up by identity. */
-export function captureWorldState(world: WorldLike): WorldStateSnapshot {
+export function captureWorldState(world: WorldLike, sorted = true, includeGameplay = true): WorldStateSnapshot {
   const scratch = new Float32Array(7);
-  const ids = [...world.entities.ids()].sort();
+  // Determinism/snapshot callers need a stable id order (default). The net server
+  // builds a Map keyed by id and doesn't care about order, so it passes sorted=false
+  // to drop the per-tick O(n log n) sort + sorted-array allocation on the hot path.
+  // It also passes includeGameplay=false: its per-tick delta diff compares
+  // transforms only, and EntityState objects go on the wire verbatim, so gameplay
+  // capture there would be pure cost + a wire-format change.
+  const ids = sorted ? [...world.entities.ids()].sort() : world.entities.ids();
   const entities: EntityState[] = [];
   for (const id of ids) {
     const entry = world.entities.resolve(id);
@@ -349,9 +632,22 @@ export function captureWorldState(world: WorldLike): WorldStateSnapshot {
       world.ops.op_physics_body_transform(entry.bodyId, scratch);
       state.body = [scratch[0], scratch[1], scratch[2], scratch[3], scratch[4], scratch[5], scratch[6]];
     }
+    if (includeGameplay) captureEntityGameplay(state, entry, world.tags?.get(eid));
     entities.push(state);
   }
   return { entities };
+}
+
+/** Copy the per-entity gameplay component set onto a captured EntityState. THE
+ *  single write site for that set: capture and comparison stay in lockstep with
+ *  the field list below (GAMEPLAY_FIELDS). */
+function captureEntityGameplay(state: EntityState, entry: ResolvedEntityLike, tagSet: ReadonlySet<string> | undefined): void {
+  if (entry.generation !== undefined) state.generation = entry.generation;
+  if (entry.parent !== undefined) state.parent = entry.parent;
+  if (tagSet !== undefined && tagSet.size > 0) state.tags = [...tagSet].sort();
+  if (entry.material !== undefined) state.material = entry.material;
+  if (entry.resource !== undefined) state.resource = entry.resource;
+  if (entry.behavior !== undefined) state.behavior = entry.behavior;
 }
 
 export interface DivergenceReport {
@@ -368,7 +664,13 @@ export function syncAllBodies(world: WorldLike): void {
   for (const id of world.entities.ids()) {
     const entry = world.entities.resolve(id);
     if (entry === undefined || entry.bodyId === undefined) continue;
-    syncPhysicsBodyTransform(entry.eid, entry.bodyId, world.ops, scratch);
+    if (world.transforms === undefined) {
+      syncPhysicsBodyTransform(entry.eid, entry.bodyId, world.ops, scratch);
+      continue;
+    }
+    world.ops.op_physics_body_transform(entry.bodyId, scratch);
+    world.transforms.writePosition(entry.eid, scratch[0], scratch[1], scratch[2]);
+    world.transforms.writeRotation(entry.eid, scratch[3], scratch[4], scratch[5], scratch[6]);
   }
 }
 
@@ -382,9 +684,43 @@ function vecDiff(label: string, id: string, a: number[], b: number[]): string | 
   return undefined;
 }
 
+/** The captured gameplay component set compareWorldState covers, in comparison
+ *  order. Must stay in lockstep with captureEntityGameplay above. */
+const GAMEPLAY_FIELDS = ["generation", "parent", "tags", "material", "resource", "behavior"] as const;
+
+/** Structural equality with the SAME bit-identical number semantics as vecDiff:
+ *  every leaf number compares via Object.is (+0/-0 distinct, NaN equals itself),
+ *  so extending the comparator to nested gameplay values cannot loosen it. A key
+ *  present with value `undefined` is distinct from an absent key. */
+function deepBitEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  const aArr = Array.isArray(a);
+  if (aArr !== Array.isArray(b)) return false;
+  if (aArr) {
+    const av = a as unknown[];
+    const bv = b as unknown[];
+    if (av.length !== bv.length) return false;
+    for (let i = 0; i < av.length; i++) if (!deepBitEqual(av[i], bv[i])) return false;
+    return true;
+  }
+  const ar = a as Record<string, unknown>;
+  const br = b as Record<string, unknown>;
+  const ak = Object.keys(ar);
+  const bk = Object.keys(br);
+  if (ak.length !== bk.length) return false;
+  for (const k of ak) {
+    if (!Object.prototype.hasOwnProperty.call(br, k)) return false;
+    if (!deepBitEqual(ar[k], br[k])) return false;
+  }
+  return true;
+}
+
 /** Bit-identical comparison of two world-state snapshots. The acceptance check:
- *  every live entity's ECS Position/Rotation/Scale and every Rapier body
- *  transform must match exactly. Returns the FIRST divergence found. */
+ *  every live entity's ECS Position/Rotation/Scale, every Rapier body transform,
+ *  AND the per-entity gameplay component set (generation/parent/tags/material/
+ *  resource/behavior — the inspector.snapshot per-entity view) must match
+ *  exactly. Returns the FIRST divergence found. */
 export function compareWorldState(a: WorldStateSnapshot, b: WorldStateSnapshot): DivergenceReport {
   let comparisons = 0;
   if (a.entities.length !== b.entities.length) {
@@ -415,6 +751,12 @@ export function compareWorldState(a: WorldStateSnapshot, b: WorldStateSnapshot):
     }
     for (const detail of checks) {
       if (detail !== undefined) return { identical: false, comparisons, detail };
+    }
+    for (const field of GAMEPLAY_FIELDS) {
+      comparisons += 1;
+      if (!deepBitEqual(ea[field], eb[field])) {
+        return { identical: false, comparisons, detail: `entity ${ea.id} ${field} diverged` };
+      }
     }
   }
   return { identical: true, comparisons };

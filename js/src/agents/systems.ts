@@ -3,8 +3,8 @@
 // frame path and enqueues validated tool calls when it resolves.
 
 import { Position } from "../ecs/world.ts";
-import { ops } from "../engine.ts";
-import type { SkillRegistry, WorldContext } from "../skills/registry.ts";
+import { engineCapabilities, ops } from "../engine.ts";
+import type { InvokeBase, SkillRegistry, WorldContext } from "../skills/registry.ts";
 import type { Tracer } from "../observability/event.ts";
 import { agentGrants } from "./agent.ts";
 import type { AgentRecord, AgentRegistry, PerceivedEntity, Perception } from "./agent.ts";
@@ -14,6 +14,21 @@ import { type AgentScheduler, defaultAgentScheduler } from "./scheduler.ts";
 import { querySpatialEntities } from "../spatial/index.ts";
 
 export type ProviderMap = Record<string, LLMProvider>;
+
+/** Replace the local registry crossing for co-located agents that must submit
+ * tools through an external authority boundary (for example the editor server's
+ * serialized, durable intent queue). */
+export type BoundedToolExecutor = (name: string, input: unknown, base: InvokeBase) => Promise<MCPResponse>;
+
+function promptTrace(agent: AgentRecord): Record<string, unknown> {
+  const hash = ops.op_sha256(agent.llm.systemPrompt);
+  return {
+    model: agent.llm.model,
+    promptId: agent.llm.promptId ?? "unversioned",
+    promptVersion: agent.llm.promptVersion ?? "unversioned",
+    promptHash: hash.length > 0 ? `sha256:${hash}` : undefined,
+  };
+}
 
 function dueForDecision(agent: AgentRecord, tick: number): boolean {
   return tick - agent.lastDecisionTick >= agent.decisionIntervalTicks;
@@ -25,6 +40,47 @@ function dueForDecision(agent: AgentRecord, tick: number): boolean {
 interface BatchedNearby {
   selfPos: [number, number, number];
   nearby: PerceivedEntity[];
+}
+
+/** Agent prompts and action policies consume nearest context, not an unbounded
+ * world dump. This bound keeps the native output at O(due agents) even when a
+ * huge radius covers the whole world. Both native and JS paths apply the same
+ * nearest-first truncation. */
+export const MAX_PERCEPTION_ENTITIES = 256;
+
+interface PerceptionBatchScratch {
+  entityVersion: number;
+  orderedCount: number;
+  orderedEids: Uint32Array;
+  reverseByEid: Array<string | undefined>;
+  queries: Float64Array;
+  out: Uint32Array;
+}
+
+const perceptionScratchByWorld = new WeakMap<WorldContext, PerceptionBatchScratch>();
+
+function capacityAtLeast(current: number, required: number): number {
+  let capacity = Math.max(16, current);
+  while (capacity < required) capacity *= 2;
+  return capacity;
+}
+
+function perceptionScratch(world: WorldContext, queryValues: number, outputValues: number): PerceptionBatchScratch {
+  let scratch = perceptionScratchByWorld.get(world);
+  if (scratch === undefined) {
+    scratch = {
+      entityVersion: -1,
+      orderedCount: 0,
+      orderedEids: new Uint32Array(16),
+      reverseByEid: [],
+      queries: new Float64Array(capacityAtLeast(0, queryValues)),
+      out: new Uint32Array(capacityAtLeast(0, outputValues)),
+    };
+    perceptionScratchByWorld.set(world, scratch);
+  }
+  if (scratch.queries.length < queryValues) scratch.queries = new Float64Array(capacityAtLeast(scratch.queries.length, queryValues));
+  if (scratch.out.length < outputValues) scratch.out = new Uint32Array(capacityAtLeast(scratch.out.length, outputValues));
+  return scratch;
 }
 
 /** Build one agent's perception. `batched` (when supplied by the native batch)
@@ -51,7 +107,8 @@ function buildPerception(
       radius: selfPos === undefined ? undefined : agent.perceptionRadius,
       excludeEntity: agent.entityId,
       sortBy: "distance",
-    }).entities.map((entity) => ({ id: entity.entity, position: entity.position, distance: entity.distance }));
+    }).entities.slice(0, MAX_PERCEPTION_ENTITIES)
+      .map((entity) => ({ id: entity.entity, position: entity.position, distance: entity.distance }));
   }
   const recentEvents = tracer.trace(agent.id).slice(-5).map((e) => ({ type: e.type }));
   return { selfId: agent.id, selfEntity: agent.entityId, position: selfPos, nearby, recentEvents, tick };
@@ -70,7 +127,11 @@ function batchPerception(
   tick: number,
 ): Map<AgentRecord, BatchedNearby> | undefined {
   const spatial = world.spatial;
-  if (spatial === undefined) return undefined;
+  // Browser and worker hosts install a callable no-op for the native batch op so
+  // EngineOps remains structurally complete. Function presence therefore cannot
+  // distinguish "zero hits" from "unsupported". The explicit host capability
+  // makes the entire sweep fall back to the JS oracle on unsupported realms.
+  if (spatial === undefined || !engineCapabilities.ecsSpatialQueryBatch) return undefined;
   const targets: { agent: AgentRecord; eid: number; selfPos: [number, number, number] }[] = [];
   for (const agent of all) {
     if (!dueForDecision(agent, tick) || agent.inFlight) continue;
@@ -83,24 +144,28 @@ function batchPerception(
 
   // orderedEids[order] = eid + a reverse eid->ent_ map, built in world.entities.ids()
   // order so the op's `order` tiebreak matches the oracle's compareRecordOrder.
+  const entityVersion = world.entities.version;
   const ids = world.entities.ids();
-  const orderedEids = new Uint32Array(ids.length);
-  const reverse = new Map<number, string>();
-  let n = 0;
-  for (const id of ids) {
-    const entry = world.entities.resolve(id);
-    if (entry === undefined) continue;
-    orderedEids[n++] = entry.eid;
-    reverse.set(entry.eid, id);
-  }
-  const ordered = n === ids.length ? orderedEids : orderedEids.subarray(0, n);
-
-  // maxHits = active-entity count: a query can match at most every entity, so it
-  // can never truncate (count <= n). The per-query guard still drops any over-cap
-  // result to the JS fallback, keeping correctness if that invariant ever changes.
-  const maxHits = n;
+  const maxHits = Math.min(ids.length, MAX_PERCEPTION_ENTITIES);
   const stride = 1 + maxHits;
-  const queries = new Float64Array(targets.length * 5);
+  const scratch = perceptionScratch(world, targets.length * 5, targets.length * stride);
+  if (scratch.entityVersion !== entityVersion) {
+    if (scratch.orderedEids.length < ids.length) {
+      scratch.orderedEids = new Uint32Array(capacityAtLeast(scratch.orderedEids.length, ids.length));
+    }
+    scratch.reverseByEid.length = 0;
+    let n = 0;
+    for (const id of ids) {
+      const entry = world.entities.resolve(id);
+      if (entry === undefined) continue;
+      scratch.orderedEids[n++] = entry.eid;
+      scratch.reverseByEid[entry.eid] = id;
+    }
+    scratch.orderedCount = n;
+    scratch.entityVersion = entityVersion;
+  }
+  const ordered = scratch.orderedEids.subarray(0, scratch.orderedCount);
+  const queries = scratch.queries.subarray(0, targets.length * 5);
   for (let q = 0; q < targets.length; q++) {
     const t = targets[q];
     queries[q * 5] = t.selfPos[0];
@@ -109,14 +174,13 @@ function batchPerception(
     queries[q * 5 + 3] = t.agent.perceptionRadius;
     queries[q * 5 + 4] = t.eid; // exclude self
   }
-  const out = new Uint32Array(targets.length * stride);
+  const out = scratch.out.subarray(0, targets.length * stride);
   ops.op_ecs_spatial_query_batch(Position.x, Position.y, Position.z, ordered, spatial.cellSize, queries, maxHits, out);
 
   const result = new Map<AgentRecord, BatchedNearby>();
   for (let q = 0; q < targets.length; q++) {
     const base = q * stride;
-    const count = out[base];
-    if (count > maxHits) continue; // truncated -> leave this agent for the JS fallback
+    const count = Math.min(out[base], maxHits);
     const selfPos = targets[q].selfPos;
     const nearby: PerceivedEntity[] = [];
     for (let i = 0; i < count; i++) {
@@ -127,7 +191,8 @@ function batchPerception(
       const dx = hx - selfPos[0];
       const dy = hy - selfPos[1];
       const dz = hz - selfPos[2];
-      nearby.push({ id: reverse.get(eid)!, position: [hx, hy, hz], distance: Math.sqrt(dx * dx + dy * dy + dz * dz) });
+      const id = scratch.reverseByEid[eid];
+      if (id !== undefined) nearby.push({ id, position: [hx, hy, hz], distance: Math.sqrt(dx * dx + dy * dy + dz * dz) });
     }
     result.set(targets[q].agent, { selfPos, nearby });
   }
@@ -179,13 +244,26 @@ export function decisionSystem(
       threadId: agent.sessionId,
       parentEventId: null,
       causedBy: agent.lastPerceptionEventId !== undefined ? [agent.lastPerceptionEventId] : [],
-      payload: { tick, provider: agent.llm.provider },
+      payload: { tick, provider: agent.llm.provider, ...promptTrace(agent) },
     });
     const tools = registry.list(agentGrants(agent));
+    const perception = agent.perception;
+    if (perception === undefined) {
+      scheduler.failDecision(agent, generation);
+      continue;
+    }
 
     provider
-      .decide({ systemPrompt: agent.llm.systemPrompt, perception: agent.perception, tools, previousResults: [] })
-      .then(({ toolCalls }) => {
+      .decide({ systemPrompt: agent.llm.systemPrompt, perception, tools, previousResults: [] })
+      .then(({ toolCalls, usage, latencyMs }) => {
+        tracer.emit({
+          type: "agent.llm.response",
+          actorId: agent.id,
+          threadId: agent.sessionId,
+          parentEventId: null,
+          causedBy: [decisionId],
+          payload: { ...(latencyMs !== undefined ? { latencyMs } : {}), usage, ...promptTrace(agent) },
+        });
         const calls = toolCalls.map((call) => {
           const skill = registry.describe(call.tool);
           if (skill === undefined) {
@@ -223,7 +301,7 @@ export async function actionSystem(
   scheduler: AgentScheduler = defaultAgentScheduler,
 ): Promise<void> {
   let globalExecuted = 0;
-  const orderedAgents = agents.all().sort((a, b) => a.id.localeCompare(b.id));
+  const orderedAgents = agents.ordered();
   for (const agent of orderedAgents) {
     while (agent.queue.length > 0 && scheduler.canExecuteAction(agent, tick, globalExecuted, registry.tracer)) {
       const action = agent.queue.shift();
@@ -249,6 +327,42 @@ export interface BoundedMultiTurnOptions {
   maxToolCalls: number;
   timeoutMs: number;
   maxTokens?: number;
+  /** The caller's direct instruction for this turn (e.g. the chat message), passed
+   *  straight to the provider instead of being scraped from perception (which the
+   *  per-tick event stream can crowd out on the live server). */
+  userMessage?: string;
+  /** Tool EXPOSURE tier sent to the model each step. "bootstrap" advertises only the
+   *  small core surface (+ skills.search/browse/describe for on-demand discovery) —
+   *  keeps the request tiny and cheap even as the catalog grows; the agent can still
+   *  INVOKE any registered skill it discovers. "full" (default) advertises everything
+   *  the grants allow (back-compat for autonomous NPC agents). */
+  toolMode?: "bootstrap" | "full";
+  onText?: (text: string) => void;
+  /** Tool-call progress. Fired once BEFORE each invoke (no `status` — a pending
+   *  step) and once AFTER with the outcome, so a failed/held/rejected call can
+   *  never read as silence in a chat surface. Reject paths (unknown tool,
+   *  invalid args, thrown handler) fire a completion-only step. */
+  onStep?: (step: BoundedTurnStep) => void;
+  onError?: (err: unknown) => void;
+  /** Omitted for ordinary in-process agents. Authoritative hosts provide an
+   * executor that resolves only after the mutation is durably committed. */
+  invokeTool?: BoundedToolExecutor;
+}
+
+/** One onStep notification. `status` absent = the pre-invoke pending step;
+ *  present = the completion outcome for that call:
+ *    ok       — the tool applied (MCPResponse.success)
+ *    held     — parked for human approval (`pending_approval`; `detail` = the approvalId)
+ *    rejected — never invoked (unknown tool / invalid args)
+ *    failed   — invoked and errored (skill error or thrown handler; `detail` = the message)
+ *  `result` rides only on `ok` completions (the skill's typed output). */
+export interface BoundedTurnStep {
+  tool: string;
+  label: string;
+  icon?: string;
+  status?: "ok" | "failed" | "held" | "rejected";
+  detail?: string;
+  result?: unknown;
 }
 
 export interface BoundedMultiTurnResult {
@@ -266,6 +380,22 @@ function tokenUsage(res: { usage?: { totalTokens?: number } }): number {
   return typeof res.usage?.totalTokens === "number" && Number.isFinite(res.usage.totalTokens)
     ? Math.max(0, res.usage.totalTokens)
     : 0;
+}
+
+function notifyBoundedObserverError(options: BoundedMultiTurnOptions, err: unknown): void {
+  try {
+    options.onError?.(err);
+  } catch {
+    // Observer callbacks must not affect deterministic agent execution.
+  }
+}
+
+function notifyBoundedStep(options: BoundedMultiTurnOptions, step: BoundedTurnStep): void {
+  try {
+    options.onStep?.(step);
+  } catch (err) {
+    notifyBoundedObserverError(options, err);
+  }
 }
 
 function timeoutAfter(ms: number): Promise<"timeout"> {
@@ -311,6 +441,7 @@ export async function runBoundedMultiTurn(
   let steps = 0;
   let toolCalls = 0;
   let tokensUsed = 0;
+  const invokeTool: BoundedToolExecutor = options.invokeTool ?? ((name, input, base) => registry.invoke(name, input, base));
 
   for (; steps < options.maxSteps; steps++) {
     if (elapsed(start) >= options.timeoutMs) return { steps, toolCalls, tokensUsed, reason: "timeout" };
@@ -339,17 +470,31 @@ export async function runBoundedMultiTurn(
       threadId: agent.sessionId,
       parentEventId: null,
       causedBy: decisionCauses,
-      payload: { tick, provider: agent.llm.provider, turnStep: steps },
+      payload: { tick, provider: agent.llm.provider, turnStep: steps, ...promptTrace(agent) },
     });
 
     const decision = await decideWithTimeout(provider, {
       systemPrompt: agent.llm.systemPrompt,
       perception: agent.perception,
-      tools: registry.list(agentGrants(agent)),
+      tools: registry.list(agentGrants(agent), { mode: options.toolMode ?? "full" }),
       previousResults: [...previousResults],
+      userMessage: options.userMessage,
     }, options.timeoutMs - elapsed(start));
     if (decision === "timeout") {
       return { steps: steps + 1, toolCalls, tokensUsed, reason: "timeout" };
+    }
+    tracer.emit({
+      type: "agent.llm.response",
+      actorId: agent.id,
+      threadId: agent.sessionId,
+      parentEventId: null,
+      causedBy: [decisionId],
+      payload: { ...(decision.latencyMs !== undefined ? { latencyMs: decision.latencyMs } : {}), usage: decision.usage, turnStep: steps, ...promptTrace(agent) },
+    });
+    try {
+      if (decision.text !== undefined && decision.text.length > 0) options.onText?.(decision.text);
+    } catch (err) {
+      notifyBoundedObserverError(options, err);
     }
     tokensUsed += tokenUsage(decision);
     if (options.maxTokens !== undefined && tokensUsed > options.maxTokens) {
@@ -367,26 +512,51 @@ export async function runBoundedMultiTurn(
         const rejected = tracer.emit({ type: "agent.toolcall.rejected", actorId: agent.id, threadId: agent.sessionId, parentEventId: null, causedBy: [decisionId], payload: { reason: "unknown_tool", tool: call.tool } });
         lastToolResultId = rejected;
         previousResults.push({ success: false, error: { code: "not_found", message: `unknown skill: ${call.tool}` } });
+        notifyBoundedStep(options, { tool: call.tool, label: call.tool, status: "rejected", detail: `unknown skill: ${call.tool}` });
         continue;
       }
       if (!skill.input.safeParse(call.input).success) {
         const rejected = tracer.emit({ type: "agent.toolcall.rejected", actorId: agent.id, threadId: agent.sessionId, parentEventId: null, causedBy: [decisionId], payload: { reason: "invalid_args", tool: call.tool } });
         lastToolResultId = rejected;
         previousResults.push({ success: false, error: { code: "invalid_input", message: `invalid input: ${call.tool}` } });
+        notifyBoundedStep(options, { tool: call.tool, label: call.tool, status: "rejected", detail: `invalid input: ${call.tool}` });
         continue;
       }
-      const response = await registry.invoke(call.tool, call.input, {
-        agentId: agent.id,
-        sessionId: agent.sessionId,
-        permissions: agentGrants(agent),
-        profile: agent.profile,
-        tick,
-        world,
-        causedBy: [decisionId],
-      });
+      notifyBoundedStep(options, { tool: call.tool, label: call.tool });
+      let response: MCPResponse;
+      try {
+        response = await invokeTool(call.tool, call.input, {
+          agentId: agent.id,
+          sessionId: agent.sessionId,
+          permissions: agentGrants(agent),
+          profile: agent.profile,
+          tick,
+          world,
+          causedBy: [decisionId],
+        });
+      } catch (err) {
+        // A thrown tool handler must NOT kill the whole turn: record it as a failed
+        // tool result so the model sees the error and can adapt on the next step,
+        // mirroring the unknown-tool / invalid-args reject-and-continue paths.
+        const message = err instanceof Error ? err.message : String(err);
+        const rejected = tracer.emit({ type: "agent.toolcall.rejected", actorId: agent.id, threadId: agent.sessionId, parentEventId: null, causedBy: [decisionId], payload: { reason: "handler_threw", tool: call.tool, message } });
+        lastToolResultId = rejected;
+        previousResults.push({ success: false, error: { code: "handler_error", message } });
+        notifyBoundedStep(options, { tool: call.tool, label: call.tool, status: "failed", detail: message });
+        continue;
+      }
       toolCalls++;
       lastToolResultId = emitToolResult(tracer, agent, response, response.metadata?.eventsEmitted.length ? [decisionId, ...response.metadata.eventsEmitted] : [decisionId]);
       previousResults.push(response);
+      // Completion step: the invoke's real outcome, so a failed or held call is
+      // never mistaken for a silent success by a chat/observer surface.
+      if (response.success) {
+        notifyBoundedStep(options, { tool: call.tool, label: call.tool, status: "ok", result: response.result });
+      } else if (response.error?.code === "pending_approval") {
+        notifyBoundedStep(options, { tool: call.tool, label: call.tool, status: "held", detail: response.error.message });
+      } else {
+        notifyBoundedStep(options, { tool: call.tool, label: call.tool, status: "failed", detail: response.error?.message ?? "tool call failed" });
+      }
     }
   }
   return { steps, toolCalls, tokensUsed, reason: "max_steps" };

@@ -9,10 +9,60 @@
 // live entity transforms between snapshots).
 
 import { McpClient, McpError } from "./mcp-client.js";
-import { buildForest, groupByActor, eventKind } from "./reasoning.js";
+import { buildForest, groupByActor, eventKind, isIntrospectionEvent } from "./reasoning.js";
 import { createHistoryPanel } from "./history.js";
+import { createOutlinerView, SnapshotPageLoader } from "./outliner.js";
+import { editorSelection } from "./selection-store.js";
+import { cueColorFor } from "./viewport.js";
+import { CHAT_MODELS, CHAT_MODEL_CHANGE_EVENT, currentChatModel, setChatModel } from "./chat.js";
+import { ingestTraceEvents } from "./trace-retention.js";
+import { assertEditorAuthoringAllowed, playLifecycle } from "./play-lifecycle.js";
+import { createDesignApi } from "./design-api.js";
+import { createDesignDocsPanel } from "./panels/design-docs.js";
+import { createDesignPlacesPanel } from "./panels/design-places.js";
+import { createDesignGraphPanel } from "./panels/design-graph.js";
+import { surfaceCascade } from "./panels/design-cascade.js";
+import { createStudioShell } from "./studio-shell.js";
+import { STUDIO_EVENTS, studioBus } from "./agents/studio-events.js";
+import { createContextPacker } from "./agents/context-pack.js";
+import { setChatContextProvider, setChatApplySuggestion, noteAmbient } from "./chat.js";
+export { MAX_TRACE_EVENTS, ingestTraceEvents } from "./trace-retention.js";
 
 const $ = (id) => document.getElementById(id);
+// renderApprovals owns #approval-body and replaces its children. Retain the static developer
+// controls so every render can reattach the same nodes (and their listeners) instead of deleting
+// them and leaving lifecycle subscribers with null lookups.
+const proposeButton = $("propose");
+const proposeMoveButton = $("propose-move");
+
+const configuredServerInput = new URLSearchParams(location.search).get("server");
+const configuredServer = configuredServerInput !== null
+  && /^wss?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/$/.test(configuredServerInput)
+  ? configuredServerInput : null;
+if (configuredServer !== null) {
+  $("url").value = configuredServer;
+}
+// Runtime capability handoff: when the page is served by the launcher-supervised
+// static server, it vends the session capability (Host-validated, same-origin) so
+// the connect bar needs no pasted token. Prefill EMPTY fields only — an explicit
+// ?server= or a typed value always wins. Standalone static
+// serving has no endpoint; the fetch simply fails and nothing changes.
+void (async () => {
+  try {
+    const boot = await fetch("/editor-bootstrap", { cache: "no-store" });
+    if (!boot.ok) return;
+    const config = await boot.json();
+    // The factory default (8787) is a placeholder, not a user choice: a hub-
+    // launched stack on allocated ports must override it. Explicit ?server=
+    // or a typed value always wins.
+    const DEFAULT_URL = "ws://localhost:8787/";
+    if (typeof config?.serverUrl === "string"
+        && ($("url").value.trim() === "" || $("url").value.trim() === DEFAULT_URL)) {
+      $("url").value = config.serverUrl;
+    }
+    if (typeof config?.token === "string" && $("auth-token").value.trim() === "") $("auth-token").value = config.token;
+  } catch { /* no bootstrap endpoint on this origin */ }
+})();
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -23,21 +73,50 @@ const el = (tag, cls, text) => {
 const state = {
   /** @type {McpClient | undefined} */ client: undefined,
   /** @type {McpClient | undefined} */ agentClient: undefined,
-  events: new Map(), // id -> event (accumulated trace)
+  events: new Map(), // id -> event (accumulated trace, rendered into the console Trace tab)
+  activity: [], // chronological authoring edits (worldlog) for the Activity panel
   afterSeq: -1,
+  worldlogCursor: 0, // worldlog.tail cursor for the History + Activity (authoring-command) streams
   snapshot: undefined,
+  entityIndex: new Map(),
   approvals: [],
+  // The approval queue is reviewer UI (approval.review). Proposing profiles (builder.review)
+  // are denied by design — first denial flips this off so neither poll retries into the log.
+  approvalAccess: true,
   polling: undefined,
   log: [],
 };
 
-// git-for-worlds History panel (branch / time-travel / merge), backed by the tested
-// EditorHistoryController. Ingests observed world-log edits onto the "main" branch.
-const history = createHistoryPanel({ onLog: (m) => logLine(m, "ok") });
+const snapshotLoader = new SnapshotPageLoader();
+const outliner = createOutlinerView($("outliner-root"), editorSelection);
+
+// Read-only History timeline backed by the tested EditorHistoryController. It ingests the
+// authoring stream; scrubbing changes only the viewport replay prefix.
+const history = createHistoryPanel({
+  onLog: (m) => logLine(m, "ok"),
+  // Playhead moved: tell the viewport to replay to that prefix (live=true → follow the newest).
+  onScrub: ({ commands, live }) => {
+    window.dispatchEvent(new CustomEvent("limina:scrub-to", { detail: { limit: live ? null : commands.length } }));
+  },
+});
+
+// Structured entity lookup for the property inspector — the full record (transform, tags,
+// physics.bodyId, resource, and origin = the create command with shape/size/material/color/
+// static/dynamic) from the latest inspector.snapshot. take-control uses this to edit more than
+// the transform. The paged snapshot loader keeps this index complete up to the hard cap.
+window.liminaEntity = (id) => state.entityIndex.get(id);
 
 function logLine(msg, kind = "info") {
   state.log.unshift({ t: new Date().toLocaleTimeString(), msg, kind });
   state.log = state.log.slice(0, 80);
+  // Errors also surface as a toast (the console is hidden by default). Dedupe consecutive
+  // identical errors so a repeating transient poll failure doesn't stack toasts.
+  if (kind === "err" && msg !== state.lastErrToast) {
+    state.lastErrToast = msg;
+    window.dispatchEvent(new CustomEvent("limina:toast", { detail: { message: msg, kind: "error" } }));
+  } else if (kind !== "err") {
+    state.lastErrToast = undefined;
+  }
   const box = $("log");
   box.innerHTML = "";
   for (const l of state.log) {
@@ -48,9 +127,15 @@ function logLine(msg, kind = "info") {
   }
 }
 
+// `connected`: true | false, or the string "connecting" for the in-progress state.
 function setStatus(connected) {
   const dot = $("status-dot");
   const txt = $("status-text");
+  if (connected === "connecting") {
+    dot.className = "dot dot-connecting";
+    txt.textContent = "connecting…";
+    return;
+  }
   dot.className = "dot " + (connected ? "dot-on" : "dot-off");
   txt.textContent = connected ? "connected" : "disconnected";
 }
@@ -61,16 +146,28 @@ function setStatus(connected) {
 async function connect() {
   const url = $("url").value.trim();
   const profile = $("profile").value;
+  const authToken = $("auth-token").value.trim() || undefined;
   disconnect();
-  const client = new McpClient(url);
+  setStatus("connecting");
+  // Boot loading overlay seam (viewport.js listens): the island starts assembling from
+  // the connect CLICK, not from the viewport's next poll tick.
+  window.dispatchEvent(new CustomEvent("limina:studio-connect"));
+  const client = new McpClient(url, authToken);
   client.onConnectionChange = setStatus;
   client.onSync = () => {}; // live transforms cached; World panel re-renders on poll
   try {
     await client.connect();
     const sessionId = "ses_editor_" + Math.random().toString(36).slice(2, 8);
     await client.initialize("human_editor", sessionId, profile);
+    state.approvalAccess = true; // re-probed per connection: the new profile may be a reviewer
     try { await client.subscribe(); } catch { /* read-stream optional */ }
     state.client = client;
+    // The skill catalog is STATIC — fetch its size ONCE (limit:0 skips the entity page) so
+    // routine World polls can drop the full-catalog serialization from every snapshot.
+    try {
+      const cat = await client.callTool("inspector.snapshot", { limit: 0, includeResources: false, includeSkills: true });
+      state.skillCount = cat?.skills?.length ?? 0;
+    } catch { state.skillCount = 0; }
     logLine(`connected to ${url} as ${profile}`, "ok");
     startPolling();
     await refreshAll();
@@ -81,85 +178,189 @@ async function connect() {
 }
 
 function disconnect() {
-  if (state.polling) { clearInterval(state.polling); state.polling = undefined; }
+  snapshotLoader.cancel();
+  stopPolling();
   if (state.client) { state.client.close(); state.client = undefined; }
   if (state.agentClient) { state.agentClient.close(); state.agentClient = undefined; }
   state.events.clear();
+  snapshotTick = 0;
   state.afterSeq = -1;
+  state.worldlogCursor = 0;
+  state.snapshot = undefined;
+  state.entityIndex = new Map();
+  outliner.setEntities([]);
   history.reset();
   setStatus(false);
 }
 
+// SELF-SCHEDULING poll loop — the next poll is scheduled ms AFTER the previous one
+// FINISHES, never on a fixed timer. A fixed setInterval fires regardless of whether the
+// prior async refreshAll completed, so once a poll takes longer than the interval (a large
+// trace.tail batch on a busy host) the polls OVERLAP and compound into a request flood that
+// pegs the server on JSON.stringify and starves everything (chat included). Waiting for each
+// poll self-throttles: the client can never outrun the server.
 function startPolling() {
   const ms = Math.max(250, Number($("interval").value) || 1000);
-  if (state.polling) clearInterval(state.polling);
-  state.polling = setInterval(() => { void refreshAll(); }, ms);
+  stopPolling();
+  state.pollActive = true;
+  const loop = async () => {
+    if (!state.pollActive || !state.client) return;
+    try { await refreshAll(); } finally {
+      if (state.pollActive) state.pollTimer = setTimeout(() => { void loop(); }, ms);
+    }
+  };
+  void loop();
+  startApprovalBadgePoll();
+}
+
+function stopPolling() {
+  state.pollActive = false;
+  if (state.pollTimer) { clearTimeout(state.pollTimer); state.pollTimer = undefined; }
+  if (state.polling) { clearInterval(state.polling); state.polling = undefined; }
+  stopApprovalBadgePoll();
+}
+
+// Approval BADGE poll — runs on a slow fixed cadence (10s) for as long as a client is connected,
+// REGARDLESS of whether the Approval panel is open. refreshAll's fast poll only fetches
+// approval.list while the panel is open (cheap-when-idle), which means a proposal that lands while
+// the panel is collapsed was invisible until the user happened to open it. This loop keeps the
+// header's count badge (#approval-count, already rendered in the collapsed accordion head) current
+// so a new pending proposal is visible without opening the panel — the whole point of a badge.
+const APPROVAL_BADGE_POLL_MS = 10_000;
+function startApprovalBadgePoll() {
+  stopApprovalBadgePoll();
+  state.badgePollActive = true;
+  const loop = async () => {
+    if (!state.badgePollActive || !state.client || !state.approvalAccess) return;
+    try {
+      const list = await state.client.callTool("approval.list", {});
+      state.approvals = (list && list.pending) || [];
+      renderApprovals();
+    } catch (e) {
+      const msg = e && e.message ? e.message : String(e);
+      if (msg.includes("missing permission: approval.review")) {
+        state.approvalAccess = false;
+        logLine("approval queue is reviewer-only — this profile proposes into it; badge poll off", "");
+        stopApprovalBadgePoll();
+        return;
+      }
+      logLine("approval badge poll error: " + msg, "err");
+    } finally {
+      if (state.badgePollActive) state.badgePollTimer = setTimeout(() => { void loop(); }, APPROVAL_BADGE_POLL_MS);
+    }
+  };
+  void loop();
+}
+function stopApprovalBadgePoll() {
+  state.badgePollActive = false;
+  if (state.badgePollTimer) { clearTimeout(state.badgePollTimer); state.badgePollTimer = undefined; }
 }
 
 // ---------------------------------------------------------------------------
 // Poll: incremental trace.tail (cursor), approval.list, periodic snapshot.
 // ---------------------------------------------------------------------------
 let snapshotTick = 0;
+// A panel is polled ONLY when it is open — a closed World/Reasoning/Approval/Team panel
+// costs nothing. Its loading spinner shows only while that panel's own fetch is in flight.
+const panelOpen = (id) => window.liminaWindows?.isOpen?.(id) ?? true;
+function setSpin(id, on) { const el = $(id + "-spin"); if (el) el.hidden = !on; }
 async function refreshAll() {
   const c = state.client;
-  if (!c) return;
+  if (!c || state.refreshing) return; // in-flight guard: opening a panel can also trigger a refresh
+  state.refreshing = true;
   try {
-    // Incremental trace via the afterSeq cursor.
-    const tail = await c.callTool("trace.tail", { afterSeq: state.afterSeq, limit: 500 });
-    if (tail && Array.isArray(tail.events)) {
-      for (const ev of tail.events) state.events.set(ev.id, ev);
-      if (tail.nextAfterSeq !== null && tail.nextAfterSeq !== undefined) state.afterSeq = tail.nextAfterSeq;
-      history.recordEvents(tail.events); // git-for-worlds timeline (branch/time-travel/merge)
+    // trace.tail feeds the Reasoning tree AND the Team roster (the causal/"why" stream). The
+    // History timeline is fed separately from worldlog.tail below (the actual world EDITS).
+    if (panelOpen("reasoning") || panelOpen("roster")) {
+      const spins = ["reasoning", "roster"].filter(panelOpen);
+      spins.forEach((id) => setSpin(id, true));
+      try {
+        const tail = await c.callTool("trace.tail", { afterSeq: state.afterSeq, limit: 120 });
+        if (tail && Array.isArray(tail.events)) {
+          ingestTraceEvents(state.events, tail.events);
+          if (tail.nextAfterSeq !== null && tail.nextAfterSeq !== undefined) state.afterSeq = tail.nextAfterSeq;
+        }
+      } finally { spins.forEach((id) => setSpin(id, false)); }
     }
-    // Approval queue every poll (cheap, must stay fresh).
-    const list = await c.callTool("approval.list", {});
-    state.approvals = (list && list.pending) || [];
-    // World snapshot less often (heavier).
-    if (snapshotTick % 2 === 0) {
-      state.snapshot = await c.callTool("inspector.snapshot", { limit: 200 });
+    // The AUTHORING command stream (worldlog.tail — the real world edits) drives BOTH the History
+    // timeline (scrub time-travels the viewport) and the Activity feed. Poll when either is open;
+    // always keep both fed so a just-opened panel is current (recordCommands dedups by seq).
+    if (panelOpen("history") || panelOpen("reasoning")) {
+      const spins = ["history", "reasoning"].filter(panelOpen);
+      spins.forEach((id) => setSpin(id, true));
+      try {
+        const wl = await c.callTool("worldlog.tail", { since: state.worldlogCursor });
+        if (wl && Array.isArray(wl.commands)) {
+          if (wl.reset) { history.reset(); state.activity = []; state.worldlogCursor = 0; }
+          history.recordCommands(wl.commands);
+          ingestActivity(wl.commands);
+          if (typeof wl.next === "number") state.worldlogCursor = wl.next;
+        }
+      } finally { spins.forEach((id) => setSpin(id, false)); }
+    }
+    // Approval queue only when its panel is open (and the profile can review — an
+    // unguarded rejection here would abort the rest of this refresh pass).
+    if (panelOpen("approval") && state.approvalAccess) {
+      setSpin("approval", true);
+      try {
+        const list = await c.callTool("approval.list", {});
+        state.approvals = (list && list.pending) || [];
+      } catch (e) {
+        const msg = e && e.message ? e.message : String(e);
+        if (msg.includes("missing permission: approval.review")) state.approvalAccess = false;
+        else throw e;
+      } finally { setSpin("approval", false); }
+    }
+    // World snapshot only when its panel is open, and less often (it's the heaviest read).
+    if (panelOpen("world") && snapshotTick % 2 === 0) {
+      setSpin("world", true);
+      // Routine polls drop the two blocks that don't scale: the O(world) resource scan and
+      // the static skill catalog (its size is cached once at connect as state.skillCount).
+      // Live positions come from the delta stream (client.entityState), overlaid below.
+      try {
+        const snapshot = await snapshotLoader.load(c);
+        if (snapshot !== undefined && state.client === c) {
+          state.snapshot = snapshot;
+          state.entityIndex = new Map(snapshot.entities.map((record) => [record.entity, record]));
+          editorSelection.reconcile(new Set(state.entityIndex.keys()), "snapshot-delete");
+        }
+      }
+      finally { setSpin("world", false); }
     }
     snapshotTick++;
     renderWorld();
+    renderRoster();
     renderReasoning();
+    renderConsoleTrace();
     renderApprovals();
   } catch (e) {
     logLine("poll error: " + (e && e.message ? e.message : String(e)), "err");
+  } finally {
+    state.refreshing = false;
   }
 }
+
+// Opening a panel fetches its data immediately (with the in-flight guard, this never
+// overlaps the self-scheduled loop) so a just-opened panel shows its spinner + data at once
+// instead of waiting up to a full poll interval.
+window.addEventListener("limina:window-open", () => { if (state.client) void refreshAll(); });
 
 // ---------------------------------------------------------------------------
 // (a) WORLD panel.
 // ---------------------------------------------------------------------------
 function renderWorld() {
-  const root = $("world-body");
+  const root = $("world-meta");
   root.innerHTML = "";
   const snap = state.snapshot;
-  if (!snap) { root.appendChild(el("div", "muted", "no snapshot yet")); return; }
+  if (!snap) { outliner.setEntities([]); root.appendChild(el("div", "muted", "no snapshot yet")); return; }
+  outliner.setEntities(snap.entities ?? []);
 
   const meta = el("div", "kv");
   meta.appendChild(kv("mode", snap.world?.mode ?? "?"));
-  meta.appendChild(kv("entities", String(snap.entities?.length ?? 0)));
-  meta.appendChild(kv("skills", String(snap.skills?.length ?? 0)));
+  meta.appendChild(kv("entities", String(snap.page?.totalEntities ?? snap.entities?.length ?? 0)));
+  meta.appendChild(kv("skills", String(snap.skills?.length || state.skillCount || 0)));
   meta.appendChild(kv("caller caps", (snap.permissions?.caller ?? []).join(", ") || "—"));
   root.appendChild(meta);
-
-  root.appendChild(el("h4", null, "Entities"));
-  const live = state.client?.entityState;
-  const etable = el("div", "list");
-  for (const e of snap.entities ?? []) {
-    const liveState = live?.get(e.entity);
-    const pos = liveState ? liveState.pos : e.transform.position;
-    const row = el("div", "row");
-    row.appendChild(el("span", "mono", e.entity));
-    row.appendChild(el("span", "dim", `(${fmt(pos[0])}, ${fmt(pos[1])}, ${fmt(pos[2])})`));
-    if (e.tags && e.tags.length) {
-      const tags = el("span", "tags");
-      for (const t of e.tags) tags.appendChild(el("span", "tag", t));
-      row.appendChild(tags);
-    }
-    etable.appendChild(row);
-  }
-  root.appendChild(etable);
 
   const agents = snap.agents ?? [];
   root.appendChild(el("h4", null, `Agents (${agents.length})`));
@@ -179,10 +380,126 @@ function renderWorld() {
 }
 
 // ---------------------------------------------------------------------------
-// (b) REASONING panel — causal forest grouped by actor.
+// (a2) TEAM roster — the coordinated builder team, made legible. A builder is any
+// non-system actor that authored a skill (from the trace we already poll). Each row
+// shows the builder's cue color (shared with the viewport via cueColorFor), its name,
+// a human label for its last action, and a building/idle status derived from recency.
 // ---------------------------------------------------------------------------
+const SYSTEM_ACTORS = new Set(["editor_host", "viewport_follower", "human_editor", "human", "editor_writer"]);
+
+// Map raw skill/tool names to friendly verbs — the UI never surfaces internal tool names.
+const ROSTER_VERBS = {
+  "scene.createEntity": "placed a shape",
+  "asset.place": "placed an asset",
+  "ecs.updateComponent": "moved an entity",
+  "world.generateRegion": "shaped terrain",
+  "scene.destroyEntity": "removed an entity",
+  "three.setMaterial": "restyled a surface",
+  "player.spawn": "spawned the player",
+};
+function rosterVerb(skill) { return ROSTER_VERBS[skill] || "editing"; }
+
+// The Activity feed: chronological authoring edits (worldlog skill commands), attributed. Physics
+// ops (kind:"physics") are engine-level and stay out of the author-facing feed. Bounded ring.
+const MAX_ACTIVITY = 300;
+function ingestActivity(commands) {
+  if (!Array.isArray(commands)) return;
+  for (const cmd of commands) {
+    if (!cmd || cmd.kind !== "skill" || typeof cmd.tool !== "string") continue;
+    state.activity.push({ tool: cmd.tool, actor: cmd.actorId || "agent" });
+  }
+  if (state.activity.length > MAX_ACTIVITY) state.activity.splice(0, state.activity.length - MAX_ACTIVITY);
+}
+
+// A builder is "building" if it authored something within the last few polls, else "idle".
+const ROSTER_IDLE_POLLS = 3;
+const rosterActivity = new Map(); // actorId -> { lastId, activeTick }
+let rosterTick = 0;
+
+function hexColor(value) {
+  return "#" + (value >>> 0).toString(16).padStart(6, "0");
+}
+
+function rosterRow(actor, skill, building) {
+  const row = el("div", "row roster-row");
+  const swatch = el("span", "roster-swatch");
+  swatch.style.background = hexColor(cueColorFor(actor));
+  row.appendChild(swatch);
+  row.appendChild(el("span", "roster-name mono", actor));
+  row.appendChild(el("span", "roster-action dim", rosterVerb(skill)));
+  // Status slot. Derived from activity for now. TODO(question-channel): there is no
+  // editor-readable signal for a builder's question yet (that channel is the user's own
+  // agent's subagent mechanism), so a "waiting on coordinator" state + read-only question
+  // text would attach HERE once such a signal exists — do not fabricate one.
+  const status = el("span", "roster-status " + (building ? "roster-status-building" : "roster-status-idle"));
+  status.textContent = building ? "building" : "idle";
+  row.appendChild(status);
+  return row;
+}
+
+function renderRoster() {
+  const root = $("roster-body");
+  if (!root) return;
+  rosterTick++;
+  // Last authored skill per non-system builder (Map preserves insertion order → last write wins).
+  const byActor = new Map();
+  for (const ev of state.events.values()) {
+    if (ev.type !== "skill.executed" || isIntrospectionEvent(ev)) continue;
+    const skill = ev.payload?.skill;
+    const actor = ev.actorId;
+    if (!skill || !actor || SYSTEM_ACTORS.has(actor)) continue;
+    byActor.set(actor, { skill, id: ev.id });
+  }
+  root.innerHTML = "";
+  if (byActor.size === 0) {
+    root.appendChild(el("div", "muted", "no builders active"));
+    return;
+  }
+  const list = el("div", "list");
+  for (const [actor, info] of [...byActor.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const prev = rosterActivity.get(actor);
+    if (!prev || prev.lastId !== info.id) rosterActivity.set(actor, { lastId: info.id, activeTick: rosterTick });
+    const building = rosterTick - rosterActivity.get(actor).activeTick <= ROSTER_IDLE_POLLS;
+    list.appendChild(rosterRow(actor, info.skill, building));
+  }
+  root.appendChild(list);
+}
+
+// ---------------------------------------------------------------------------
+// (b) ACTIVITY panel (#reason-body) — chronological WORLD EDITS, attributed (what the agents did
+//     to the world). The raw causal TRACE is a developer view and now lives in the console's
+//     Trace tab (renderConsoleTrace). Both "stick to bottom unless the user scrolled up".
+// ---------------------------------------------------------------------------
+function nearBottom(root) { return root.scrollHeight - root.scrollTop - root.clientHeight < 24; }
+
 function renderReasoning() {
   const root = $("reason-body");
+  if (!root) return;
+  const stick = nearBottom(root);
+  root.innerHTML = "";
+  if (state.activity.length === 0) {
+    root.appendChild(el("div", "muted", "no edits yet — the agents' changes to the world show up here"));
+    return;
+  }
+  const list = el("div", "list");
+  for (const a of state.activity) {
+    const row = el("div", "row roster-row");
+    const swatch = el("span", "roster-swatch");
+    swatch.style.background = hexColor(cueColorFor(a.actor));
+    row.appendChild(swatch);
+    row.appendChild(el("span", "roster-name mono", a.actor));
+    row.appendChild(el("span", "roster-action dim", rosterVerb(a.tool)));
+    list.appendChild(row);
+  }
+  root.appendChild(list);
+  if (stick) root.scrollTop = root.scrollHeight;
+}
+
+// The raw causal trace (developer view), rendered into the console's Trace tab.
+function renderConsoleTrace() {
+  const root = $("console-trace");
+  if (!root) return;
+  const stick = nearBottom(root);
   root.innerHTML = "";
   const events = [...state.events.values()];
   if (events.length === 0) { root.appendChild(el("div", "muted", "no trace events yet")); return; }
@@ -194,6 +511,7 @@ function renderReasoning() {
     for (const node of actorRoots) ul.appendChild(renderNode(node));
     root.appendChild(ul);
   }
+  if (stick) root.scrollTop = root.scrollHeight;
 }
 
 function renderNode(node) {
@@ -223,9 +541,103 @@ function stepLabel(ev) {
 // ---------------------------------------------------------------------------
 // (c) APPROVAL queue.
 // ---------------------------------------------------------------------------
+// QC-render lightbox: click a small approval thumbnail to review it near-fullscreen. Click
+// anywhere (without dragging) or press Esc to close. One shared overlay, lazily built.
+//
+// Task #66 (360° turntable): when the proposal carries qcTurntable (8 yaw-rotated frames from
+// architect-run.mjs --turntable), the SAME lightbox becomes a turntable viewer — ←/→ and
+// drag-to-rotate cycle through the frames, which are preloaded up front so cycling is instant.
+let qcLightbox = null;
+function ensureQcLightbox() {
+  if (qcLightbox) return qcLightbox;
+  qcLightbox = document.createElement("div");
+  qcLightbox.style.cssText = "position:fixed;inset:0;z-index:100;display:none;align-items:center;justify-content:center;" +
+    "background:rgba(0,0,0,.82);cursor:zoom-out";
+  const big = document.createElement("img");
+  big.style.cssText = "max-width:94vw;max-height:94vh;object-fit:contain;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,.8)";
+  qcLightbox.appendChild(big);
+  qcLightbox._img = big;
+  qcLightbox._frames = null;
+  qcLightbox._idx = 0;
+  qcLightbox._dragged = false;
+  qcLightbox.onclick = () => {
+    // A drag ending over the overlay also fires a click — swallow that one so rotating the
+    // turntable doesn't also close it. A plain click (no drag) closes, as before.
+    if (qcLightbox._dragged) { qcLightbox._dragged = false; return; }
+    qcLightbox.style.display = "none";
+  };
+  window.addEventListener("keydown", (e) => {
+    if (qcLightbox.style.display === "none") return;
+    if (e.key === "Escape") { qcLightbox.style.display = "none"; return; }
+    if (!qcLightbox._frames) return;
+    if (e.key === "ArrowRight") { e.preventDefault(); qcShowFrame(qcLightbox._idx + 1); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); qcShowFrame(qcLightbox._idx - 1); }
+  });
+  // Drag-to-rotate: horizontal drag steps through frames like spinning a physical turntable.
+  const DRAG_STEP_PX = 24;
+  let dragging = false, dragStartX = 0, dragStartIdx = 0;
+  big.addEventListener("pointerdown", (e) => {
+    if (!qcLightbox._frames) return;
+    dragging = true;
+    qcLightbox._dragged = false;
+    dragStartX = e.clientX;
+    dragStartIdx = qcLightbox._idx;
+    big.style.cursor = "grabbing";
+    big.setPointerCapture(e.pointerId);
+    e.stopPropagation();
+  });
+  big.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - dragStartX;
+    if (Math.abs(dx) >= DRAG_STEP_PX) qcLightbox._dragged = true;
+    qcShowFrame(dragStartIdx - Math.trunc(dx / DRAG_STEP_PX));
+  });
+  const endDrag = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    big.style.cursor = qcLightbox._frames ? "grab" : "";
+    try { big.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+  };
+  big.addEventListener("pointerup", endDrag);
+  big.addEventListener("pointercancel", endDrag);
+  document.body.appendChild(qcLightbox);
+  return qcLightbox;
+}
+
+function qcShowFrame(idx) {
+  const frames = qcLightbox?._frames;
+  if (!frames || frames.length === 0) return;
+  const n = ((idx % frames.length) + frames.length) % frames.length;
+  qcLightbox._idx = n;
+  qcLightbox._img.src = frames[n];
+}
+
+// `frames`, when a non-empty array of resolved image URLs, turns this open into a turntable
+// (←/→ + drag cycle through them, preloaded so cycling never blocks on the network); otherwise
+// this is the plain single-image lightbox it always was.
+function openQcLightbox(startSrc, frames) {
+  const box = ensureQcLightbox();
+  if (Array.isArray(frames) && frames.length > 0) {
+    for (const src of frames) { const preload = new Image(); preload.src = src; }
+    box._frames = frames;
+    box._img.style.cursor = "grab";
+    qcShowFrame(0);
+  } else {
+    box._frames = null;
+    box._img.style.cursor = "";
+    box._img.src = startSrc;
+  }
+  box.style.display = "flex";
+}
+
 function renderApprovals() {
   const root = $("approval-body");
   root.innerHTML = "";
+  if (proposeButton && proposeMoveButton) {
+    const devActions = el("div", "acc-actions");
+    devActions.append(proposeButton, proposeMoveButton);
+    root.appendChild(devActions);
+  }
   const badge = $("approval-count");
   badge.textContent = String(state.approvals.length);
   if (state.approvals.length === 0) {
@@ -237,15 +649,63 @@ function renderApprovals() {
     const top = el("div", "approval-top");
     top.appendChild(el("span", "approval-skill", a.skill));
     top.appendChild(el("span", "tag", a.profile ?? "?"));
+    // Provenance: which model authored the asset. Model tier is a real quality signal for the
+    // reviewer (a cheap-tier build warrants a harder look), so it sits in the card header.
+    const inputForTag = a.input && typeof a.input === "object" ? a.input : {};
+    if (typeof inputForTag.authoredBy === "string" && inputForTag.authoredBy.length > 0) {
+      top.appendChild(el("span", "tag", "model: " + inputForTag.authoredBy));
+    }
     card.appendChild(top);
     card.appendChild(el("div", "dim", `proposed by ${a.agentId} • tick ${a.tick}`));
+    // Visual QC: when a proposal carries a QC render + automated pre-checks (an asset review
+    // proposed under builder.review), SHOW the render + flag badges so the reviewer approves what
+    // they can SEE, not just an input blob. `qcRender` is an /assets-relative path (e.g.
+    // "qc/cottage-authored.png"); `qcChecks` flags the objective axes (theme is the human's call).
+    const input = a.input && typeof a.input === "object" ? a.input : {};
+    if (typeof input.qcRender === "string" && input.qcRender.length > 0) {
+      // Task #66: a non-empty qcTurntable means this proposal has a full 360° set (architect-run
+      // --turntable) — the thumbnail gets a ⟳ badge and the lightbox becomes a turntable viewer.
+      const turntableFrames = Array.isArray(input.qcTurntable) && input.qcTurntable.length > 0
+        ? input.qcTurntable.map((p) => "/assets/" + String(p).replace(/^\/+/, ""))
+        : undefined;
+      const wrap = el("div", null);
+      wrap.style.cssText = "position:relative;margin:6px 0";
+      const img = document.createElement("img");
+      img.src = "/assets/" + input.qcRender.replace(/^\/+/, "");
+      img.alt = "QC render";
+      img.title = turntableFrames ? "click to enlarge — 360° turntable (←/→ or drag to rotate)" : "click to enlarge";
+      img.style.cssText = "display:block;width:100%;max-height:260px;object-fit:contain;border:1px solid var(--line,#333);border-radius:6px;background:#0b0b0b;cursor:zoom-in";
+      img.onclick = () => openQcLightbox(img.src, turntableFrames);
+      wrap.appendChild(img);
+      if (turntableFrames) {
+        const badge = el("span", null, "⟳");
+        badge.title = `${turntableFrames.length}-frame 360° turntable`;
+        badge.style.cssText = "position:absolute;top:4px;right:4px;background:rgba(0,0,0,.7);color:#fff;" +
+          "font-size:13px;line-height:1;padding:3px 5px;border-radius:10px;pointer-events:none";
+        wrap.appendChild(badge);
+      }
+      card.appendChild(wrap);
+    }
+    if (input.qcChecks && typeof input.qcChecks === "object") {
+      const row = el("div", "approval-qc-checks");
+      row.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;margin:4px 0";
+      for (const [axis, val] of Object.entries(input.qcChecks)) {
+        const pass = val === true, fail = val === false;
+        const b = el("span", "tag", `${pass ? "✓" : fail ? "✗" : "?"} ${axis}`);
+        b.style.cssText = `font-size:11px;padding:1px 6px;border-radius:4px;background:${pass ? "#14401f" : fail ? "#4a1616" : "#333"};color:${pass ? "#7fe39a" : fail ? "#ff9a9a" : "#bbb"}`;
+        row.appendChild(b);
+      }
+      card.appendChild(row);
+    }
     const pre = el("pre", "approval-input");
     pre.textContent = JSON.stringify(a.input, null, 2);
     card.appendChild(pre);
     const actions = el("div", "approval-actions");
     const approve = el("button", "btn btn-approve", "Approve");
+    approve.disabled = playLifecycle.isAuthoringLocked();
     approve.onclick = () => resolve(a.approvalId, true);
     const reject = el("button", "btn btn-reject", "Reject");
+    reject.disabled = playLifecycle.isAuthoringLocked();
     reject.onclick = () => resolve(a.approvalId, false);
     actions.appendChild(approve);
     actions.appendChild(reject);
@@ -258,6 +718,7 @@ async function resolve(approvalId, grant) {
   const c = state.client;
   if (!c) return;
   try {
+    assertEditorAuthoringAllowed();
     if (grant) {
       const r = await c.callTool("approval.grant", { approvalId });
       logLine(`granted ${approvalId.slice(0, 24)}… applied=${r.applied}`, r.applied ? "ok" : "err");
@@ -277,18 +738,24 @@ async function resolve(approvalId, grant) {
 // approval queue populates without a separate agent process. Goes through the
 // REAL gate (the call comes back as pending_approval — that's the expected hold).
 // ---------------------------------------------------------------------------
-async function proposeTestEdit() {
+async function ensureAgentClient() {
   const url = $("url").value.trim();
+  const authToken = $("auth-token").value.trim() || undefined;
+  if (state.agentClient) return state.agentClient;
+  const a = new McpClient(url, authToken);
+  await a.connect();
+  await a.initialize("agt_demo", "ses_demo_" + Math.random().toString(36).slice(2, 6), "builder.review");
+  state.agentClient = a;
+  return a;
+}
+
+async function proposeTestEdit() {
   try {
-    if (!state.agentClient) {
-      const a = new McpClient(url);
-      await a.connect();
-      await a.initialize("agt_demo", "ses_demo_" + Math.random().toString(36).slice(2, 6), "builder.review");
-      state.agentClient = a;
-    }
+    assertEditorAuthoringAllowed();
+    const agent = await ensureAgentClient();
     const pos = [Math.round((Math.random() * 8 - 4) * 10) / 10, 0.5, Math.round((Math.random() * 8 - 4) * 10) / 10];
     try {
-      await state.agentClient.callTool("scene.createEntity", { position: pos, shape: "box", color: 0x44aaff });
+      await agent.callTool("scene.createEntity", { position: pos, shape: "box", color: 0x44aaff });
       logLine("proposal applied directly — is the review gate enabled on the server?", "warn");
     } catch (e) {
       if (e instanceof McpError && e.isPendingApproval) {
@@ -300,6 +767,59 @@ async function proposeTestEdit() {
     await refreshAll();
   } catch (e) {
     logLine("propose failed: " + (e && e.message ? e.message : String(e)), "err");
+  }
+}
+
+function firstMovableEntity() {
+  const entity = (state.snapshot?.entities ?? [])[0];
+  if (entity?.entity) {
+    const liveState = state.client?.entityState?.get(entity.entity);
+    return { id: entity.entity, position: liveState?.pos ?? entity.transform?.position };
+  }
+
+  const rowId = $("outliner-root")?.querySelector(".outliner-row .mono")?.textContent?.trim();
+  if (rowId && rowId.startsWith("ent_")) return { id: rowId, position: undefined };
+  return undefined;
+}
+
+function movedPosition(position) {
+  const hasPosition = Array.isArray(position) && position.length >= 3 && position.every((n) => Number.isFinite(n));
+  if (!hasPosition) {
+    return [Math.round((Math.random() * 8 - 4) * 10) / 10, 0.5, Math.round((Math.random() * 8 - 4) * 10) / 10];
+  }
+  const dx = Math.round((Math.random() * 1.5 - 0.75) * 10) / 10;
+  const dz = Math.round((Math.random() * 1.5 - 0.75) * 10) / 10;
+  return [
+    Math.round((position[0] + dx) * 10) / 10,
+    position[1],
+    Math.round((position[2] + dz) * 10) / 10,
+  ];
+}
+
+async function proposeAgentMove() {
+  try {
+    assertEditorAuthoringAllowed();
+    const target = firstMovableEntity();
+    if (!target) {
+      logLine("no entity to move — click + test and approve one first", "warn");
+      return;
+    }
+
+    const agent = await ensureAgentClient();
+    const pos = movedPosition(target.position);
+    try {
+      await agent.callTool("ecs.updateComponent", { entity: target.id, component: "position", value: pos });
+      logLine(`agent moved ${target.id} to [${pos.join(", ")}] directly — is the review gate enabled on the server?`, "warn");
+    } catch (e) {
+      if (e instanceof McpError && e.isPendingApproval) {
+        logLine(`agent proposed ecs.updateComponent on ${target.id} — HELD (approvalId ${e.message.slice(0, 20)}…)`, "info");
+      } else {
+        throw e;
+      }
+    }
+    await refreshAll();
+  } catch (e) {
+    logLine("propose move failed: " + (e && e.message ? e.message : String(e)), "err");
   }
 }
 
@@ -316,6 +836,364 @@ function fmt(n) { return (Math.round(n * 1000) / 1000).toString(); }
 
 $("connect").onclick = () => void connect();
 $("disconnect").onclick = () => { disconnect(); logLine("disconnected", "warn"); };
-$("propose").onclick = () => void proposeTestEdit();
+if (proposeButton) proposeButton.onclick = () => void proposeTestEdit();
+if (proposeMoveButton) proposeMoveButton.onclick = () => void proposeAgentMove();
 $("interval").onchange = () => { if (state.client) startPolling(); };
+playLifecycle.subscribe(({ authoringLocked }) => {
+  if (proposeButton) proposeButton.disabled = authoringLocked;
+  if (proposeMoveButton) proposeMoveButton.disabled = authoringLocked;
+  renderApprovals();
+});
+
+// ---------------------------------------------------------------------------
+// Settings popover — shared model default (synced with the chat header picker), the
+// builder-cues toggle (viewport reads it), and connection DEFAULTS that prefill the
+// top-bar #url / #interval on load. The top-bar connect/token stay the live path.
+// ---------------------------------------------------------------------------
+const SETTINGS_CUES_KEY = "limina.editor.cues";
+const SETTINGS_URL_KEY = "limina.editor.serverUrl";
+const SETTINGS_INTERVAL_KEY = "limina.editor.pollInterval";
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* storage optional */ } };
+
+function setupSettings() {
+  const toggle = $("settings-toggle");
+  const popover = $("settings-popover");
+  if (!toggle || !popover) return;
+
+  // Connection defaults prefill the top-bar inputs (which hold the live values).
+  const urlInput = $("url");
+  const intervalInput = $("interval");
+  const storedUrl = lsGet(SETTINGS_URL_KEY);
+  const storedInterval = lsGet(SETTINGS_INTERVAL_KEY);
+  // An explicit launch URL is session configuration and must win over a stale saved default.
+  if (configuredServer === null && storedUrl && urlInput) urlInput.value = storedUrl;
+  if (storedInterval && intervalInput) intervalInput.value = storedInterval;
+
+  const settingsUrl = $("settings-default-url");
+  const settingsInterval = $("settings-default-interval");
+  if (settingsUrl && urlInput) settingsUrl.value = urlInput.value;
+  if (settingsInterval && intervalInput) settingsInterval.value = intervalInput.value;
+  settingsUrl?.addEventListener("change", () => {
+    const v = settingsUrl.value.trim();
+    lsSet(SETTINGS_URL_KEY, v);
+    if (urlInput) urlInput.value = v;
+  });
+  settingsInterval?.addEventListener("change", () => {
+    const v = settingsInterval.value.trim();
+    lsSet(SETTINGS_INTERVAL_KEY, v);
+    if (intervalInput) { intervalInput.value = v; if (state.client) startPolling(); }
+  });
+
+  // Model default — shares state with the chat header picker via setChatModel + the change event.
+  const modelSelect = $("settings-model");
+  if (modelSelect) {
+    modelSelect.innerHTML = "";
+    for (const m of CHAT_MODELS) {
+      const opt = el("option", null, `Claude · ${m.label}`);
+      opt.value = m.value;
+      opt.selected = m.value === currentChatModel();
+      modelSelect.appendChild(opt);
+    }
+    modelSelect.addEventListener("change", () => {
+      setChatModel(modelSelect.value);
+      window.dispatchEvent(new CustomEvent(CHAT_MODEL_CHANGE_EVENT, { detail: { model: modelSelect.value } }));
+    });
+    window.addEventListener(CHAT_MODEL_CHANGE_EVENT, (e) => {
+      const next = e.detail?.model;
+      if (next && modelSelect.value !== next) modelSelect.value = next;
+    });
+  }
+
+  // Builder cues toggle (default on ⇒ checked unless explicitly "off").
+  const cues = $("settings-cues");
+  if (cues) {
+    cues.checked = lsGet(SETTINGS_CUES_KEY) !== "off";
+    cues.addEventListener("change", () => lsSet(SETTINGS_CUES_KEY, cues.checked ? "on" : "off"));
+  }
+
+  // Open/close (mirrors the ☰ tools menu): gear toggles; a click elsewhere closes.
+  toggle.addEventListener("click", (e) => { e.stopPropagation(); popover.hidden = !popover.hidden; });
+  document.addEventListener("click", (e) => {
+    if (!popover.hidden && !popover.contains(e.target) && e.target !== toggle) popover.hidden = true;
+  });
+}
+setupSettings();
+
+// ---------------------------------------------------------------------------
+// Studio shell (studio-unification U1): layout profiles (studio/design) with
+// persisted visibility, and the Design Docs panel — the Design Space docs tab
+// living in the editor chrome, talking to the headless design sidecar through
+// the launcher's same-origin /api/* proxy. Independent of the world connection:
+// the vault loads whether or not a kernel session is connected.
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Studio shell (studio-unification U1): layout profiles (studio/design) with
+// persisted visibility, and the Design Docs panel — the Design Space docs tab
+// living in the editor chrome, talking to the headless design sidecar through
+// the launcher's same-origin /api/* proxy. Independent of the world connection:
+// the vault loads whether or not a kernel session is connected.
+// ---------------------------------------------------------------------------
+// Fluid agents: the studio event bus + the surface-aware context packer. Every
+// chat turn carries WHERE the human is working and WHAT just happened.
+const studioEvents = studioBus;
+let activeWorkspace = "world";
+let docsPanel;
+
+const contextPacker = createContextPacker({
+  events: studioEvents,
+  shell: { activeWorkspace: () => activeWorkspace },
+  selection: {
+    activeTool: () => window.__atlas?.controller?.activeTool(),
+    options: () => {
+      const c = window.__atlas?.controller;
+      const tool = c?.activeTool();
+      if (c === undefined || tool === undefined) return undefined;
+      const out = {};
+      for (const key of Object.keys(tool.options ?? {})) out[key] = c.option(tool.id, key);
+      return out;
+    },
+    entities: () => (editorSelection.selectedId !== undefined ? [editorSelection.selectedId] : []),
+  },
+  world: {
+    summary: () => {
+      const snap = state.snapshot;
+      if (snap === undefined) return {};
+      const out = {};
+      out.entities = snap.page?.totalEntities ?? snap.entities?.length ?? 0;
+      if (Array.isArray(snap.skills)) out.skills = snap.skills.length;
+      return out;
+    },
+  },
+  atlas: {
+    summary: () => {
+      const m = window.__atlas?.model;
+      if (m === null || m === undefined) return undefined;
+      const parts = [];
+      for (const [name, layer] of Object.entries(m.rasters)) parts.push(`${name} ${layer.w}² r${layer.rev ?? 0}`);
+      return parts.join(" · ");
+    },
+  },
+  docs: {
+    active: () => {
+      const name = docsPanel?.activeDoc;
+      if (name == null) return undefined;
+      return { name, kind: "doc", title: name.replace(/\.md$/, "") };
+    },
+    list: () => docsPanel?.docNames ?? [],
+  },
+});
+setChatContextProvider(() => contextPacker.packAsPromptBlock());
+setChatApplySuggestion(async (action) => {
+  if (state.client === null || state.client === undefined) throw new Error("connect first");
+  return state.client.callTool(action.skill, action.input ?? {});
+});
+// Ambient timeline: saves + workspace switches only — strokes would flood it.
+studioEvents.subscribe((event) => {
+  if (event.type === STUDIO_EVENTS.ATLAS_SAVE || event.type === STUDIO_EVENTS.DOC_SAVE) {
+    noteAmbient(`· ${event.detail} ·`);
+  }
+});
+
+function openExpertChat(expertId) {
+  // v0 routing: the chat router (a later U1 chunk) owns true expert personas;
+  // today the shared chat agent takes the mention as context.
+  window.liminaWindows?.open("chat");
+  const input = $("chat-input");
+  if (input) {
+    input.value = `@${expertId} `;
+    input.focus();
+  }
+}
+
+function setupStudioShell() {
+  const shell = createStudioShell({
+    storage: {
+      load: (key) => {
+        try {
+          const raw = localStorage.getItem(key);
+          return raw === null ? undefined : JSON.parse(raw);
+        } catch { return undefined; }
+      },
+      save: (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage optional */ } },
+    },
+    onChange: () => shell.applyVisibility(),
+  });
+  // Bootstrap order (panel-registry contract): register → defineProfile → restore.
+  let restored = false;
+  try {
+    const raw = localStorage.getItem("limina.studio.panel-layout/v1");
+    if (raw !== null) {
+      shell.registry.restore(JSON.parse(raw));
+      restored = true;
+    }
+  } catch (e) {
+    logLine(`studio layout restore rejected (using defaults): ${e && e.message ? e.message : e}`, "warn");
+  }
+  if (!restored && shell.registry.state().profile === null) shell.registry.setProfile("studio");
+  shell.applyVisibility();
+
+  // Workspace switching: World (the live viewport) ⇄ Atlas (native 2D surface)
+  // ⇄ Design (vault docs) — plus SPLIT view (2.0-B): Atlas and the viewport
+  // side by side, both live. The viewport keeps running hidden; limina:layout-
+  // changed makes it refit on return. Choices persist across sessions.
+  const WORKSPACE_KEY = "limina.studio.workspace";
+  const SPLIT_KEY = "limina.studio.split";
+  const WORKSPACES = {
+    world: { section: $("viewport"), tab: $("workspace-tab-world") },
+    atlas: { section: $("atlas-workspace"), tab: $("workspace-tab-atlas") },
+    design: { section: $("design-workspace"), tab: $("workspace-tab-design") },
+  };
+  const splitToggle = $("workspace-split-toggle");
+  let splitMode = lsGet(SPLIT_KEY) === "1";
+
+  const applyLayout = () => {
+    const joint = splitMode && (activeWorkspace === "world" || activeWorkspace === "atlas");
+    for (const [key, ws] of Object.entries(WORKSPACES)) {
+      const visible = joint ? key !== "design" : key === activeWorkspace;
+      if (ws.section) ws.section.hidden = !visible;
+      ws.tab?.classList.toggle("active", key === activeWorkspace);
+      ws.tab?.setAttribute("aria-selected", String(key === activeWorkspace));
+    }
+    splitToggle?.classList.toggle("active", splitMode);
+    splitToggle?.setAttribute("aria-pressed", String(splitMode));
+    window.dispatchEvent(new CustomEvent("limina:layout-changed"));
+  };
+
+  const setWorkspace = (name) => {
+    if (WORKSPACES[name] === undefined) return;
+    activeWorkspace = name;
+    studioEvents.emit(STUDIO_EVENTS.WORKSPACE_SWITCH, { detail: name });
+    lsSet(WORKSPACE_KEY, name);
+    applyLayout();
+  };
+  splitToggle?.addEventListener("click", () => {
+    splitMode = !splitMode;
+    lsSet(SPLIT_KEY, splitMode ? "1" : "0");
+    studioEvents.emit(STUDIO_EVENTS.WORKSPACE_SWITCH, { detail: splitMode ? "split" : activeWorkspace });
+    applyLayout();
+  });
+  for (const [name, ws] of Object.entries(WORKSPACES)) {
+    ws.tab?.addEventListener("click", () => setWorkspace(name));
+  }
+
+  // The native Atlas surface (Editor 2.0). The raster codec arrives through the
+  // launcher's /shared/ allow-list (the exact engine codec, never a copy); if
+  // the page is served without the proxy, the surface reports unavailable.
+  void (async () => {
+    const atlasMount = $("atlas-workspace-body");
+    if (atlasMount === null) return;
+    try {
+      const [codec, waterIr, { createAtlasSurface }, { createDesignApi }] = await Promise.all([
+        import("/shared/raster-codec.mjs"),
+        import("/js/src/world/water-ir.mjs"),
+        import("./atlas/atlas-surface.js"),
+        import("./design-api.js"),
+      ]);
+      const atlas = createAtlasSurface({
+        mount: atlasMount,
+        api: createDesignApi({}),
+        codec,
+        waterIr,
+        document,
+        events: studioEvents,
+        storage: {
+          load: (k) => { try { const raw = localStorage.getItem(k); return raw === null ? undefined : JSON.parse(raw); } catch { return undefined; } },
+          save: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage optional */ } },
+        },
+        onToast: (m) => logLine(m, "warn"),
+      });
+      window.__atlas = atlas; // test hook: behavioral gates drive the surface through this
+      void atlas.load();
+      // 2.0-D 3D → Atlas reveal: viewport selections emit nav.reveal; pan the
+      // map only while the atlas is actually on screen (atlas tab or split).
+      studioEvents.subscribe?.((event) => {
+        if (event.type !== "nav.reveal") return;
+        const joint = splitMode && (activeWorkspace === "world" || activeWorkspace === "atlas");
+        if (activeWorkspace === "atlas" || joint) atlas.reveal(event.x, event.z);
+      });
+    } catch (e) {
+      atlasMount.innerHTML = `<div class="layer-empty">Atlas unavailable: ${e && e.message ? e.message : e}</div>`;
+      logLine(`atlas surface failed to boot: ${e && e.message ? e.message : e}`, "warn");
+    }
+  })();
+
+  const mount = $("design-workspace-body");
+  if (mount) {
+    // Design workspace tabs (2.0-D): Docs | Places | Graph, one panel mounted
+    // at a time inside the shared body. The active tab persists across sessions.
+    const DESIGN_TAB_KEY = "limina.studio.design.tab";
+    const designApi = createDesignApi({});
+    const tabStrip = document.createElement("div");
+    tabStrip.className = "design-tabs";
+    const tabHost = document.createElement("div");
+    tabHost.className = "design-tab-host";
+    mount.appendChild(tabStrip);
+    mount.appendChild(tabHost);
+    const DESIGN_TABS = [
+      { id: "docs", label: "Docs" },
+      { id: "places", label: "Places" },
+      { id: "graph", label: "Graph" },
+    ];
+    const tabButtons = new Map();
+    let activeTab = null;
+    let activePanel = null;
+    const mountDesignTab = (id) => {
+      if (DESIGN_TABS.every((t) => t.id !== id) || id === activeTab) return;
+      activeTab = id;
+      lsSet(DESIGN_TAB_KEY, id);
+      for (const [tabId, btn] of tabButtons) {
+        btn.classList.toggle("active", tabId === id);
+        btn.setAttribute("aria-selected", String(tabId === id));
+      }
+      activePanel?.destroy?.();
+      tabHost.replaceChildren();
+      if (id === "docs") {
+        const panel = createDesignDocsPanel({
+          mount: tabHost,
+          api: designApi,
+          onOpenChat: openExpertChat,
+          onCascade: ({ impacts }) => { if (Array.isArray(impacts)) surfaceCascade(impacts, { onOpenChat: openExpertChat }); },
+          toast: (m) => logLine(m, "warn"),
+          events: studioEvents,
+        });
+        docsPanel = panel;
+        activePanel = panel;
+        void panel.load();
+      } else {
+        docsPanel = undefined; // the docs-derived chat context is stale while its panel is unmounted
+        const panel = id === "places"
+          ? createDesignPlacesPanel({ document, api: designApi, bus: studioEvents })
+          : createDesignGraphPanel({ document, api: designApi, bus: studioEvents });
+        panel.mount(tabHost);
+        activePanel = panel;
+        void panel.refresh();
+      }
+    };
+    for (const tab of DESIGN_TABS) {
+      const btn = document.createElement("button");
+      btn.className = "btn btn-small design-tab";
+      btn.type = "button";
+      btn.textContent = tab.label;
+      btn.addEventListener("click", () => mountDesignTab(tab.id));
+      tabButtons.set(tab.id, btn);
+      tabStrip.appendChild(btn);
+    }
+    mountDesignTab(DESIGN_TABS.some((t) => t.id === lsGet(DESIGN_TAB_KEY)) ? lsGet(DESIGN_TAB_KEY) : "docs");
+    $("design-workspace-new")?.addEventListener("click", () => {
+      mountDesignTab("docs");
+      docsPanel?.openCreateDialog();
+    });
+    $("design-workspace-refresh")?.addEventListener("click", () => {
+      if (activeTab === "docs") void docsPanel?.load();
+      else void activePanel?.refresh?.();
+    });
+  }
+  if (lsGet(WORKSPACE_KEY) !== null && WORKSPACES[lsGet(WORKSPACE_KEY)] !== undefined) {
+    activeWorkspace = lsGet(WORKSPACE_KEY);
+  }
+  applyLayout();
+}
+setupStudioShell();
+
 logLine("ready — set the server URL and Connect (run editor/server/editor_host.ts for the gate-enabled server)", "info");

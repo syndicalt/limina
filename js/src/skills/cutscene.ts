@@ -138,6 +138,34 @@ export class CutsceneManager {
     }
     return fired;
   }
+
+  /** Deterministic capture of definitions (id-sorted; keyframes already atTick-sorted) AND
+   *  the mid-playback cursor (snapshot participant, H2). The cursor is sim-affecting: the
+   *  pump's not-yet-fired keyframes drive world mutations, so dropping it on restore would
+   *  silently truncate an in-flight cutscene. */
+  captureSnapshot(): CutsceneManagerSnapshot {
+    return {
+      cutscenes: [...this.defs.entries()]
+        .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+        .map(([id, d]) => ({ id, keyframes: d.keyframes.map((k) => ({ atTick: k.atTick, action: { ...k.action } })), durationTicks: d.durationTicks, loop: d.loop })),
+      active: this.active === undefined ? undefined : { ...this.active },
+    };
+  }
+
+  /** Wholesale replace definitions + playback cursor (participant restore). */
+  restoreSnapshot(snap: CutsceneManagerSnapshot): void {
+    this.defs.clear();
+    for (const c of snap.cutscenes) {
+      this.defs.set(c.id, { keyframes: c.keyframes.map((k) => ({ atTick: k.atTick, action: { ...k.action } })), durationTicks: c.durationTicks, loop: c.loop });
+    }
+    this.active = snap.active === undefined ? undefined : { ...snap.active };
+  }
+}
+
+/** The whole CutsceneManager state as the snapshot participant carries it (H2). */
+export interface CutsceneManagerSnapshot {
+  cutscenes: { id: string; keyframes: CutsceneKeyframe[]; durationTicks: number; loop: boolean }[];
+  active?: { id: string; startTick: number; firedThrough: number };
 }
 
 const actionSchema = z.object({
@@ -216,6 +244,7 @@ export function registerCutsceneSkills(registry: SkillRegistry): { cutsceneManag
     description: "Read the current cutscene playback state (playing, id, progress). Pure read.",
     category: "game",
     permissions: ["scene.read"],
+    effect: "read",
     input: z.object({}),
     output: z.object({
       playing: z.boolean(),

@@ -149,6 +149,9 @@ function main() {
   console.log(`    cd ${args.target}`);
   console.log("    npm install");
   console.log("    npm run dev      # play the sample instantly — no native toolchain\n");
+  console.log("  Coordinator surface:\n");
+  console.log("    npm run editor   # boot the editor UI, editor_host, and bridge instructions");
+  console.log("    # Your agent should read AGENTS.md and COORDINATOR.md for the coordinator flow.\n");
   console.log("  Then author your world in world.ts and:\n");
   console.log("    npm run export   # build dist/ (needs the native limina binary; see README)");
   console.log("    npm run serve    # play your world\n");

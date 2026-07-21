@@ -1,0 +1,76 @@
+<!doctype html><html><head><meta charset="utf-8">
+<script type="importmap">{"imports":{"three":"/js/node_modules/three/build/three.module.js"}}</script></head>
+<body>
+<script type="module">
+import * as THREE from "three";
+import { GLTFExporter } from "/js/node_modules/three/examples/jsm/exporters/GLTFExporter.js";
+import { Tree, TreeType, BarkType, LeafType } from "/js/node_modules/@dgreenheck/ez-tree/build/ez-tree.es.js";
+
+// Use ez-tree's AUTHOR-TUNED presets (the ones that look good in its demo) as the base — hand-rolled
+// sparse params produced see-through spindly poles. Boreal mapping: spruce/pine -> the dense Pine
+// conifers; birch -> Aspen (white bark, fine deciduous canopy). Only the seed is overridden per instance.
+const PRESET = { spruce: "Pine Large", pine: "Pine Medium", birch: "Aspen Medium", oak: "Oak Large", ash: "Ash Large" };
+function makeBase(species, s) {
+  const t = new Tree();
+  t.loadPreset(PRESET[species]);   // copies tuned options + generates once
+  t.options.seed = s;
+  t.generate();                    // regenerate with this instance's seed
+  t.branchesMesh.name = "branches"; t.leavesMesh.name = "leaves";
+  t.traverse(m => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
+  return t;
+}
+
+const SPEC = [["spruce",1],["spruce",2],["pine",1],["pine",2],["birch",1],["birch",2],
+  ["oak",101],["oak",203],["ash",307],["ash",409]];
+
+// Build all trees; NORMALIZE each to a realistic height (meters) baked into geometry so a scattered
+// instance is a real tree (~15 m), not a 40-unit giant as tall as a mountain. Base stays at y=0.
+const TARGET_H = { spruce: 16, pine: 15, birch: 11, oak: 18, ash: 17 };
+const trees = SPEC.map(([sp, sd]) => {
+  const tree = makeBase(sp, sd);
+  const box = new THREE.Box3().setFromObject(tree);
+  const h = (box.max.y - box.min.y) || 1;
+  const s = (TARGET_H[sp] || 14) / h;
+  tree.traverse((o) => { if (o.isMesh && o.geometry) o.geometry.scale(s, s, s); });
+  return { file: `${sp}-${sd}.glb`, tree, species: sp };
+});
+
+const texSet = new Set();
+for (const { tree } of trees) tree.traverse(o => {
+  const m = o.material; if (!m) return;
+  for (const k of ["map", "normalMap", "roughnessMap", "aoMap", "alphaMap"]) if (m[k]) texSet.add(m[k]);
+  // ensure leaves export as alpha-MASK cutouts (GLTFExporter maps alphaTest>0 -> alphaMode MASK)
+  if (/leaf|leaves/i.test(o.name) && m.map) { m.alphaTest = m.alphaTest || 0.4; m.transparent = false; }
+});
+await new Promise((res) => {
+  const ready = () => [...texSet].every(t => { const im = t.image; return im && (im.complete || im.naturalWidth > 0 || im.width > 0); });
+  const tick = () => { if (ready()) { for (const t of texSet) t.needsUpdate = true; res(); } else setTimeout(tick, 120); };
+  tick();
+});
+
+// Downscale textures to 512 max — cuts GLB size + VRAM ~4x (1k source) so the forest fits a 4GB GPU.
+const MAX_TEX = 512;
+for (const t of texSet) {
+  const im = t.image;
+  const w = im.naturalWidth || im.width, h = im.naturalHeight || im.height;
+  if (w > MAX_TEX || h > MAX_TEX) {
+    const s = MAX_TEX / Math.max(w, h);
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(w * s)); c.height = Math.max(1, Math.round(h * s));
+    c.getContext("2d").drawImage(im, 0, 0, c.width, c.height);
+    t.image = c; t.needsUpdate = true;
+  }
+}
+
+const exporter = new GLTFExporter();
+const out = [];
+for (const { file, tree } of trees) {
+  const glb = await exporter.parseAsync(tree, { binary: true, embedImages: true });
+  let bin = ""; const bytes = new Uint8Array(glb);
+  const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  out.push({ file, b64: btoa(bin), bytes: bytes.length });
+}
+window.__glbs = out;
+window.__done = true;
+</script></body></html>

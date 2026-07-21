@@ -11,23 +11,25 @@
 //
 // Prereq: static server on :5173. Run: node editor/test/fidelity_frame.test.cjs (exit 0/2 = pass/skip).
 
-const fs = require("fs");
-const PWC = fs.readFileSync("/tmp/claude-1000/-home-cheapseatsecon-Projects-Personal-limina/ec66f3aa-28e5-4be6-af39-c803b3c96622/scratchpad/pwc_path.txt", "utf8").trim();
-const CHROME = process.env.CHROME_BIN || `${process.env.HOME}/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome`;
+const { chromeExecutable, loadChromium, requireChromeBinary, skip } = require("./browser-env.cjs");
+const { artifactPath } = require("./artifacts.cjs");
+const CHROME = chromeExecutable();
+const EDITOR_BASE_URL = process.env.EDITOR_BASE_URL || "http://localhost:5173";
 function fail(m) { console.error("FAIL: " + m); process.exit(1); }
 
 (async () => {
-  let chromium;
-  try { ({ chromium } = require(PWC)); } catch { console.log("SKIP: playwright-core not loadable"); process.exit(2); }
-  if (!fs.existsSync(CHROME)) { console.log("SKIP: chromium not found"); process.exit(2); }
+  const loaded = loadChromium();
+  if (!loaded.chromium) skip(loaded.error);
+  const chromium = loaded.chromium;
+  requireChromeBinary(CHROME);
   let browser;
   try {
-    browser = await chromium.launch({ executablePath: CHROME, args: ["--no-sandbox", "--disable-dev-shm-usage", "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
+    browser = await chromium.launch({ executablePath: CHROME, args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
   } catch (e) { console.log("SKIP: could not launch chromium (" + e.message + ")"); process.exit(2); }
 
   const page = await (await browser.newContext()).newPage();
   try {
-    const resp = await page.goto("http://localhost:5173/render-harness.html", { waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => null);
+    const resp = await page.goto(`${EDITOR_BASE_URL}/render-harness.html`, { waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => null);
     if (!resp) { console.log("SKIP: harness not served on :5173"); await browser.close(); process.exit(2); }
     await page.waitForFunction(() => window.__ready === true, { timeout: 10000 });
 
@@ -35,9 +37,11 @@ function fail(m) { console.error("FAIL: " + m); process.exit(1); }
     const measure = async (cfg) => { await page.evaluate((c) => window.__renderAt(c), cfg); return page.evaluate((c) => window.__renderAt(c), cfg); };
 
     const flat = await measure({ flat: 1, sun: 3 });
-    await page.screenshot({ path: "editor/test/fidelity_flat.png" });
+    const flatShot = artifactPath("fidelity_flat.png");
+    const litShot = artifactPath("fidelity_lit.png");
+    await page.screenshot({ path: flatShot });
     const lit = await measure({ fullSky: 1, sun: 3 });
-    await page.screenshot({ path: "editor/test/fidelity_lit.png" });
+    await page.screenshot({ path: litShot });
     await browser.close();
 
     // The lit baseline must carry materially more shading structure than the flat render.
@@ -47,7 +51,7 @@ function fail(m) { console.error("FAIL: " + m); process.exit(1); }
     }
     console.log(`fidelity_frame.test OK: the render baseline produces a measurably richer frame than flat shading — ` +
       `shading detail (mean local gradient) ${lit.detail.toFixed(5)} lit vs ${flat.detail.toFixed(5)} flat (${ratio.toFixed(2)}x more), ` +
-      `lit mean ${lit.meanLum.toFixed(4)}. Side-by-side: editor/test/fidelity_lit.png vs fidelity_flat.png. Track A "visibly better frame", measured.`);
+      `lit mean ${lit.meanLum.toFixed(4)}. Side-by-side: ${litShot} vs ${flatShot}. Track A "visibly better frame", measured.`);
     process.exit(0);
   } catch (e) { try { await browser.close(); } catch (_) {} fail(e && e.message ? e.message : String(e)); }
 })();

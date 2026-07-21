@@ -1,0 +1,24 @@
+{
+  "conifer": {
+    "variants": [
+      { "id": "vegetation/temperate-canopy/pine-1.glb", "weight": 3, "embedRadius": 0.6 },
+      { "id": "vegetation/temperate-canopy/pine-2.glb", "weight": 3, "embedRadius": 0.6 },
+      { "id": "vegetation/temperate-canopy/spruce-1.glb", "weight": 2, "embedRadius": 0.6 },
+      { "id": "vegetation/temperate-canopy/spruce-2.glb", "weight": 2, "embedRadius": 0.6 }
+    ]
+  },
+  "broadleaf": {
+    "variants": [
+      { "id": "vegetation/temperate-canopy/oak-101.glb", "weight": 2 },
+      { "id": "vegetation/temperate-canopy/oak-203.glb", "weight": 2 },
+      { "id": "vegetation/temperate-canopy/birch-1.glb", "weight": 1 },
+      { "id": "vegetation/temperate-canopy/birch-2.glb", "weight": 1 }
+    ]
+  },
+  "boulder": {
+    "id": "rock.glb"
+  },
+  "grass": {
+    "id": "grass.glb"
+  }
+}

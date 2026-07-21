@@ -28,6 +28,7 @@ import * as THREE from "../../build/three.bundle.mjs";
 import { z } from "../../build/zod.bundle.mjs";
 import type { SceneObject } from "../engine.ts";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
+import { num } from "./_util.ts";
 
 const MetaField = z.record(z.string(), z.unknown()).optional().describe("Agent-supplied extension metadata.");
 
@@ -97,11 +98,6 @@ export interface ClipInfo {
   duration: number;
   weight: number;
   layer: number;
-}
-
-/** Read a finite number from agent config, else a default. */
-function num(v: unknown, d: number): number {
-  return typeof v === "number" && Number.isFinite(v) ? v : d;
 }
 
 export class AnimationManager {
@@ -572,6 +568,7 @@ export function registerAnimationSkills(registry: SkillRegistry, opts?: { animat
     description: "Get the current clip id, time, duration, weight, and layer for an entity's running actions (read from the live AnimationActions).",
     category: "animation",
     permissions: ["animation.read"],
+    effect: "read",
     input: getClipInfoInput,
     output: z.object({ clips: z.array(clipInfoSchema) }),
     handler: (input) => {

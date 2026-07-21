@@ -1,0 +1,16 @@
+{
+  "schema": "limina.asset-mechanical-evidence/1",
+  "assetId": "polyhaven-pine-sapling-small",
+  "status": "candidate-mechanical-only",
+  "source": { "url": "https://polyhaven.com/a/pine_sapling_small", "licenseSpdx": "CC0-1.0", "attribution": "pine_sapling_small by Poly Haven (CC0 1.0)" },
+  "models": [
+    { "level": 0, "path": "vegetation/pine-sapling-small-lod0.glb", "sha256": "sha256:d9e897891fb14cfcfc14f01dd6e90eff473a74b81d78ad615f8580a146eefe5d", "boundsM": [2.639927, 1.298957, 0.76795], "vertexCount": 31586, "triangleCount": 15826, "meshCount": 3, "primitiveCount": 6, "materialCount": 2, "textureSlots": ["baseColor", "metallicRoughness", "normal"], "textureResolution": [1024, 1024] },
+    { "level": 1, "path": "vegetation/pine-sapling-small-lod1.glb", "sha256": "sha256:f02c2d4074ecb3e922296d0adc8a08884a091f400dd389482c02d57d42f4e2d3", "boundsM": [2.639697, 1.298957, 0.766405], "vertexCount": 15141, "triangleCount": 5499, "meshCount": 3, "primitiveCount": 6, "materialCount": 2, "textureSlots": ["baseColor", "metallicRoughness", "normal"], "textureResolution": [1024, 1024] },
+    { "level": 2, "path": "vegetation/pine-sapling-small-lod2.glb", "sha256": "sha256:6ef94634faa55e1e9fa44827b21595d7b8764910f1cd82be3200fe4c79d3f462", "boundsM": [2.614076, 1.298951, 0.751], "vertexCount": 8610, "triangleCount": 3153, "meshCount": 3, "primitiveCount": 6, "materialCount": 2, "textureSlots": ["baseColor", "metallicRoughness", "normal"], "textureResolution": [1024, 1024] }
+  ],
+  "checks": { "allGlbReadable": true, "allSelfContained": true, "boundsPreservedAcrossLods": true, "materialsPreservedAcrossLods": true, "textureSlotsPreservedAcrossLods": true, "textureResolutionPreservedAcrossLods": true, "triangleCountStrictlyDecreases": true, "classMeshLimit": true, "classPrimitiveDrawLimit": true },
+  "lodDistancesM": null,
+  "lodDistanceStatus": "unassigned",
+  "humanVisualApproval": false,
+  "releaseEligible": false
+}

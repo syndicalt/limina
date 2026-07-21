@@ -1,0 +1,24 @@
+<!doctype html><html><head><meta charset="utf-8">
+<script type="importmap">{"imports":{"three":"/js/node_modules/three/build/three.module.js","three/addons/":"/js/node_modules/three/examples/jsm/","@dgreenheck/ez-tree":"/js/node_modules/@dgreenheck/ez-tree/build/ez-tree.es.js"}}</script>
+</head><body><script type="module">
+// EXPORT an AGENT-AUTHORED model (house.mjs) to a portable, reusable GLB asset. The parametric module
+// is the generator; this bakes ONE concrete instance to glTF so it becomes a project asset any agent
+// (or engine, or other tool) can consume — closing the author -> reusable-asset loop.
+window.__log = []; window.__err = "";
+try {
+  const THREE = await import("three");
+  const { GLTFExporter } = await import("three/addons/exporters/GLTFExporter.js");
+  const { createHouse } = await import("/tools/preview/assets/house.mjs");
+  const house = createHouse({ seed: 7 });          // a representative instance of the agent's asset
+  const box = new THREE.Box3().setFromObject(house);
+  const size = box.getSize(new THREE.Vector3());
+  const exporter = new GLTFExporter();
+  const buf = await new Promise((res, rej) => exporter.parse(house, res, rej, { binary: true, onlyVisible: true }));
+  const bytes = new Uint8Array(buf);
+  let bin = ""; const CH = 0x8000; for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  window.__glb = btoa(bin);
+  window.__bounds = [Number(size.x.toFixed(3)), Number(size.y.toFixed(3)), Number(size.z.toFixed(3))];
+  window.__log.push("exported GLB bytes=" + bytes.length + " bounds=" + JSON.stringify(window.__bounds));
+  window.__done = true;
+} catch (e) { window.__err = "THROW: " + ((e && (e.stack || e.message)) || e); window.__done = true; }
+</script></body></html>

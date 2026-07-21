@@ -62,8 +62,13 @@ await registry.invoke("world.addWater", {
   region: { seed: SEED, type: TYPE, bounds: BOUNDS, hints },
 }, base);
 
-// Populate the beach with its biome content (palms, grass) — first-class skill, same placements.
-await registry.invoke("world.populateBiome", { regionId, type: TYPE, waterLevel: seaLevel, waterMargin: 1.5 }, base);
+// Populate the beach with its biome content (palms, driftwood) — first-class skill, same
+// placements. The engine ships no biome pack, so this demo supplies its own role→asset binding
+// inline (beach roles: palm + boulder).
+await registry.invoke("world.populateBiome", {
+  regionId, type: TYPE, waterLevel: seaLevel, waterMargin: 1.5,
+  biomePack: { palm: { id: "palm.glb" }, boulder: { id: "rock.glb" } },
+}, base);
 
 // Character: spawn at the region center, resting on the generated surface.
 const spawnX = ((BOUNDS.minTx + BOUNDS.maxTx + 1) / 2) * TILE_SIZE;
@@ -76,6 +81,7 @@ ops.op_physics_step(); // build the broad-phase BVH so the first move_character 
 // physics body above is unchanged; this is RENDER-ONLY (mesh + AnimationMixer). The model
 // is foot-placed each frame from the controller and crossfades idle/walk/run from input.
 const model = await attachCharacterModel({
+  assetId: "robot.glb",
   world, registry, base, animationManager: core.animation.animationManager,
   position: [spawnX, controller.position[1] - controller.groundOffset, spawnZ],
 });

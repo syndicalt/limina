@@ -1,0 +1,5 @@
+{ "commands": [
+  { "kind":"physics","op":"op_physics_create_world","args":[-9.81] },
+  { "kind":"skill","tool":"terrain.create","input":{ "size":40,"resolution":48,"color":5926970 } },
+  { "kind":"skill","tool":"asset.place","input":{ "assetId":"tudor-cottage.glb","position":[0,0,0],"rotation":[0,4.1,0],"ground":true } }
+], "camera":{ "center":[0,3.2,0],"radius":10.5,"height":1.8 } }

@@ -37,8 +37,12 @@ async fn connect(port: u16) -> WsStream {
     panic!("could not establish a WebSocket connection to {url}");
 }
 
-/// Send one JSON-RPC request and read the single correlated response back.
+/// Send one JSON-RPC request and read its correlated response back.
 async fn send_recv(ws: &mut WsStream, req: serde_json::Value) -> serde_json::Value {
+    let expected_id = req
+        .get("id")
+        .and_then(|id| id.as_i64())
+        .expect("test request must carry a numeric JSON-RPC id");
     ws.send(Message::text(req.to_string()))
         .await
         .expect("send request frame");
@@ -50,10 +54,18 @@ async fn send_recv(ws: &mut WsStream, req: serde_json::Value) -> serde_json::Val
             .expect("websocket error");
         match msg {
             Message::Text(text) => {
-                return serde_json::from_str(text.as_str()).expect("parse JSON-RPC response");
+                let msg: serde_json::Value =
+                    serde_json::from_str(text.as_str()).expect("parse JSON-RPC response");
+                if msg.get("id").and_then(|id| id.as_i64()) == Some(expected_id) {
+                    return msg;
+                }
             }
             Message::Binary(bytes) => {
-                return serde_json::from_slice(&bytes).expect("parse JSON-RPC response");
+                let msg: serde_json::Value =
+                    serde_json::from_slice(&bytes).expect("parse JSON-RPC response");
+                if msg.get("id").and_then(|id| id.as_i64()) == Some(expected_id) {
+                    return msg;
+                }
             }
             Message::Ping(_) | Message::Pong(_) => continue,
             Message::Close(_) => panic!("server closed the connection unexpectedly"),
@@ -81,10 +93,15 @@ async fn mcp_ws_real_socket_e2e() {
     // full pipe buffer can never block the child.
     let stdout = child.stdout.take().expect("child stdout");
     let mut lines = BufReader::new(stdout).lines();
-    timeout(Duration::from_secs(60), async {
+    let auth_token = timeout(Duration::from_secs(60), async {
         while let Some(line) = lines.next_line().await.expect("read child stdout") {
             if line.contains("mcp-ws listening") {
-                return;
+                return line
+                    .split_whitespace()
+                    .find_map(|part| part.strip_prefix("auth_token="))
+                    .filter(|token| token.len() == 64)
+                    .map(str::to_string)
+                    .expect("ready line must include a 256-bit auth token");
             }
         }
         panic!("child exited before reporting it was listening");
@@ -102,7 +119,12 @@ async fn mcp_ws_real_socket_e2e() {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
-            "params": { "agentId": "agt_ws", "sessionId": "ses_ws", "profile": "builder.readWrite" },
+            "params": {
+                "agentId": "agt_ws",
+                "sessionId": "ses_ws",
+                "profile": "builder.readWrite",
+                "authToken": auth_token,
+            },
         }),
     )
     .await;
@@ -160,7 +182,12 @@ async fn mcp_ws_real_socket_e2e() {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
-            "params": { "agentId": "agt_player", "sessionId": "ses_player", "profile": "player.limited" },
+            "params": {
+                "agentId": "agt_player",
+                "sessionId": "ses_player",
+                "profile": "player.limited",
+                "authToken": auth_token,
+            },
         }),
     )
     .await;

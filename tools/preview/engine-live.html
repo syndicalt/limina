@@ -1,0 +1,40 @@
+<!doctype html><html><head><meta charset="utf-8"></head>
+<body style="margin:0;background:#9fb2b8"><canvas id="limina-canvas" width="1200" height="760"></canvas>
+<script type="module">
+// THE REAL LIVE PATH, headless. Imports runLive from the SAME bundle the editor viewport uses, drives
+// it with a command stream (ground box + a vegetation.plant) exactly like the editor does — sim worker,
+// pre-warm, forceWebGL render — and screenshots the viewport. This is the loop to iterate the tree bug.
+window.__log = []; window.__err = []; window.__status = [];
+try {
+  const M = await import("/editor/vendor/limina-runtime.js");
+  const runLive = M.runLive;
+  window.__log.push("runLive=" + typeof runLive + " crossOriginIsolated=" + self.crossOriginIsolated + " SAB=" + (typeof SharedArrayBuffer === "function"));
+  if (typeof runLive !== "function") { window.__err.push("runLive not exported"); window.__done = true; }
+  else {
+    const canvas = document.getElementById("limina-canvas");
+    const commands = [
+      { kind: "physics", op: "op_physics_create_world", args: [-9.81] },
+      { kind: "skill", tool: "terrain.create", input: { size: 200, resolution: 96, baseHeight: 0 } },
+    ];
+    const running = await runLive({
+      canvas, width: 1200, height: 760, commands,
+      forceWebGL: true,
+      orbit: { center: [0, 3, 0], radius: 18, height: 7 },
+      onStatus: (s, m) => window.__status.push(s + ": " + m),
+    });
+    window.__log.push("runLive returned " + (running === null ? "NULL" : "ok"));
+    await new Promise((r) => setTimeout(r, 1200)); // render the box scene first
+    // INCREMENTAL add — exactly what the editor does when the agent plants a tree mid-session.
+    const scatterCmd = { kind: "skill", tool: "vegetation.scatter", input: { species: ["spruce","pine","birch"], density: 14, seed: 7, coverage: 0.7, slopeMax: 0.6 } };
+    const applied = running && running.applyAuthorCommands ? await running.applyAuthorCommands([scatterCmd]) : "no applyAuthorCommands";
+    window.__log.push("scatter => " + JSON.stringify(applied));
+    await new Promise((r) => setTimeout(r, 2500));
+    if (running && running.scene) {
+      let meshes = 0, named = [];
+      running.scene.traverse((o) => { if (o.isMesh || o.isInstancedMesh) { meshes++; if (named.length < 12) named.push((o.name || o.type) + (o.visible === false ? "(hidden)" : "")); } });
+      window.__log.push("scene meshes=" + meshes + " [" + named.join(", ") + "]");
+    }
+    window.__done = true;
+  }
+} catch (e) { window.__err.push("THROW: " + ((e && (e.stack || e.message)) || e)); window.__done = true; }
+</script></body></html>

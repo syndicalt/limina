@@ -1,0 +1,59 @@
+{
+  "schema": "limina.visual-reference-board/v1",
+  "id": "furniture/service-storage/v1",
+  "subjectKind": "furniture",
+  "acquisitionManifest": "art-direction/furniture/service-storage-reference-acquisition.json",
+  "sources": [
+    {
+      "id": "met/cupboard-2968",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/2968",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/ad/original/85J_ACF3115R8.jpg",
+      "creator": "Unknown American maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-16T00:06:24.671Z",
+      "localPath": "art-direction/reference-cache/met/cupboard-2968.jpg",
+      "sha256": "sha256:9a1563a92e934b3f3a731e0ad17d2db7c3e9f373813e441a3b74b1eae69f836c",
+      "bytes": 3005578,
+      "roles": [
+        "silhouette",
+        "construction",
+        "material",
+        "function"
+      ]
+    },
+    {
+      "id": "met/cupboard-471854",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/471854",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/cl/original/cdi67-155-9.jpg",
+      "creator": "Unknown French or South Netherlandish maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-16T00:06:26.582Z",
+      "localPath": "art-direction/reference-cache/met/cupboard-471854.jpg",
+      "sha256": "sha256:0de605a630b793edee36f92b3751e0917c1b1fec38514807e5b773d223e993fa",
+      "bytes": 4695434,
+      "roles": [
+        "silhouette",
+        "construction",
+        "joinery",
+        "material"
+      ]
+    },
+    {
+      "id": "aic/court-cupboard-198122",
+      "sourceUrl": "https://www.artic.edu/artworks/198122/court-cupboard",
+      "imageUrl": "https://www.artic.edu/iiif/2/367be130-7844-d097-a218-5a99aa5a2dbf/full/843,/0/default.jpg",
+      "creator": "Unknown English maker; Art Institute of Chicago",
+      "license": "CC0 Public Domain Designation",
+      "retrievedAt": "2026-07-16T00:06:26.805Z",
+      "localPath": "art-direction/reference-cache/aic/court-cupboard-198122.jpg",
+      "sha256": "sha256:3709c3b7137876905c6b440013f7851aa69459dbfe154fa3e2f6a5d32ab2cc9e",
+      "bytes": 146310,
+      "roles": [
+        "silhouette",
+        "construction",
+        "joinery",
+        "function"
+      ]
+    }
+  ]
+}

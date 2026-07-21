@@ -1,0 +1,8 @@
+{
+  "_comment": "Map Phase 3.3 visual proof (shot B): SAME world as stream-proof.json, camera ~400 m east of the island — far outside shot A's stream window. The island tiles are never loaded here; the open-ocean floor tiles around THIS camera are. Terrain present near the camera in both shots = streaming follows the camera.",
+  "commands": [
+    { "kind": "physics", "op": "op_physics_create_world", "args": [-9.81] },
+    { "kind": "skill", "tool": "world.setTerrainSource", "input": { "kind": "map", "mapAssetId": "maps/primary.worldmap.json" } }
+  ],
+  "camera": { "center": [420, -5, 0], "radius": 30, "height": 24, "autoSpin": 0, "far": 700 }
+}

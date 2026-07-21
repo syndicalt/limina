@@ -1,0 +1,47 @@
+{
+  "spruce": [
+    {
+      "id": "trees/spruce-1.glb"
+    },
+    {
+      "id": "trees/spruce-2.glb"
+    }
+  ],
+  "pine": [
+    {
+      "id": "trees/pine-1.glb"
+    },
+    {
+      "id": "trees/pine-2.glb"
+    }
+  ],
+  "birch": [
+    {
+      "id": "trees/birch-1.glb"
+    },
+    {
+      "id": "trees/birch-2.glb"
+    }
+  ],
+  "oak": [
+    {
+      "id": "trees/oak-1.glb"
+    },
+    {
+      "id": "trees/oak-2.glb"
+    }
+  ],
+  "ash": [
+    {
+      "id": "trees/ash-1.glb"
+    },
+    {
+      "id": "trees/ash-2.glb"
+    }
+  ],
+  "dead-oak": [
+    {
+      "id": "trees/dead-oak-1.glb"
+    }
+  ]
+}

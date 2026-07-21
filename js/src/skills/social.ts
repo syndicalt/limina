@@ -70,6 +70,12 @@ const sayOutput = z.object({ said: z.boolean(), speaker: z.string(), handle: z.s
  *  its full wrapped height (no line cap) so the whole statement is shown; the
  *  UiManager layout pass keeps it fully on-screen — a content-tall bubble is
  *  clamped (slid down, never top-clipped), not truncated. */
+/** Readable auto-dismiss window (ms) a speech bubble stays AFTER its line finishes
+ *  typing, when no ConversationDirector is present to dismiss it. Long enough to read a
+ *  short line, short enough that a silent NPC clears its bubble. Frozen while the line is
+ *  still revealing (UiManager.tick), so a long line is never cut off. */
+const BUBBLE_TTL_MS = 3500;
+
 const BUBBLE_STYLE: TextStyle = {
   background: { color: 0x161c28, opacity: 0.94 },
   border: { width: 2, color: 0x46506a, radius: 12 },
@@ -137,6 +143,10 @@ export function registerSocialSkills(registry: SkillRegistry, deps: SocialDeps):
       const existing = bubbles.get(speaker);
       if (existing !== undefined && deps.ui.has(existing)) {
         deps.ui.update(existing, { text: input.text });
+        // Speaking again REFRESHES the auto-dismiss window (the bubble stays while the
+        // NPC keeps talking) instead of stacking a second bubble; pushing the new line
+        // re-freezes the TTL until it types in (see UiManager.tick).
+        deps.ui.refreshTtl(existing, BUBBLE_TTL_MS);
       } else {
         const headY = deps.locomotion.heightOf(speaker) ?? 1.75;
         const opts: UiCreateOptions = {
@@ -168,6 +178,12 @@ export function registerSocialSkills(registry: SkillRegistry, deps: SocialDeps):
             // within the capped height instead of growing an off-screen column.
             queue: { mode: "queue", lines: [input.text], defaultHoldMs: 2600, cps: 42 },
             fade: { from: 0, to: 1, durationMs: 220 },
+            // Auto-expire: without a ConversationDirector to dismiss it, a bubble would
+            // otherwise persist forever above the speaker. The TTL is the READABLE window
+            // AFTER the line finishes typing (the tick freezes it while revealing), so the
+            // bubble clears a few seconds after the NPC stops talking — no bubble on a
+            // silent NPC. Render-only (ticked by ui.update's dtMs; never the sim/log).
+            ttl: BUBBLE_TTL_MS,
           },
         };
         const { handle } = deps.ui.create(ctx.world.scene, "speechBubble", opts);

@@ -1,0 +1,22 @@
+{
+  "name": "aethon-conifers",
+  "version": "1.0.0",
+  "description": "Grey Field starter forest — ez-tree recipe. Bakes conifers (spruce, pine), Hearthborn broadleaf (birch, oak, ash) and a gnarled dead-oak for the Caesura, and binds them for vegetation.scatter + world.populateBiome. No committed GLBs — the trees regenerate deterministically on import.",
+  "generator": "ez-tree",
+  "seeds": [1, 2],
+  "trees": {
+    "spruce": {},
+    "pine": {},
+    "birch": {},
+    "oak": {},
+    "ash": {},
+    "dead-oak": { "seeds": [1] }
+  },
+  "provides": {
+    "biomePack": {
+      "conifer": { "id": "trees/pine-1.glb", "embedRadius": 0.6 },
+      "broadleaf": { "id": "trees/oak-1.glb" },
+      "boulder": { "id": "rock.glb" }
+    }
+  }
+}

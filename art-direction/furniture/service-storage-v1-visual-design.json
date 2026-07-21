@@ -1,0 +1,151 @@
+{
+  "schema": "limina.visual-design-contract/v1",
+  "id": "furniture/service-storage/v1",
+  "subjectKind": "furniture",
+  "intendedFunction": "A compact, stable joined-oak cottage service rack with four genuinely usable open tiers, clear frontal access, and a grounded load path, authored to replace the approved I1 storage-shelf proxy without inventing non-functional doors or drawers.",
+  "prompt": "Author a cohesive period-inspired joined-oak service rack from construction logic and human use, not from a modern bookcase silhouette. The local front is -X: the 1.0 m Z span is the visible frontage, the 0.4 m X span is physical depth, and the object must remain inside the exact 0.4 by 1.8 by 1.0 m I1 envelope with its base at local Y zero and no post-export scaling. Build four open, horizontal potboard or shelf tiers at useful spacing, carried by four grounded stiles and bounded housed or mortise-and-tenon joints. Preserve at least 0.70 m of clear central frontage between every pair of tiers. Use rear-set boarded bracing, restrained side rails, a modest top cornice, visible joint shoulders, and sparse drawbore pegs to evoke a cottage court cupboard while keeping every tier directly accessible. Do not imply doors, drawers, hinges, latches, or articulation that the runtime contract does not implement. Use the approved restrained three-role oak vocabulary: oak-frame for stiles and rails, oak-panel for tiers and backboards, and oak-endgrain only for explicit pegs. Keep structural grain longitudinal, shelf grain along the 1.0 m frontage, edges eased rather than razor sharp, and ornament subordinate to function.",
+  "references": [
+    {
+      "id": "met/cupboard-2968",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/2968",
+      "creator": "Unknown American maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-16T00:06:24.671Z",
+      "localPath": "art-direction/reference-cache/met/cupboard-2968.jpg",
+      "sha256": "sha256:9a1563a92e934b3f3a731e0ad17d2db7c3e9f373813e441a3b74b1eae69f836c",
+      "roles": ["silhouette", "construction", "material", "function"]
+    },
+    {
+      "id": "met/cupboard-471854",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/471854",
+      "creator": "Unknown French or South Netherlandish maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-16T00:06:26.582Z",
+      "localPath": "art-direction/reference-cache/met/cupboard-471854.jpg",
+      "sha256": "sha256:0de605a630b793edee36f92b3751e0917c1b1fec38514807e5b773d223e993fa",
+      "roles": ["silhouette", "construction", "joinery", "material"]
+    },
+    {
+      "id": "aic/court-cupboard-198122",
+      "sourceUrl": "https://www.artic.edu/artworks/198122/court-cupboard",
+      "creator": "Unknown English maker; Art Institute of Chicago",
+      "license": "CC0 Public Domain Designation",
+      "retrievedAt": "2026-07-16T00:06:26.805Z",
+      "localPath": "art-direction/reference-cache/aic/court-cupboard-198122.jpg",
+      "sha256": "sha256:3709c3b7137876905c6b440013f7851aa69459dbfe154fa3e2f6a5d32ab2cc9e",
+      "roles": ["silhouette", "construction", "joinery", "function"]
+    }
+  ],
+  "cues": [
+    {
+      "id": "locked-i1-envelope-and-axis",
+      "statement": "The rack is grounded and authored at human scale with its broad 1.0 m frontage on Z, shallow 0.4 m depth on X, and open front toward local -X.",
+      "sourceIds": ["met/cupboard-2968", "aic/court-cupboard-198122"],
+      "measurements": [
+        {"name": "overall-depth-x", "unit": "m", "target": 0.4, "maximum": 0.4},
+        {"name": "overall-height-y", "unit": "m", "target": 1.8, "maximum": 1.8},
+        {"name": "overall-frontage-z", "unit": "m", "target": 1.0, "maximum": 1.0},
+        {"name": "floor-contact-y", "unit": "m", "target": 0}
+      ],
+      "verification": "compiler"
+    },
+    {
+      "id": "four-usable-open-tiers",
+      "statement": "Four horizontal service tiers provide real load surfaces and remain visibly accessible from the open -X front rather than becoming decorative ledges.",
+      "sourceIds": ["met/cupboard-2968", "aic/court-cupboard-198122"],
+      "measurements": [
+        {"name": "usable-tier-count", "unit": "count", "target": 4},
+        {"name": "minimum-tier-depth", "unit": "m", "minimum": 0.28},
+        {"name": "minimum-tier-frontage", "unit": "m", "minimum": 0.8},
+        {"name": "maximum-tier-thickness", "unit": "m", "maximum": 0.08},
+        {"name": "minimum-clear-tier-gap", "unit": "m", "minimum": 0.3}
+      ],
+      "verification": "blender"
+    },
+    {
+      "id": "unobstructed-service-access",
+      "statement": "The central frontage between adjacent tiers stays open for hands, crockery, and vessels; posts remain at the edges and rear bracing stays behind the service volume.",
+      "sourceIds": ["aic/court-cupboard-198122"],
+      "measurements": [
+        {"name": "minimum-clear-central-frontage", "unit": "m", "minimum": 0.7},
+        {"name": "front-panel-count", "unit": "count", "target": 0},
+        {"name": "fake-door-or-drawer-count", "unit": "count", "target": 0}
+      ],
+      "verification": "engine"
+    },
+    {
+      "id": "grounded-joined-load-path",
+      "statement": "Every tier joins at least two continuous grounded stiles, with a broad four-point footprint that remains stable when all tiers carry front-edge service loads.",
+      "sourceIds": ["met/cupboard-471854", "aic/court-cupboard-198122"],
+      "measurements": [
+        {"name": "grounded-vertical-stile-count", "unit": "count", "target": 4},
+        {"name": "minimum-support-joints-per-tier", "unit": "count", "minimum": 2},
+        {"name": "rated-load-per-tier", "unit": "count", "target": 25},
+        {"name": "minimum-loaded-stability-margin", "unit": "m", "minimum": 0.03}
+      ],
+      "verification": "engine"
+    },
+    {
+      "id": "bounded-period-joinery",
+      "statement": "Rails and tiers terminate with readable housed or mortise-and-tenon shoulders and restrained drawbore pegs; no member floats or passes implausibly through a receiver.",
+      "sourceIds": ["met/cupboard-471854", "aic/court-cupboard-198122"],
+      "measurements": [
+        {"name": "tier-support-joint-count", "unit": "count", "minimum": 8},
+        {"name": "joint-tolerance", "unit": "m", "maximum": 0.003},
+        {"name": "disconnected-joint-count", "unit": "count", "target": 0},
+        {"name": "implausible-penetration-count", "unit": "count", "target": 0}
+      ],
+      "verification": "blender"
+    },
+    {
+      "id": "court-cupboard-cohesion-without-fake-function",
+      "statement": "A modest cornice, rear boards, hierarchy of stiles and rails, and sparse pegs create a cohesive cottage court-cupboard character without copying enclosed cabinets or suggesting unimplemented articulation.",
+      "sourceIds": ["met/cupboard-2968", "met/cupboard-471854", "aic/court-cupboard-198122"],
+      "measurements": [
+        {"name": "material-role-count", "unit": "count", "target": 3},
+        {"name": "cornice-count", "unit": "count", "target": 1},
+        {"name": "articulated-part-claim-count", "unit": "count", "target": 0}
+      ],
+      "verification": "human"
+    },
+    {
+      "id": "exact-i1-approach-and-collision",
+      "statement": "The local approach point at -0.65 m on X faces inward toward the rack, fits the approved I1 cylinder, and the rack uses compound semantic collision rather than a whole-object box.",
+      "sourceIds": ["met/cupboard-2968", "aic/court-cupboard-198122"],
+      "measurements": [
+        {"name": "approach-local-x", "unit": "m", "target": -0.65},
+        {"name": "approach-radius", "unit": "m", "target": 0.35, "maximum": 0.35},
+        {"name": "approach-facing-inward", "unit": "boolean", "target": 1},
+        {"name": "whole-object-aabb-count", "unit": "count", "target": 0}
+      ],
+      "verification": "engine"
+    }
+  ],
+  "avoid": [
+    "treating the 0.4 m depth as the visible facade width",
+    "modern bookcase silhouette made from repeated anonymous boxes",
+    "front panels, doors, drawers, hinges, or latches without runtime articulation",
+    "decorative shelves too shallow or narrow to store cottage service objects",
+    "broad front rails that block the service apertures",
+    "floating shelves or shelves joined to fewer than two grounded supports",
+    "thin top-heavy support polygon or front-loaded tipping",
+    "rear boards or braces intruding through the open front",
+    "ornament copied from museum references without structural purpose",
+    "plain intersecting boxes without bounded joints",
+    "whole-object AABB collision",
+    "post-export scaling",
+    "cross-grain texture on stiles, rails, shelves, or backboards",
+    "multiple competing wood colors or glossy varnish",
+    "anonymous baked geometry without semantic parts"
+  ],
+  "requiredViews": [
+    "front",
+    "right-side",
+    "back",
+    "three-quarter",
+    "joinery-detail",
+    "socket-overlay",
+    "collision-overlay"
+  ],
+  "status": "draft"
+}

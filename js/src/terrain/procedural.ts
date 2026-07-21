@@ -278,11 +278,19 @@ interface MacroBake { interior: Float32Array; dim: number; gcStart: number; grSt
 export class ProceduralTerrainSource implements TerrainSource {
   readonly name: string;
   /** Memo of baked erosion macro-blocks (pure results, so memoizing is sound + just amortizes
-   *  the bake across the up-to-MACRO² tiles that slice it). Keyed by seed/lod/hints/macro coord. */
+   *  the bake across the up-to-MACRO² tiles that slice it). Keyed by seed/lod/hints/macro coord.
+   *  Insertion order is the LRU order: `get` reinserts a hit so it becomes most-recently-used,
+   *  and `bakeMacro` evicts from the front once `macroMemoCap` is exceeded. */
   private readonly macroMemo = new Map<string, MacroBake>();
+  /** Max baked macro-blocks kept resident (LRU cap). Each bake is ~0.26 MB, so this bounds
+   *  memory instead of letting the memo grow without limit. Eviction is a pure memory concern:
+   *  an evicted block re-bakes BYTE-IDENTICALLY on next request (the bake is a pure function of
+   *  seed/lod/shape/erosion/macro coord), so generated output is unchanged — only recomputed. */
+  private readonly macroMemoCap: number;
 
-  constructor(name = "procedural") {
+  constructor(name = "procedural", macroMemoCap = 16) {
     this.name = name;
+    this.macroMemoCap = macroMemoCap > 0 ? macroMemoCap : 1;
   }
 
   /** Bake (or fetch from the memo) the eroded macro-block that contains tile (tx,tz). Pure +
@@ -295,7 +303,12 @@ export class ProceduralTerrainSource implements TerrainSource {
     const mbz = Math.floor(tz / EROSION_MACRO);
     const key = `${seed}|${lod}|${hintKey}|${mbx}|${mbz}`;
     const hit = this.macroMemo.get(key);
-    if (hit !== undefined) return hit;
+    if (hit !== undefined) {
+      // LRU touch: reinsert so this block moves to the most-recently-used end.
+      this.macroMemo.delete(key);
+      this.macroMemo.set(key, hit);
+      return hit;
+    }
 
     const apron = apronFor(ep);
     const span = EROSION_MACRO * (TILE_RES - 1) + 1; // interior cells across the macro-block
@@ -320,6 +333,12 @@ export class ProceduralTerrainSource implements TerrainSource {
     }
     const bake: MacroBake = { interior, dim: span, gcStart, grStart };
     this.macroMemo.set(key, bake);
+    // Bounded LRU eviction: drop the least-recently-used blocks (Map front) until the
+    // memo is within cap. This changes only residency, never output (bakes are pure).
+    while (this.macroMemo.size > this.macroMemoCap) {
+      const lru = this.macroMemo.keys().next().value as string;
+      this.macroMemo.delete(lru);
+    }
     return bake;
   }
 

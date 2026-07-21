@@ -1,0 +1,51 @@
+{
+  "version": 2,
+  "activeMapId": "primary",
+  "maps": [
+    {
+      "id": "primary",
+      "name": "WB-W1 Generated Water",
+      "scope": "site",
+      "parent": null,
+      "seaLevel": -8,
+      "units": {
+        "kind": "m",
+        "unitsPerMeter": 1,
+        "origin": [0, 0]
+      },
+      "features": [
+        {
+          "id": "outline",
+          "type": "area",
+          "kind": "outline",
+          "points": [[-32, -32], [32, -32], [32, 32], [-32, 32]]
+        },
+        {
+          "id": "grass",
+          "type": "area",
+          "kind": "biome",
+          "biome": "grass",
+          "points": [[-32, -32], [32, -32], [32, 32], [-32, 32]]
+        }
+      ],
+      "rasters": {
+        "elevation": {
+          "w": 17,
+          "h": 17,
+          "rect": { "x0": -32, "z0": -32, "w": 64, "h": 64 },
+          "minY": -10,
+          "maxY": 30,
+          "data": "2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZs7Ozs7Ozs9nZ2dnZ2dnZ2bOzs7Ozs7Ozs9nZ2dnZ2dmzs7NgYGBgYLOzs9nZ2dnZs7OzYGBgYGBgYLOzs9nZ2dmzs2BgTU1NTU1gYLOz2dnZ2bOzYGBNTU1NTWBgs7PZ2dnZs7NgYE1NTU1NYGCzs9nZ2dmzs2BgTU1NTU1gYLOz2dnZ2bOzYGBNTU1NTWBgs7PZ2dnZs7OzYGBgYGBgYLOzs9nZ2dnZs7OzYGBgYGCzs7PZ2dnZ2dnZs7Ozs7Ozs7Oz2dnZ2dnZ2dnZs7Ozs7Ozs9nZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2dnZ2Q=="
+        }
+      },
+      "hydrology": {
+        "schema": "limina.hydrology-recipe/v1",
+        "precipitationMmPerYear": 900,
+        "riverMinCatchmentAreaM2": 400,
+        "basinMinAreaM2": 20,
+        "basinMinDepthM": 0.5,
+        "waterfallMinDropM": 0.5
+      }
+    }
+  ]
+}

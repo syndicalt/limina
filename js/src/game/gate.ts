@@ -64,7 +64,8 @@ const DEFAULT_DT = 1 / 60;
 const DEFAULT_REACH = 1.2;
 
 function distXZ(a: readonly [number, number], b: readonly [number, number]): number {
-  return Math.hypot(a[0] - b[0], a[1] - b[1]);
+  const dx = a[0] - b[0], dy = a[1] - b[1];
+  return Math.sqrt(dx * dx + dy * dy); // sqrt: IEEE correctly-rounded, bit-stable (Math.hypot is not)
 }
 
 /** Heading that drives a CharacterController toward (toX,toZ) from (fromX,fromZ). Matches the

@@ -1,11 +1,12 @@
 // Phase 9.1 — deterministic prop scatter (headless). Props are a pure function of
 // (seed, tile); they sit ON the terrain surface (verified against the heightfield
 // COLLIDER, not the same code that placed them); and placement reads the terrain
-// SHAPE (steep -> rocks, flat -> trees/grass).
+// SHAPE (steep -> rocks, flat -> trees). Generic grass props are deliberately
+// absent: grass visuals belong to the pluggable grass-field package.
 
 import { ops } from "../src/engine.ts";
 import { ProceduralTerrainSource } from "../src/terrain/procedural.ts";
-import { PropKind, scatterProps, type PropInstance } from "../src/terrain/scatter.ts";
+import { PropKind, hashSeed, mulberry32, scatterProps, type PropInstance } from "../src/terrain/scatter.ts";
 import type { TerrainTile } from "../src/terrain/types.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
@@ -52,7 +53,7 @@ for (let i = 0; i < a.length && checked < 14; i += stride) {
 }
 assert(checked >= 6, `expected to surface-check several props against the collider, only ${checked}`);
 
-// 3. Slope response: a steep tile yields rocks; a flat tile yields trees/grass.
+// 3. Slope response: a steep tile yields rocks; a flat tile yields trees.
 function synthTile(fn: (r: number, col: number) => number): TerrainTile {
   const N = 33;
   const heights = new Float32Array(N * N);
@@ -62,9 +63,52 @@ function synthTile(fn: (r: number, col: number) => number): TerrainTile {
 const flat = scatterProps(synthTile(() => 0.5), 3);
 const steep = scatterProps(synthTile((_r, col) => col * 0.2), 3); // steep ramp
 const rocks = (ps: PropInstance[]): number => ps.filter((p) => p.kind === PropKind.Rock).length;
-const greens = (ps: PropInstance[]): number => ps.filter((p) => p.kind === PropKind.Tree || p.kind === PropKind.Grass).length;
+const trees = (ps: PropInstance[]): number => ps.filter((p) => p.kind === PropKind.Tree).length;
 assert(rocks(flat) === 0, `flat terrain should grow no rocks, got ${rocks(flat)}`);
 assert(rocks(steep) >= 8, `steep terrain should be rocky, only ${rocks(steep)} rocks`);
-assert(greens(flat) > greens(steep), `flat terrain should be greener (${greens(flat)}) than steep (${greens(steep)})`);
+assert(trees(flat) > trees(steep), `flat terrain should have more trees (${trees(flat)}) than steep (${trees(steep)})`);
+assert([...flat, ...steep].every((p) => p.kind === PropKind.Tree || p.kind === PropKind.Rock), "legacy generic grass kind escaped scatter");
 
-ops.op_log(`p9_scatter OK: ${a.length} props deterministic + seed-sensitive; ${checked} surface-checked against the heightfield collider (on-surface); slope reads shape (steep ${rocks(steep)} rocks / flat ${greens(flat)} green).`);
+// 4. Replay compatibility: removing the old grass output must not perturb the RNG
+// stream or any surviving tree. This reference consumes the historical flat-ground
+// sequence, including the discarded grass lane's roll/yaw/size draws, then filters
+// that lane exactly as a legacy replay with grass removed would do.
+function legacyFlatTreesWithGrassFiltered(tile: TerrainTile, seed: number, density = 16): PropInstance[] {
+  const [ox, oy, oz] = tile.origin;
+  const [sx, sy, sz] = tile.scale;
+  const rng = mulberry32(hashSeed(seed, Math.round(ox), Math.round(oz)));
+  const expected: PropInstance[] = [];
+  for (let i = 0; i < density; i++) {
+    for (let j = 0; j < density; j++) {
+      const u = (i + rng()) / density;
+      const v = (j + rng()) / density;
+      const roll = rng();
+      const wasTree = rng() < 0.3;
+      const accept = wasTree ? 0.45 : 0.75;
+      const yaw = rng() * Math.PI * 2;
+      const sizeJitter = rng();
+      if (!wasTree || roll > accept) continue;
+      expected.push({
+        kind: PropKind.Tree,
+        x: ox - sx / 2 + u * sx,
+        y: oy + tile.heights[0] * sy,
+        z: oz - sz / 2 + v * sz,
+        yaw,
+        scale: 0.8 + sizeJitter * 0.8,
+      });
+    }
+  }
+  return expected;
+}
+
+const legacyFilteredFlat = legacyFlatTreesWithGrassFiltered(synthTile(() => 0.5), 3);
+assert(flat.length === legacyFilteredFlat.length, `legacy-filtered flat count changed (${flat.length} vs ${legacyFilteredFlat.length})`);
+for (let i = 0; i < flat.length; i++) {
+  for (const k of ["kind", "x", "y", "z", "yaw", "scale"] as (keyof PropInstance)[]) {
+    assert(Object.is(flat[i][k], legacyFilteredFlat[i][k]), `legacy-filtered tree ${i}.${String(k)} changed`);
+  }
+}
+assert(PropKind.Tree === 0 && PropKind.Rock === 1, "tree/rock numeric replay identities changed");
+assert(!Object.prototype.hasOwnProperty.call(PropKind, "Grass"), "PropKind.Grass still exists");
+
+ops.op_log(`p9_scatter OK: ${a.length} props deterministic + seed-sensitive; ${checked} surface-checked against the heightfield collider (on-surface); slope reads shape (steep ${rocks(steep)} rocks / flat ${trees(flat)} trees); generic grass props absent; ${flat.length} surviving flat trees preserve the legacy filtered RNG/replay stream.`);

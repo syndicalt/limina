@@ -1,8 +1,11 @@
 {
   "engine": "limina",
+  "engineVersion": "0.1.0+769bc2d",
+  "generatedFrom": "skills-catalog",
+  "generatedAt": "2026-07-12T07:26:47.772Z",
   "description": "Canonical machine-readable catalog of Limina built-in skills. Each skill maps 1:1 to an MCP tool whose name IS the skill name; the tool input is validated against a JSON Schema (draft-07) derived from the skill's Zod schema. Generated from the real registry (js/src/skills/*) via tools/dump-skills.ts.",
   "docs": "https://www.liminaengine.com/skills",
-  "count": 192,
+  "count": 235,
   "categories": [
     "agent",
     "animation",
@@ -11,6 +14,7 @@
     "camera",
     "combat",
     "damage",
+    "design",
     "dialogue",
     "ecs",
     "event",
@@ -66,6 +70,8 @@
     "checkpoint.write",
     "combat.write",
     "damage.write",
+    "design.read",
+    "design.write",
     "dialogue.configure",
     "dialogue.read",
     "dialogue.write",
@@ -105,6 +111,7 @@
     "stats.write",
     "status.read",
     "status.write",
+    "system.admin",
     "terrain.generate",
     "terrain.read",
     "trace.read",
@@ -116,6 +123,8 @@
   ],
   "permissionProfiles": {
     "builder.readWrite": [
+      "authoring.read",
+      "authoring.write",
       "scene.read",
       "scene.write",
       "ecs.read",
@@ -173,7 +182,10 @@
       "progression.write",
       "progression.configure",
       "world.read",
-      "world.write"
+      "world.write",
+      "design.read",
+      "design.write",
+      "catalog.read"
     ],
     "player.full": [
       "scene.read",
@@ -251,6 +263,8 @@
     "game.author": [
       "game.write",
       "game.configure",
+      "design.read",
+      "design.write",
       "quest.read",
       "quest.write",
       "quest.configure",
@@ -284,12 +298,16 @@
       "world.write",
       "checkpoint.read",
       "checkpoint.write",
+      "design.read",
+      "design.write",
       "save.write",
       "scene.read",
       "ecs.read",
       "physics.read"
     ],
     "terrain.author": [
+      "authoring.read",
+      "authoring.write",
       "scene.read",
       "scene.write",
       "ecs.read",
@@ -313,9 +331,26 @@
       "ecs.read",
       "physics.read",
       "agent.read",
-      "trace.read"
+      "trace.read",
+      "design.read",
+      "runtime.derived.read"
+    ],
+    "system.admin": [
+      "system.admin",
+      "scene.read",
+      "ecs.read",
+      "physics.read",
+      "agent.read",
+      "trace.read",
+      "design.read"
+    ],
+    "system.derived-build": [
+      "authoring.read",
+      "authoring.write"
     ],
     "builder.review": [
+      "authoring.read",
+      "authoring.write",
       "scene.read",
       "scene.write",
       "ecs.read",
@@ -325,15 +360,22 @@
       "agent.read",
       "agent.write",
       "ui.write",
-      "audio.play"
+      "audio.play",
+      "design.read",
+      "design.write",
+      "catalog.read"
     ],
     "reviewer": [
+      "authoring.read",
       "scene.read",
       "ecs.read",
       "physics.read",
       "agent.read",
       "approval.review",
-      "trace.read"
+      "trace.read",
+      "design.read",
+      "catalog.read",
+      "runtime.derived.read"
     ],
     "reviewer.coordinator": [
       "orchestrate",
@@ -346,6 +388,147 @@
     ]
   },
   "skills": [
+    {
+      "name": "ability.cast",
+      "version": "1.0.0",
+      "category": "combat",
+      "priority": "standard",
+      "description": "Attempt to cast an ability: gated by cooldown (from the sim tick) and resource cost. On success stamps the cooldown and spends the resource; on failure returns ok:false with a reason (on cooldown / insufficient resource / unknown). The host performs the effect.",
+      "permissions": [
+        "combat.write"
+      ],
+      "input": {
+        "entity": "string",
+        "id": "string",
+        "meta?": "object"
+      },
+      "output": {
+        "ok": "boolean",
+        "reason?": "string",
+        "cooldownRemaining?": "number",
+        "spent?": "number"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "entity": {
+            "type": "string",
+            "description": "Caster entity."
+          },
+          "id": {
+            "type": "string",
+            "description": "Ability id to cast."
+          },
+          "meta": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "entity",
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ability.define",
+      "version": "1.0.0",
+      "category": "combat",
+      "priority": "standard",
+      "description": "Define an ability with a cooldown and an optional resource cost (a stat the cast spends). What the ability DOES is dispatched by the host on a successful cast.",
+      "permissions": [
+        "combat.write"
+      ],
+      "input": {
+        "id": "string",
+        "cooldownTicks": "integer>=0,<=1000000",
+        "resourceStat?": "string",
+        "cost?": "number>=0",
+        "meta?": "object"
+      },
+      "output": {
+        "ok": "boolean"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Ability id (stable across runs)."
+          },
+          "cooldownTicks": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000,
+            "description": "Ticks before the same entity can recast."
+          },
+          "resourceStat": {
+            "description": "Stat name the cast spends from (e.g. \"mana\"). Omit for no cost.",
+            "type": "string"
+          },
+          "cost": {
+            "description": "Amount of the resource stat a cast spends.",
+            "type": "number",
+            "minimum": 0
+          },
+          "meta": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "id",
+          "cooldownTicks"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ability.status",
+      "version": "1.0.0",
+      "category": "combat",
+      "priority": "standard",
+      "description": "Read whether an ability is defined, off cooldown (ready), and how many ticks remain on its cooldown for an entity, at the current sim tick. Pure read.",
+      "permissions": [
+        "stats.read"
+      ],
+      "input": {
+        "entity": "string",
+        "id": "string"
+      },
+      "output": {
+        "defined": "boolean",
+        "ready": "boolean",
+        "cooldownRemaining": "number"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "entity": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity",
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
     {
       "name": "agent.emitEvent",
       "version": "1.0.0",
@@ -403,6 +586,123 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "type": "object",
         "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "animation.authorClip",
+      "version": "1.0.0",
+      "category": "animation",
+      "priority": "standard",
+      "description": "Author a procedural animation clip from keyframe tracks (property → {t,value} keys, step/linear). Sample it with animation.sampleClip; the host applies the values. Deterministic + replay-safe.",
+      "permissions": [
+        "animation.write"
+      ],
+      "input": {
+        "id": "string",
+        "duration": "number>0,<=100000",
+        "loop": "boolean=false",
+        "tracks": "{property,interp,keys}[]",
+        "meta?": "object"
+      },
+      "output": {
+        "ok": "boolean",
+        "tracks": "number",
+        "keys": "number"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "duration": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 100000,
+            "description": "Clip length in the same time unit as sample t."
+          },
+          "loop": {
+            "default": false,
+            "type": "boolean"
+          },
+          "tracks": {
+            "minItems": 1,
+            "maxItems": 256,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "property": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "What this track drives (e.g. \"position\", \"angle\", \"color\")."
+                },
+                "interp": {
+                  "default": "linear",
+                  "type": "string",
+                  "enum": [
+                    "step",
+                    "linear"
+                  ]
+                },
+                "keys": {
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "t": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "value": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "number"
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "t",
+                      "value"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "description": "Keyframes {t, value}; sorted by t internally."
+                }
+              },
+              "required": [
+                "property",
+                "interp",
+                "keys"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "meta": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "id",
+          "duration",
+          "loop",
+          "tracks"
+        ],
         "additionalProperties": false
       }
     },
@@ -921,6 +1221,41 @@
       }
     },
     {
+      "name": "animation.sampleClip",
+      "version": "1.0.0",
+      "category": "animation",
+      "priority": "standard",
+      "description": "Sample an authored clip at time t — returns each track's interpolated value (looped/clamped per the clip). Pure read; the host applies the values to entities.",
+      "permissions": [
+        "animation.read"
+      ],
+      "input": {
+        "id": "string",
+        "t": "number"
+      },
+      "output": {
+        "found": "boolean",
+        "values?": "object"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "t": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "t"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "animation.setParam",
       "version": "1.0.0",
       "category": "animation",
@@ -1161,6 +1496,154 @@
       }
     },
     {
+      "name": "architecture.building",
+      "version": "2.0.0",
+      "category": "scene",
+      "priority": "standard",
+      "description": "Procedurally raise an enterable building (relief timber-frame walls, plaster infill, plinth, slate gable roof, a doorway with a stoop) as real collidable entities parented under one building-root. Kit-backed + Design-Direction-materialed; deterministic + replay-safe. Compose repeatedly to build settlements.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "position": "[number,number,number]=[0,0,0]",
+        "width": "number>0,<=200=8",
+        "depth": "number>0,<=200=6",
+        "height": "number>0,<=80=3.2",
+        "rotation": "number=0",
+        "wallThickness": "number>0,<=5=0.25",
+        "doorWidth": "number>0,<=50=1.4",
+        "doorHeight": "number>0,<=70=2.2",
+        "withRoof": "boolean=true",
+        "roofStyle": "enum(gable|flat)=\"gable\"",
+        "roofPitch": "number>0,<=40=2.2",
+        "roofOverhang": "number>=0,<=5=0.35",
+        "seed?": "number",
+        "meta?": "object"
+      },
+      "output": {
+        "entities": "string[]",
+        "parts": "{kind,entity,position,size}[]",
+        "bounds": "{min,max}",
+        "entityCount": "number",
+        "root": "string"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "position": {
+            "default": [
+              0,
+              0,
+              0
+            ],
+            "description": "Building CENTER on the ground (floor at position.y).",
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "width": {
+            "default": 8,
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 200
+          },
+          "depth": {
+            "default": 6,
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 200
+          },
+          "height": {
+            "default": 3.2,
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 80
+          },
+          "rotation": {
+            "default": 0,
+            "type": "number"
+          },
+          "wallThickness": {
+            "default": 0.25,
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 5
+          },
+          "doorWidth": {
+            "default": 1.4,
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 50
+          },
+          "doorHeight": {
+            "default": 2.2,
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 70
+          },
+          "withRoof": {
+            "default": true,
+            "type": "boolean"
+          },
+          "roofStyle": {
+            "default": "gable",
+            "type": "string",
+            "enum": [
+              "gable",
+              "flat"
+            ]
+          },
+          "roofPitch": {
+            "default": 2.2,
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 40
+          },
+          "roofOverhang": {
+            "default": 0.35,
+            "type": "number",
+            "minimum": 0,
+            "maximum": 5
+          },
+          "seed": {
+            "type": "number"
+          },
+          "meta": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "position",
+          "width",
+          "depth",
+          "height",
+          "rotation",
+          "wallThickness",
+          "doorWidth",
+          "doorHeight",
+          "withRoof",
+          "roofStyle",
+          "roofPitch",
+          "roofOverhang"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "asset.place",
       "version": "1.0.0",
       "category": "three",
@@ -1174,13 +1657,19 @@
         "position": "[number,number,number]=[0,0,0]",
         "rotation?": "[number,number,number]",
         "scale?": "[number,number,number]",
+        "ground": "boolean=true",
+        "normalizeHeight?": "number>0,<=500",
         "material?": "{color,roughness,metalness}",
-        "hash?": "string"
+        "hash?": "string",
+        "designRef?": "{schema,mapId,kind,id}",
+        "qcRender?": "string",
+        "qcChecks?": "object"
       },
       "output": {
         "entity": "string",
         "hash": "string",
-        "resource": "{kind,assetId,source,hash,bytes,rootName,objectCount,meshCount,materialCount,textureCount}"
+        "resource": "{kind,assetId,source,hash,bytes,rootName,objectCount,meshCount,materialCount,textureCount}",
+        "bounds": "[number,number,number]"
       },
       "input_schema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -1236,6 +1725,15 @@
               }
             ]
           },
+          "ground": {
+            "default": true,
+            "type": "boolean"
+          },
+          "normalizeHeight": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 500
+          },
           "material": {
             "type": "object",
             "properties": {
@@ -1259,11 +1757,184 @@
           },
           "hash": {
             "type": "string"
+          },
+          "designRef": {
+            "type": "object",
+            "properties": {
+              "schema": {
+                "type": "string",
+                "const": "limina.atlas-design-ref/v1"
+              },
+              "mapId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "feature",
+                  "marker",
+                  "place",
+                  "stamp"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "schema",
+              "mapId",
+              "kind",
+              "id"
+            ],
+            "additionalProperties": false
+          },
+          "qcRender": {
+            "type": "string"
+          },
+          "qcChecks": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
           }
         },
         "required": [
           "assetId",
-          "position"
+          "position",
+          "ground"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "asset.placeLod",
+      "version": "1.0.0",
+      "category": "three",
+      "priority": "standard",
+      "description": "Place a curated glTF asset as a screen-distance LOD: multiple resolution levels that the renderer swaps by camera distance for draw-call control. Level 0 is the nearest/highest-detail mesh and defines the collider + committed identity. Same transform/ground/normalize semantics as asset.place; records the REQUEST (ordered level ids + distances + level-0 hash).",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "lods": "{assetId,distance}[]",
+        "position": "[number,number,number]=[0,0,0]",
+        "rotation?": "[number,number,number]",
+        "scale?": "[number,number,number]",
+        "ground": "boolean=true",
+        "normalizeHeight?": "number>0,<=500",
+        "hash?": "string"
+      },
+      "output": {
+        "entity": "string",
+        "hash": "string",
+        "levels": "integer>=-9007199254740991,<=9007199254740991",
+        "resource": "{kind,assetId,source,hash,bytes,rootName,objectCount,meshCount,materialCount,textureCount}",
+        "bounds": "[number,number,number]"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "lods": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "assetId": {
+                  "type": "string"
+                },
+                "distance": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "assetId",
+                "distance"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "position": {
+            "default": [
+              0,
+              0,
+              0
+            ],
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "rotation": {
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "scale": {
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "ground": {
+            "default": true,
+            "type": "boolean"
+          },
+          "normalizeHeight": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 500
+          },
+          "hash": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "lods",
+          "position",
+          "ground"
         ],
         "additionalProperties": false
       }
@@ -1273,13 +1944,13 @@
       "version": "1.0.0",
       "category": "three",
       "priority": "standard",
-      "description": "Scatter curated glTF assets BY ID across an ALREADY-GENERATED region (by regionId) under an agent-set ScatterConfig (palette + density + elevation/slope/climate rules). Bound to the region's seed/lod + applied tiles, so placements sit on the visible, exported surface. Deterministic + replay-safe: the world log records the regionId + ScatterConfig REQUEST (+ pinned asset hashes), NEVER the instance transforms, which replay recomputes over the SAME baked/cached tiles. Mounts one InstancedMesh per asset mesh. Returns the placement count + pinned hashes.",
+      "description": "Scatter curated glTF assets BY ID across an ALREADY-GENERATED region (by regionId) under an agent-set ScatterConfig (palette + density + elevation/slope/climate rules). Bound to the region's seed/lod + applied tiles, so placements sit on the visible, exported surface. Deterministic + replay-safe: the world log records the regionId + ScatterConfig REQUEST (+ pinned asset hashes), NEVER the instance transforms, which replay recomputes over the SAME baked/cached tiles. Optional LOD levels use cell-classified, draw-bounded aggregate instance batches. Returns the placement count + pinned hashes.",
       "permissions": [
         "scene.write"
       ],
       "input": {
         "regionId": "string",
-        "config": "{seed,density,assets,elevationMin,elevationMax,slopeMax,sizeRange,coverage,cluster,clusterFreq,biomes,tempMin,tempMax}",
+        "config": "{seed,density,assets,cellSize,elevationMin,elevationMax,slopeMax,sizeRange,coverage,cluster,clusterFreq,embedRadius,biomes,tempMin,tempMax,exclusions,inclusions}",
         "assetHashes?": "object"
       },
       "output": {
@@ -1321,6 +1992,72 @@
                     "weight": {
                       "type": "number",
                       "exclusiveMinimum": 0
+                    },
+                    "embedRadius": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "lods": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "distance": {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          },
+                          "hysteresis": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "distance"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "treeLod": {
+                      "type": "object",
+                      "properties": {
+                        "reducedId": {
+                          "type": "string"
+                        },
+                        "reducedDistance": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "impostorId": {
+                          "type": "string"
+                        },
+                        "impostorDistance": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "cullDistance": {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        "hysteresis": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 0.49
+                        }
+                      },
+                      "required": [
+                        "reducedId",
+                        "reducedDistance",
+                        "impostorId",
+                        "impostorDistance",
+                        "cullDistance"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -1328,6 +2065,10 @@
                   ],
                   "additionalProperties": false
                 }
+              },
+              "cellSize": {
+                "type": "number",
+                "exclusiveMinimum": 0
               },
               "elevationMin": {
                 "type": "number"
@@ -1366,6 +2107,10 @@
                 "type": "number",
                 "exclusiveMinimum": 0
               },
+              "embedRadius": {
+                "type": "number",
+                "minimum": 0
+              },
               "biomes": {
                 "type": "array",
                 "items": {
@@ -1379,6 +2124,54 @@
               },
               "tempMax": {
                 "type": "number"
+              },
+              "exclusions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "z": {
+                      "type": "number"
+                    },
+                    "r": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "z",
+                    "r"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "inclusions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "number"
+                    },
+                    "z": {
+                      "type": "number"
+                    },
+                    "r": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "z",
+                    "r"
+                  ],
+                  "additionalProperties": false
+                }
               }
             },
             "required": [
@@ -2050,7 +2843,9 @@
       "category": "system",
       "priority": "standard",
       "description": "Answer 'why was action X allowed/denied': the governing policy decision (rule + reason + context + quota/budget), the provenance (agent/session/profile/package), and the causal-parent chain — all from the real recorded trace.",
-      "permissions": [],
+      "permissions": [
+        "trace.read"
+      ],
       "input": {
         "eventId": "string"
       },
@@ -2082,7 +2877,9 @@
       "category": "system",
       "priority": "standard",
       "description": "Query recorded policy decisions: filter by allow/deny, cap, rule, agent, session, or package (package provenance). Returns matching decision events plus an allow/deny + by-rule + by-cap summary.",
-      "permissions": [],
+      "permissions": [
+        "trace.read"
+      ],
       "input": {
         "decision": "enum(allow|deny|all)=\"all\"",
         "cap?": "string",
@@ -2144,7 +2941,9 @@
       "category": "system",
       "priority": "standard",
       "description": "Resource usage from recorded decisions: allowed/denied call counts per session+cap, plus the latest quota and budget snapshots seen for each session — derived from the real policy events.",
-      "permissions": [],
+      "permissions": [
+        "trace.read"
+      ],
       "input": {
         "sessionId?": "string"
       },
@@ -2528,6 +3327,169 @@
       }
     },
     {
+      "name": "behavior.set",
+      "version": "1.0.0",
+      "category": "ecs",
+      "priority": "standard",
+      "description": "Attach a declarative BehaviorSpec (idle / patrol / wander / script) to an entity as first-class world state. It lands on the entity (like three.setMaterial), so it survives on a mesh-less / asset-backed entity and rides a self-sufficient snapshot. Behaviour is a whole value — this REPLACES any prior behaviour. Runtime execution (the NPC actually moving) is a later phase; this records the intent.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "entity": "string",
+        "behavior": "{version,kind}|{version,kind,waypoints,speed,loop}|{version,kind,radius,speed}|{version,kind,ref,params}"
+      },
+      "output": {
+        "entity": "string",
+        "ok": "boolean",
+        "kind": "string"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "entity": {
+            "type": "string",
+            "minLength": 1
+          },
+          "behavior": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "number",
+                    "const": 1
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "idle"
+                  }
+                },
+                "required": [
+                  "version",
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "number",
+                    "const": 1
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "patrol"
+                  },
+                  "waypoints": {
+                    "minItems": 2,
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    }
+                  },
+                  "speed": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "loop": {
+                    "default": true,
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "version",
+                  "kind",
+                  "waypoints",
+                  "speed",
+                  "loop"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "number",
+                    "const": 1
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "wander"
+                  },
+                  "radius": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "speed": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "required": [
+                  "version",
+                  "kind",
+                  "radius",
+                  "speed"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "number",
+                    "const": 1
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "script"
+                  },
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "params": {
+                    "default": {},
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {}
+                  }
+                },
+                "required": [
+                  "version",
+                  "kind",
+                  "ref",
+                  "params"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "entity",
+          "behavior"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "behavior.setGoal",
       "version": "1.0.0",
       "category": "behavior",
@@ -2610,6 +3572,245 @@
           "entity",
           "type",
           "priority"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "building.assemble",
+      "version": "1.0.0",
+      "category": "scene",
+      "priority": "standard",
+      "description": "Raise a kit-composed building (relief timber-frame walls, sills/lintels, plinth, gable roof) from a declarative recipe as real collidable entities parented under one building-root. Deterministic + replay-safe; on-brief materials from the active Design Direction. Openings are genuine voids. Re-invoke to STAMP the same building elsewhere.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "position": "[number,number,number]=[0,0,0]",
+        "width": "number>0,<=200=8",
+        "depth": "number>0,<=200=6",
+        "height": "number>0,<=80=3.2",
+        "wallThickness?": "number>0,<=5",
+        "openings?": "{wall,kind,offset,width,height,sill}[]",
+        "roof?": "{type,pitch,overhang,cover,bargeboards}|null",
+        "rotation?": "number",
+        "plinth?": "boolean",
+        "construction?": "enum(timber-frame-daub|stone-base-timber-upper|cut-stone|cob|log)",
+        "baseCourse?": "number>=0,<=40",
+        "baseRole?": "enum(stone|wood|foliage|ground|water|metal|accent|trim|skin|sky|slate)",
+        "seed?": "number"
+      },
+      "output": {
+        "root": "string",
+        "entities": "string[]",
+        "entityCount": "number",
+        "bounds": "{min,max}"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "position": {
+            "default": [
+              0,
+              0,
+              0
+            ],
+            "description": "Building CENTER on the ground (the floor sits at position.y).",
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "width": {
+            "default": 8,
+            "description": "Footprint extent along X (meters).",
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 200
+          },
+          "depth": {
+            "default": 6,
+            "description": "Footprint extent along Z (meters).",
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 200
+          },
+          "height": {
+            "default": 3.2,
+            "description": "Wall height (meters).",
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 80
+          },
+          "wallThickness": {
+            "description": "Wall/floor slab thickness (default 0.25).",
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 5
+          },
+          "openings": {
+            "description": "Doors + windows cut into the walls (genuine voids).",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "wall": {
+                  "type": "string",
+                  "enum": [
+                    "north",
+                    "south",
+                    "east",
+                    "west"
+                  ]
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "door",
+                    "window"
+                  ]
+                },
+                "offset": {
+                  "description": "Centre along the wall axis (0 = wall centre).",
+                  "type": "number"
+                },
+                "width": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "height": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "sill": {
+                  "description": "Height of the solid panel below the opening (0 for a door).",
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "wall",
+                "kind",
+                "width",
+                "height"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "roof": {
+            "description": "Roof spec; null = open. Omitted = a gable roof.",
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "gable",
+                      "flat"
+                    ]
+                  },
+                  "pitch": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "overhang": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "cover": {
+                    "description": "Palette role the roof cover (shingles/thatch/tile) resolves from. Default 'slate'.",
+                    "type": "string",
+                    "enum": [
+                      "stone",
+                      "wood",
+                      "foliage",
+                      "ground",
+                      "water",
+                      "metal",
+                      "accent",
+                      "trim",
+                      "skin",
+                      "sky",
+                      "slate"
+                    ]
+                  },
+                  "bargeboards": {
+                    "description": "Timber verge/eave trim; keeps the cover on the slopes only.",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rotation": {
+            "description": "Yaw in radians about the building centre.",
+            "type": "number"
+          },
+          "plinth": {
+            "description": "A foundation course under the footprint (default on).",
+            "type": "boolean"
+          },
+          "construction": {
+            "description": "Structural system: masonry types get solid stone walls; timber-framed get the relief timber wall-panel. Absent = timber-frame.",
+            "type": "string",
+            "enum": [
+              "timber-frame-daub",
+              "stone-base-timber-upper",
+              "cut-stone",
+              "cob",
+              "log"
+            ]
+          },
+          "baseCourse": {
+            "description": "Masonry base-course height wrapping the footprint (stone footing / full stone ground storey). 0 = none.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 40
+          },
+          "baseRole": {
+            "description": "Palette role the base course resolves from (default 'stone').",
+            "type": "string",
+            "enum": [
+              "stone",
+              "wood",
+              "foliage",
+              "ground",
+              "water",
+              "metal",
+              "accent",
+              "trim",
+              "skin",
+              "sky",
+              "slate"
+            ]
+          },
+          "seed": {
+            "description": "Deterministic variation seed for the kit parts.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "position",
+          "width",
+          "depth",
+          "height"
         ],
         "additionalProperties": false
       }
@@ -3529,6 +4730,203 @@
       }
     },
     {
+      "name": "cutscene.define",
+      "version": "1.0.0",
+      "category": "game",
+      "priority": "standard",
+      "description": "Author a scripted timeline as keyframes ({atTick, action}). The host pumps it and dispatches each fired action through its other skills. Deterministic (tick-driven).",
+      "permissions": [
+        "game.configure"
+      ],
+      "input": {
+        "id": "string",
+        "keyframes": "{atTick,action}[]",
+        "loop": "boolean=false",
+        "meta?": "object"
+      },
+      "output": {
+        "ok": "boolean",
+        "keyframes": "number",
+        "durationTicks": "number"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Cutscene id (stable across runs)."
+          },
+          "keyframes": {
+            "minItems": 1,
+            "maxItems": 512,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "atTick": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991,
+                  "description": "Relative tick (0-based from the cutscene start) at/after which the action fires once."
+                },
+                "action": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Action type the host maps to a skill, e.g. \"camera.cut\"."
+                    },
+                    "data": {
+                      "description": "Action payload passed through to the host's dispatch.",
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {}
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "atTick",
+                "action"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Timeline keyframes; sorted by atTick internally."
+          },
+          "loop": {
+            "default": false,
+            "description": "Restart from the top after the last keyframe.",
+            "type": "boolean"
+          },
+          "meta": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "id",
+          "keyframes",
+          "loop"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "cutscene.play",
+      "version": "1.0.0",
+      "category": "game",
+      "priority": "standard",
+      "description": "Start playing a defined cutscene, anchoring its timeline at startTick (default: the current sim tick). Supersedes any in-progress playback. On failure returns ok:false with a reason.",
+      "permissions": [
+        "game.write"
+      ],
+      "input": {
+        "id": "string",
+        "startTick?": "integer>=0,<=9007199254740991",
+        "meta?": "object"
+      },
+      "output": {
+        "ok": "boolean",
+        "reason?": "string"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Cutscene id to play."
+          },
+          "startTick": {
+            "description": "Tick to anchor the timeline at. Defaults to the current sim tick (replay-deterministic).",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "meta": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "cutscene.status",
+      "version": "1.0.0",
+      "category": "game",
+      "priority": "standard",
+      "description": "Read the current cutscene playback state (playing, id, progress). Pure read.",
+      "permissions": [
+        "scene.read"
+      ],
+      "input": {},
+      "output": {
+        "playing": "boolean",
+        "id?": "string",
+        "startTick?": "number",
+        "firedThrough?": "number",
+        "total?": "number",
+        "loop?": "boolean"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "cutscene.stop",
+      "version": "1.0.0",
+      "category": "game",
+      "priority": "standard",
+      "description": "Stop the active cutscene playback (no-op if none is playing).",
+      "permissions": [
+        "game.write"
+      ],
+      "input": {
+        "meta?": "object"
+      },
+      "output": {
+        "ok": "boolean",
+        "wasPlaying": "boolean"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "meta": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "damage.apply",
       "version": "1.0.0",
       "category": "damage",
@@ -3651,13 +5049,136 @@
       }
     },
     {
+      "name": "design.get",
+      "version": "1.0.0",
+      "category": "design",
+      "priority": "standard",
+      "description": "Read a first-class design artifact from the world without recording a mutation.",
+      "permissions": [
+        "design.read"
+      ],
+      "input": {
+        "artifact": "enum(gds|artDirection|worldBible|cast|storyboard)"
+      },
+      "output": {
+        "artifact": "enum(gds|artDirection|worldBible|cast|storyboard)",
+        "value": "any"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "artifact": {
+            "type": "string",
+            "enum": [
+              "gds",
+              "artDirection",
+              "worldBible",
+              "cast",
+              "storyboard"
+            ]
+          }
+        },
+        "required": [
+          "artifact"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "design.patch",
+      "version": "1.0.0",
+      "category": "design",
+      "priority": "standard",
+      "description": "Deep-merge a patch into a design artifact, then revalidate and store the canonical value.",
+      "permissions": [
+        "design.write"
+      ],
+      "input": {
+        "artifact": "enum(gds|artDirection|worldBible|cast|storyboard)",
+        "patch": "object"
+      },
+      "output": {
+        "artifact": "enum(gds|artDirection|worldBible|cast|storyboard)",
+        "value": "any"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "artifact": {
+            "type": "string",
+            "enum": [
+              "gds",
+              "artDirection",
+              "worldBible",
+              "cast",
+              "storyboard"
+            ]
+          },
+          "patch": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "artifact",
+          "patch"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "design.set",
+      "version": "1.0.0",
+      "category": "design",
+      "priority": "standard",
+      "description": "Set a first-class design artifact on the world after schema validation and canonicalization.",
+      "permissions": [
+        "design.write"
+      ],
+      "input": {
+        "artifact": "enum(gds|artDirection|worldBible|cast|storyboard)",
+        "value": "any"
+      },
+      "output": {
+        "artifact": "enum(gds|artDirection|worldBible|cast|storyboard)",
+        "value": "any"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "artifact": {
+            "type": "string",
+            "enum": [
+              "gds",
+              "artDirection",
+              "worldBible",
+              "cast",
+              "storyboard"
+            ]
+          },
+          "value": {}
+        },
+        "required": [
+          "artifact",
+          "value"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "dev.reload",
       "version": "2.0.0",
       "category": "system",
       "priority": "standard",
       "description": "Live-reload a skill (registry unregister+re-register so a later callTool runs the new handler) or re-run a registered scene builder; emits an honest dev.*.reload.completed/.failed trace event listing what was invalidated. Targets that genuinely cannot reload fail honestly instead of pretending success.",
       "permissions": [
-        "scene.read"
+        "system.admin"
       ],
       "input": {
         "target": "enum(skill|scene|data)",
@@ -4122,6 +5643,163 @@
       }
     },
     {
+      "name": "director.configure",
+      "version": "1.0.0",
+      "category": "agent",
+      "priority": "standard",
+      "description": "Configure the AI director's pacing model (build/fade rates, sustain/rest durations, peak/rest levels, pressure damping) and reset its state. Deterministic, tick-driven.",
+      "permissions": [
+        "agent.write"
+      ],
+      "input": {
+        "buildRate?": "number>0,<=1",
+        "fadeRate?": "number>0,<=1",
+        "sustainTicks?": "integer>=0,<=100000",
+        "restTicks?": "integer>=0,<=100000",
+        "peakLevel?": "number>0,<=1",
+        "restLevel?": "number>=0,<=1",
+        "pressureDamping?": "number>=0,<=1",
+        "meta?": "object"
+      },
+      "output": {
+        "ok": "boolean",
+        "config": "{buildRate,fadeRate,sustainTicks,restTicks,peakLevel,restLevel,pressureDamping}"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "buildRate": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 1
+          },
+          "fadeRate": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 1
+          },
+          "sustainTicks": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000
+          },
+          "restTicks": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000
+          },
+          "peakLevel": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 1
+          },
+          "restLevel": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "pressureDamping": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "meta": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "director.start",
+      "version": "1.0.0",
+      "category": "agent",
+      "priority": "standard",
+      "description": "Start (or restart) the AI director from a fresh build_up. The host pumps director tick(simTick, pressure) each step and dispatches the returned directives.",
+      "permissions": [
+        "agent.write"
+      ],
+      "input": {
+        "meta?": "object"
+      },
+      "output": {
+        "ok": "boolean"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "meta": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "director.status",
+      "version": "1.0.0",
+      "category": "agent",
+      "priority": "standard",
+      "description": "Read the director's current phase, tension, and ticks left in the phase. Pure read.",
+      "permissions": [
+        "agent.read"
+      ],
+      "input": {},
+      "output": {
+        "running": "boolean",
+        "phase?": "enum(build_up|sustain|fade|rest)",
+        "tension?": "number",
+        "phaseTicksLeft?": "number"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "director.stop",
+      "version": "1.0.0",
+      "category": "agent",
+      "priority": "standard",
+      "description": "Stop the AI director (no-op if not running).",
+      "permissions": [
+        "agent.write"
+      ],
+      "input": {
+        "meta?": "object"
+      },
+      "output": {
+        "ok": "boolean",
+        "wasRunning": "boolean"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "meta": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "ecs.addComponent",
       "version": "1.0.0",
       "category": "ecs",
@@ -4195,8 +5873,8 @@
       "name": "ecs.updateComponent",
       "version": "1.0.0",
       "category": "ecs",
-      "priority": "standard",
-      "description": "Set an entity's position [x,y,z], rotation quaternion [x,y,z,w], or scale [x,y,z].",
+      "priority": "core",
+      "description": "Set an entity's position [x,y,z], rotation quaternion [x,y,z,w], or scale [x,y,z]. (To move/reposition an existing entity, scene.moveEntity is the friendlier tool.)",
       "permissions": [
         "ecs.modify"
       ],
@@ -4236,6 +5914,334 @@
           "entity",
           "component",
           "value"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "event.define",
+      "version": "1.0.0",
+      "category": "ecs",
+      "priority": "standard",
+      "description": "Register a world-level declarative EventSpec {trigger, action} (e.g. onTick/onEnterRegion/onInteract → emit/setBehavior/spawn). Stored in the world's event registry and carried by a self-sufficient snapshot; recorded through invoke so a replay rebuilds the same events. This is the FORMAT + registration; firing the events at runtime is a later phase.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "event": "{version,trigger,action}"
+      },
+      "output": {
+        "id": "string"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "event": {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "number",
+                "const": 1
+              },
+              "trigger": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "onTick"
+                      },
+                      "every": {
+                        "default": 1,
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "every"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "onEnterRegion"
+                      },
+                      "center": {
+                        "type": "array",
+                        "items": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ]
+                      },
+                      "radius": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "center",
+                      "radius"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "onInteract"
+                      },
+                      "entity": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "entity"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "action": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "emit"
+                      },
+                      "event": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "payload": {
+                        "default": {},
+                        "type": "object",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "additionalProperties": {}
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "event",
+                      "payload"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "setBehavior"
+                      },
+                      "entity": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "behavior": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "version": {
+                                "type": "number",
+                                "const": 1
+                              },
+                              "kind": {
+                                "type": "string",
+                                "const": "idle"
+                              }
+                            },
+                            "required": [
+                              "version",
+                              "kind"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "version": {
+                                "type": "number",
+                                "const": 1
+                              },
+                              "kind": {
+                                "type": "string",
+                                "const": "patrol"
+                              },
+                              "waypoints": {
+                                "minItems": 2,
+                                "type": "array",
+                                "items": {
+                                  "type": "array",
+                                  "items": [
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    },
+                                    {
+                                      "type": "number"
+                                    }
+                                  ]
+                                }
+                              },
+                              "speed": {
+                                "type": "number",
+                                "exclusiveMinimum": 0
+                              },
+                              "loop": {
+                                "default": true,
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "version",
+                              "kind",
+                              "waypoints",
+                              "speed",
+                              "loop"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "version": {
+                                "type": "number",
+                                "const": 1
+                              },
+                              "kind": {
+                                "type": "string",
+                                "const": "wander"
+                              },
+                              "radius": {
+                                "type": "number",
+                                "exclusiveMinimum": 0
+                              },
+                              "speed": {
+                                "type": "number",
+                                "exclusiveMinimum": 0
+                              }
+                            },
+                            "required": [
+                              "version",
+                              "kind",
+                              "radius",
+                              "speed"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "version": {
+                                "type": "number",
+                                "const": 1
+                              },
+                              "kind": {
+                                "type": "string",
+                                "const": "script"
+                              },
+                              "ref": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "params": {
+                                "default": {},
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "additionalProperties": {}
+                              }
+                            },
+                            "required": [
+                              "version",
+                              "kind",
+                              "ref",
+                              "params"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "entity",
+                      "behavior"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "const": "spawn"
+                      },
+                      "recipe": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "origin": {
+                        "type": "array",
+                        "items": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "recipe",
+                      "origin"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "required": [
+              "version",
+              "trigger",
+              "action"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "event"
         ],
         "additionalProperties": false
       }
@@ -4821,6 +6827,47 @@
       }
     },
     {
+      "name": "gazetteer.load",
+      "version": "1.0.0",
+      "category": "nav",
+      "priority": "standard",
+      "description": "Load the named-place index (gazetteer) from a compiled WorldMap asset so npc.goToPlace can resolve place ids to world positions. Reads the asset with the synchronous sandboxed op_read_asset (same as terrain.create) — never async I/O. REPLACES any previously-loaded gazetteer. A map with no gazetteer loads an empty index (count 0). Recorded + replay-safe: replay re-reads the same committed asset.",
+      "permissions": [
+        "nav.configure"
+      ],
+      "input": {
+        "mapAssetId": "string",
+        "meta?": "object"
+      },
+      "output": {
+        "ok": "boolean",
+        "count": "integer>=-9007199254740991,<=9007199254740991"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "mapAssetId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The compiled WorldMap asset (e.g. maps/<project>-<id>.worldmap.json) whose gazetteer to load into the runtime index."
+          },
+          "meta": {
+            "description": "Agent-supplied extension metadata.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "mapAssetId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "input.action",
       "version": "1.0.0",
       "category": "player",
@@ -5026,12 +7073,15 @@
       ],
       "input": {
         "afterEntity?": "string",
-        "limit": "integer>=0,<=500=100"
+        "entityVersion?": "integer>=0,<=9007199254740991",
+        "limit": "integer>=0,<=500=100",
+        "includeResources": "boolean=true",
+        "includeSkills": "boolean=true"
       },
       "output": {
-        "page": "{limit,totalEntities,nextAfterEntity}",
+        "page": "{limit,totalEntities,nextAfterEntity,entityVersion}",
         "world": "any",
-        "entities": "{entity,eid,generation,transform,tags,physics,resource}[]",
+        "entities": "{entity,eid,generation,parent,transform,tags,physics,resource,origin,material}[]",
         "agents": "any[]",
         "skills": "{name,version,category,permissions}[]",
         "permissions": "{caller,profiles}",
@@ -5045,15 +7095,30 @@
           "afterEntity": {
             "type": "string"
           },
+          "entityVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
           "limit": {
             "default": 100,
             "type": "integer",
             "minimum": 0,
             "maximum": 500
+          },
+          "includeResources": {
+            "default": true,
+            "type": "boolean"
+          },
+          "includeSkills": {
+            "default": true,
+            "type": "boolean"
           }
         },
         "required": [
-          "limit"
+          "limit",
+          "includeResources",
+          "includeSkills"
         ],
         "additionalProperties": false
       }
@@ -5102,7 +7167,7 @@
       "version": "1.0.0",
       "category": "interaction",
       "priority": "standard",
-      "description": "Drop an item from inventory into the world at the actor's position (or a specified position). Removes it from inventory and spawns a real world item entity, returning its id.",
+      "description": "Drop an item from inventory into the world at the actor's position (or a specified position). Removes it from inventory and spawns a real world item entity, returning its id. On failure returns ok:false with a `reason`.",
       "permissions": [
         "interaction.write"
       ],
@@ -5116,7 +7181,8 @@
       },
       "output": {
         "ok": "boolean",
-        "itemEntity?": "string"
+        "itemEntity?": "string",
+        "reason?": "string"
       },
       "input_schema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -5190,7 +7256,7 @@
       },
       "output": {
         "ok": "boolean",
-        "result?": "any"
+        "result?": "object"
       },
       "input_schema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -5271,7 +7337,7 @@
       "version": "1.0.0",
       "category": "interaction",
       "priority": "standard",
-      "description": "Pick up an item entity into an inventory slot. Destroys the world item entity. Requires an inventory on the actor.",
+      "description": "Pick up an item entity into an inventory slot. Destroys the world item entity. Requires an inventory on the actor. On failure returns ok:false with a `reason` the caller can act on.",
       "permissions": [
         "interaction.write"
       ],
@@ -5283,7 +7349,8 @@
       },
       "output": {
         "ok": "boolean",
-        "slot?": "number"
+        "slot?": "number",
+        "reason?": "string"
       },
       "input_schema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -5323,7 +7390,7 @@
       "name": "interaction.query",
       "version": "1.0.0",
       "category": "interaction",
-      "priority": "core",
+      "priority": "standard",
       "description": "Query interactable entities within range of a position (or the actor entity), sorted by distance. Uses the world spatial index over real entity transforms. Pure read — emits nothing.",
       "permissions": [
         "interaction.read"
@@ -5524,7 +7591,8 @@
       },
       "output": {
         "ok": "boolean",
-        "result?": "any"
+        "result?": "object",
+        "reason?": "string"
       },
       "input_schema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -6127,10 +8195,10 @@
     },
     {
       "name": "material.import",
-      "version": "1.0.0",
+      "version": "1.2.0",
       "category": "three",
       "priority": "standard",
-      "description": "Import a CC0 texture pack (albedo + optional normal + roughness images, BY content-addressed id) as a NAMED PBR material usable by scene.createEntity / three.setMaterial. Resolves + decodes the images through the content-addressed asset registry (bytes ride the export's assets.jsonl); the world log records only the import REQUEST (name + ids + committed hashes), never bytes. Optionally TRIPLANAR so the pack never UV-stretches on arbitrary primitives. Returns the name + pinned hashes.",
+      "description": "Import a CC0 texture pack (albedo + optional normal + roughness + ambient-occlusion images, BY content-addressed id) as a NAMED PBR material usable by scene.createEntity / three.setMaterial. Resolves + decodes the images through the content-addressed asset registry (bytes ride the export's assets.jsonl); the world log records only the import REQUEST (name + ids + committed hashes), never bytes. Optionally TRIPLANAR so the pack never UV-stretches on arbitrary primitives. Returns the name + pinned hashes.",
       "permissions": [
         "scene.write"
       ],
@@ -6139,6 +8207,9 @@
         "albedo": "string",
         "normal?": "string",
         "roughness?": "string",
+        "occlusion?": "string",
+        "displacement?": "string",
+        "occlusionStrength": "number>=0,<=1=1",
         "triplanar": "boolean=false",
         "scale": "number>0=0.5",
         "normalStrength": "number>=0=1",
@@ -6146,6 +8217,8 @@
         "metalness": "number>=0,<=1=0",
         "baseRoughness": "number>=0,<=1=0.85",
         "color?": "integer>=0,<=16777215",
+        "antiTiling": "boolean=false",
+        "parallax?": "{heightScale,minLayers,maxLayers,fadeStart,fadeEnd}",
         "hashes?": "object"
       },
       "output": {
@@ -6170,6 +8243,18 @@
           },
           "roughness": {
             "type": "string"
+          },
+          "occlusion": {
+            "type": "string"
+          },
+          "displacement": {
+            "type": "string"
+          },
+          "occlusionStrength": {
+            "default": 1,
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
           },
           "triplanar": {
             "default": false,
@@ -6207,6 +8292,53 @@
             "minimum": 0,
             "maximum": 16777215
           },
+          "antiTiling": {
+            "default": false,
+            "type": "boolean"
+          },
+          "parallax": {
+            "type": "object",
+            "properties": {
+              "heightScale": {
+                "default": 0.04,
+                "type": "number",
+                "minimum": 0,
+                "maximum": 0.2
+              },
+              "minLayers": {
+                "default": 8,
+                "type": "integer",
+                "minimum": 4,
+                "maximum": 16
+              },
+              "maxLayers": {
+                "default": 16,
+                "type": "integer",
+                "minimum": 8,
+                "maximum": 24
+              },
+              "fadeStart": {
+                "default": 20,
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "fadeEnd": {
+                "default": 40,
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 2000
+              }
+            },
+            "required": [
+              "heightScale",
+              "minLayers",
+              "maxLayers",
+              "fadeStart",
+              "fadeEnd"
+            ],
+            "additionalProperties": false
+          },
           "hashes": {
             "type": "object",
             "propertyNames": {
@@ -6220,12 +8352,14 @@
         "required": [
           "name",
           "albedo",
+          "occlusionStrength",
           "triplanar",
           "scale",
           "normalStrength",
           "sharpness",
           "metalness",
-          "baseRoughness"
+          "baseRoughness",
+          "antiTiling"
         ],
         "additionalProperties": false
       }
@@ -6661,6 +8795,86 @@
       }
     },
     {
+      "name": "npc.goToPlace",
+      "version": "1.0.0",
+      "category": "nav",
+      "priority": "core",
+      "description": "Advance an entity ONE deterministic navmesh step toward a NAMED place (resolved via the loaded gazetteer) instead of raw coordinates. Delegates to navmesh.moveTo (real A* / CCT) — the caller loops until `arrived`. The target keeps the entity's own height (the gazetteer is 2D), so movement is horizontal. Returns resolved:false (ok:false) when the place id is unknown or the gazetteer is not loaded.",
+      "permissions": [
+        "nav.write"
+      ],
+      "input": {
+        "entity": "string",
+        "placeId": "string",
+        "speed?": "number>0",
+        "dt?": "number>0",
+        "from?": "[number,number,number]",
+        "meta?": "object"
+      },
+      "output": {
+        "ok": "boolean",
+        "arrived": "boolean",
+        "resolved": "boolean",
+        "placeId": "string",
+        "position?": "[number,number,number]",
+        "remaining?": "number",
+        "target?": "[number,number,number]"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "entity": {
+            "type": "string",
+            "description": "Entity to navigate."
+          },
+          "placeId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Gazetteer place id to walk toward — resolved to its world position via the loaded gazetteer."
+          },
+          "speed": {
+            "description": "Movement speed (world units/second); forwarded to navmesh.moveTo.",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "dt": {
+            "description": "Integration timestep (seconds, default 1/60). Deterministic — never wall-clock.",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "from": {
+            "description": "Seed position for the FIRST step (when the entity has no body and no tracked position).",
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "meta": {
+            "description": "Agent-supplied extension metadata.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "entity",
+          "placeId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "npc.memorize",
       "version": "1.0.0",
       "category": "behavior",
@@ -6985,7 +9199,8 @@
       ],
       "input": {},
       "output": {
-        "events": "{started,bodyA,bodyB,entityA,entityB,point,normal}[]"
+        "events": "{started,bodyA,bodyB,entityA,entityB,point,normal}[]",
+        "dropped": "integer>=0,<=9007199254740991"
       },
       "input_schema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -7112,7 +9327,7 @@
       "version": "1.0.0",
       "category": "player",
       "priority": "core",
-      "description": "Trigger a jump on the player's character controller — only takes effect when grounded. Sets the controller's upward velocity (fed through move_character + gravity), NOT a force impulse (a kinematic body ignores impulses). Advances one fixed step; returns whether it jumped + the new position.",
+      "description": "Apply the player's vertical action for one fixed step: jump when grounded or accelerate toward the surface while swimming. Uses controller velocity, not a force impulse (kinematic bodies ignore impulses).",
       "permissions": [
         "player.write"
       ],
@@ -7123,7 +9338,10 @@
       "output": {
         "jumped": "boolean",
         "grounded": "boolean",
-        "newPosition": "[number,number,number]"
+        "newPosition": "[number,number,number]",
+        "swimming": "boolean",
+        "submerged": "boolean",
+        "waterMode": "enum(dry|wading|swimming)"
       },
       "input_schema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -7152,7 +9370,7 @@
       "version": "1.0.0",
       "category": "player",
       "priority": "core",
-      "description": "Advance a player's character controller ONE fixed step from an input command (forward/strafe axes rotated by yaw), resolving collisions, slopes, autostep, snap-to-ground, and gravity. Sprint (player.sprint) raises the speed; crouch (player.crouch) lowers it. Returns the corrected position + grounded.",
+      "description": "Advance a player's character controller ONE fixed step from an input command (forward/strafe axes rotated by yaw), resolving ground or swim movement. Sprint raises ground speed but is ignored while swimming; crouch lowers horizontal input. Returns position, grounded, and water state.",
       "permissions": [
         "player.write"
       ],
@@ -7168,7 +9386,10 @@
       "output": {
         "moved": "boolean",
         "grounded": "boolean",
-        "newPosition": "[number,number,number]"
+        "newPosition": "[number,number,number]",
+        "swimming": "boolean",
+        "submerged": "boolean",
+        "waterMode": "enum(dry|wading|swimming)"
       },
       "input_schema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -7238,12 +9459,16 @@
       ],
       "input": {
         "position": "[number,number,number]",
-        "halfHeight": "number>0=0.5",
-        "radius": "number>0=0.35",
-        "walkSpeed": "number>0=4.5",
-        "runSpeed": "number>0=8",
+        "halfHeight": "number>0=0.6",
+        "radius": "number>0=0.3",
+        "walkSpeed": "number>0=3",
+        "runSpeed": "number>0=6",
         "gravity": "number>0=22",
         "jumpSpeed": "number>0=8",
+        "swimSpeed": "number=3",
+        "buoyancyGain": "number=18",
+        "waterDrag": "number=6",
+        "maxSwimVerticalSpeed": "number=4",
         "crouchSpeedScale": "number>0,<=1=0.5",
         "meta?": "object"
       },
@@ -7251,7 +9476,10 @@
         "entity": "string",
         "bodyId": "number",
         "position": "[number,number,number]",
-        "grounded": "boolean"
+        "grounded": "boolean",
+        "swimming": "boolean",
+        "submerged": "boolean",
+        "waterMode": "enum(dry|wading|swimming)"
       },
       "input_schema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -7273,26 +9501,26 @@
             "description": "Spawn position — the capsule CENTER. Rest height = surfaceY + halfHeight + radius."
           },
           "halfHeight": {
-            "default": 0.5,
-            "description": "Capsule cylindrical half-height (excludes the radius caps).",
+            "default": 0.6,
+            "description": "Capsule cylindrical half-height (excludes the radius caps). 0.6 ⇒ ~1.8 m human with the 0.3 radius caps.",
             "type": "number",
             "exclusiveMinimum": 0
           },
           "radius": {
-            "default": 0.35,
+            "default": 0.3,
             "description": "Capsule radius.",
             "type": "number",
             "exclusiveMinimum": 0
           },
           "walkSpeed": {
-            "default": 4.5,
-            "description": "Ground walk speed (m/s).",
+            "default": 3,
+            "description": "Ground walk speed (m/s) — a natural human walk.",
             "type": "number",
             "exclusiveMinimum": 0
           },
           "runSpeed": {
-            "default": 8,
-            "description": "Run/sprint speed (m/s).",
+            "default": 6,
+            "description": "Run/sprint speed (m/s) — a brisk run (Shift).",
             "type": "number",
             "exclusiveMinimum": 0
           },
@@ -7307,6 +9535,26 @@
             "description": "Initial upward jump velocity (m/s).",
             "type": "number",
             "exclusiveMinimum": 0
+          },
+          "swimSpeed": {
+            "default": 3,
+            "description": "Horizontal swim speed (m/s); sprint is ignored while swimming.",
+            "type": "number"
+          },
+          "buoyancyGain": {
+            "default": 18,
+            "description": "Vertical spring gain toward the surface-relative float target (1/s^2).",
+            "type": "number"
+          },
+          "waterDrag": {
+            "default": 6,
+            "description": "Vertical damping while swimming (1/s).",
+            "type": "number"
+          },
+          "maxSwimVerticalSpeed": {
+            "default": 4,
+            "description": "Symmetric vertical swim-speed limit (m/s).",
+            "type": "number"
           },
           "crouchSpeedScale": {
             "default": 0.5,
@@ -7332,6 +9580,10 @@
           "runSpeed",
           "gravity",
           "jumpSpeed",
+          "swimSpeed",
+          "buoyancyGain",
+          "waterDrag",
+          "maxSwimVerticalSpeed",
           "crouchSpeedScale"
         ],
         "additionalProperties": false
@@ -7342,7 +9594,7 @@
       "version": "1.0.0",
       "category": "player",
       "priority": "standard",
-      "description": "Toggle sprint for a player entity. While on, player.move runs the controller at run speed (a real, faster move) instead of walk speed.",
+      "description": "Toggle sprint for a player entity. While on, ground movement uses run speed instead of walk speed; swimming deliberately ignores it.",
       "permissions": [
         "player.write"
       ],
@@ -8320,22 +10572,29 @@
       "version": "1.0.0",
       "category": "world",
       "priority": "standard",
-      "description": "Build the RENDER-ONLY post-processing pipeline (real depth+normal pre-pass → GTAO contact AO → highlight bloom → gentle HDR grade) on the live renderer/scene/camera and store it on world.post for the render loop to drive (post.render() in place of renderer.render). Returns the resolved preset + which stages are wired. STATIC/CINEMATIC-ONLY + OPT-IN: on this WebGPU windowed backend the composite does not reliably present a fresh frame per camera move, so use it for screenshots/fixed-camera shots (drive the bare renderer.render path for live navigation). Render-only: never touches the sim/log/replay.",
+      "description": "Build the RENDER-ONLY post-processing pipeline (real depth+normal pre-pass → GTAO contact AO → highlight bloom → gentle HDR grade) on the live renderer/scene/camera and store it on world.post for the render loop to drive (post.render() in place of renderer.render). A renderer-free headless authoring world accepts and records the command but defers pipeline creation until live replay. Returns the resolved preset and materialization status.",
       "permissions": [
         "scene.write"
       ],
       "input": {
         "ao?": "{enabled,radius,scale,distanceExponent,thickness,samples,resolutionScale,intensity}",
         "bloom?": "{enabled,strength,radius,threshold}",
-        "grade?": "{enabled,exposure,contrast,saturation}"
+        "grade?": "{enabled,exposure,contrast,saturation}",
+        "godrays?": "{enabled,density,maxDensity,distanceAttenuation,raymarchSteps,intensity}",
+        "dof?": "{enabled,focusDistance,focalLength,bokehScale}",
+        "outline?": "{enabled,strength}"
       },
       "output": {
         "enabled": "boolean",
+        "deferred": "boolean",
         "ao": "boolean",
         "bloom": "boolean",
         "grade": "boolean",
         "depth": "boolean",
         "normal": "boolean",
+        "godrays": "boolean",
+        "dof": "boolean",
+        "outline": "boolean",
         "preset": "any"
       },
       "input_schema": {
@@ -8405,6 +10664,62 @@
                 "type": "number"
               },
               "saturation": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false
+          },
+          "godrays": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "density": {
+                "type": "number"
+              },
+              "maxDensity": {
+                "type": "number"
+              },
+              "distanceAttenuation": {
+                "type": "number"
+              },
+              "raymarchSteps": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "intensity": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false
+          },
+          "dof": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "focusDistance": {
+                "type": "number"
+              },
+              "focalLength": {
+                "type": "number"
+              },
+              "bokehScale": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false
+          },
+          "outline": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "strength": {
                 "type": "number"
               }
             },
@@ -8588,12 +10903,12 @@
       "version": "1.0.0",
       "category": "scene",
       "priority": "core",
-      "description": "Create a renderable entity (box or sphere) at a position, optionally with a dynamic physics body. The `material` field accepts a palette name (optionally upgraded to procedural-PBR via `pbr: true`) or an imported texture-pack material name (material.import). Returns its entity id.",
+      "description": "Create a renderable entity (box, sphere, cylinder, cone, plane, capsule, or torus) at a position, optionally with a dynamic physics body. The `material` field accepts a palette name (optionally upgraded to procedural-PBR via `pbr: true`) or an imported texture-pack material name (material.import). Returns its entity id.",
       "permissions": [
         "scene.write"
       ],
       "input": {
-        "shape": "enum(box|sphere)=\"box\"",
+        "shape": "enum(box|sphere|cylinder|cone|plane|capsule|torus)=\"box\"",
         "collider?": "enum(box|sphere|capsule)",
         "size": "number>0,<=50=1",
         "material?": "string",
@@ -8603,7 +10918,9 @@
         "dynamic": "boolean=false",
         "static": "boolean=false",
         "friction": "number>=0,<=10=0.5",
-        "restitution": "number>=0,<=2=0"
+        "restitution": "number>=0,<=2=0",
+        "parent?": "string",
+        "tags?": "string[]"
       },
       "output": {
         "entity": "string"
@@ -8617,7 +10934,12 @@
             "type": "string",
             "enum": [
               "box",
-              "sphere"
+              "sphere",
+              "cylinder",
+              "cone",
+              "plane",
+              "capsule",
+              "torus"
             ]
           },
           "collider": {
@@ -8685,6 +11007,15 @@
             "type": "number",
             "minimum": 0,
             "maximum": 2
+          },
+          "parent": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -8697,6 +11028,457 @@
           "static",
           "friction",
           "restitution"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "scene.createMesh",
+      "version": "1.0.0",
+      "category": "scene",
+      "priority": "standard",
+      "description": "Create a renderable entity from a DECLARATIVE geometry spec — any parameterized primitive (box/sphere/cylinder/cone/plane/capsule/torus) or an `extrude` spec (a 2D profile [[x,y],...] swept to a depth) — so custom shapes are reachable with no shape-specific skill. Sets position/rotation/scale and material (palette name, optionally PBR, or an imported material); a sound axis-aligned box collider is derived from the geometry. Optional `seed` deterministically varies the geometry (per-vertex jitter) so a prefab can be stamped with per-instance variation. Deterministic + recorded. Returns its entity id.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "geometry": "{version,kind,width,height,depth}|{version,kind,radius,widthSegments,heightSegments}|{version,kind,radiusTop,radiusBottom,height,radialSegments}|{version,kind,radius,height,radialSegments}|{version,kind,width,height,widthSegments,heightSegments}|{version,kind,radius,length,capSegments,radialSegments}|{version,kind,radius,tube,radialSegments,tubularSegments}|{version,kind,profile,depth,steps}",
+        "position": "[number,number,number]=[0,0,0]",
+        "yaw?": "number",
+        "rotation?": "[number,number,number,number]",
+        "scale?": "number>0|[number>0,number>0,number>0]",
+        "material?": "string",
+        "pbr": "boolean=false",
+        "color": "integer>=0,<=16777215=16777215",
+        "seed?": "integer>=-9007199254740991,<=9007199254740991",
+        "parent?": "string",
+        "tags?": "string[]"
+      },
+      "output": {
+        "entity": "string"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "geometry": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "number",
+                    "const": 1
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "box"
+                  },
+                  "width": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "height": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "depth": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "required": [
+                  "version",
+                  "kind",
+                  "width",
+                  "height",
+                  "depth"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "number",
+                    "const": 1
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "sphere"
+                  },
+                  "radius": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "widthSegments": {
+                    "default": 24,
+                    "type": "integer",
+                    "minimum": 3,
+                    "maximum": 256
+                  },
+                  "heightSegments": {
+                    "default": 16,
+                    "type": "integer",
+                    "minimum": 2,
+                    "maximum": 256
+                  }
+                },
+                "required": [
+                  "version",
+                  "kind",
+                  "radius",
+                  "widthSegments",
+                  "heightSegments"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "number",
+                    "const": 1
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "cylinder"
+                  },
+                  "radiusTop": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "radiusBottom": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "height": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "radialSegments": {
+                    "default": 24,
+                    "type": "integer",
+                    "minimum": 3,
+                    "maximum": 256
+                  }
+                },
+                "required": [
+                  "version",
+                  "kind",
+                  "radiusTop",
+                  "radiusBottom",
+                  "height",
+                  "radialSegments"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "number",
+                    "const": 1
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "cone"
+                  },
+                  "radius": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "height": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "radialSegments": {
+                    "default": 24,
+                    "type": "integer",
+                    "minimum": 3,
+                    "maximum": 256
+                  }
+                },
+                "required": [
+                  "version",
+                  "kind",
+                  "radius",
+                  "height",
+                  "radialSegments"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "number",
+                    "const": 1
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "plane"
+                  },
+                  "width": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "height": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "widthSegments": {
+                    "default": 1,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 256
+                  },
+                  "heightSegments": {
+                    "default": 1,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 256
+                  }
+                },
+                "required": [
+                  "version",
+                  "kind",
+                  "width",
+                  "height",
+                  "widthSegments",
+                  "heightSegments"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "number",
+                    "const": 1
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "capsule"
+                  },
+                  "radius": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "length": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "capSegments": {
+                    "default": 8,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 256
+                  },
+                  "radialSegments": {
+                    "default": 16,
+                    "type": "integer",
+                    "minimum": 3,
+                    "maximum": 256
+                  }
+                },
+                "required": [
+                  "version",
+                  "kind",
+                  "radius",
+                  "length",
+                  "capSegments",
+                  "radialSegments"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "number",
+                    "const": 1
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "torus"
+                  },
+                  "radius": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "tube": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "radialSegments": {
+                    "default": 12,
+                    "type": "integer",
+                    "minimum": 3,
+                    "maximum": 256
+                  },
+                  "tubularSegments": {
+                    "default": 24,
+                    "type": "integer",
+                    "minimum": 3,
+                    "maximum": 256
+                  }
+                },
+                "required": [
+                  "version",
+                  "kind",
+                  "radius",
+                  "tube",
+                  "radialSegments",
+                  "tubularSegments"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "number",
+                    "const": 1
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "extrude"
+                  },
+                  "profile": {
+                    "minItems": 3,
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    }
+                  },
+                  "depth": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "steps": {
+                    "default": 1,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 256
+                  }
+                },
+                "required": [
+                  "version",
+                  "kind",
+                  "profile",
+                  "depth",
+                  "steps"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "position": {
+            "default": [
+              0,
+              0,
+              0
+            ],
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "yaw": {
+            "type": "number"
+          },
+          "rotation": {
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "scale": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "array",
+                "items": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                ]
+              }
+            ]
+          },
+          "material": {
+            "type": "string"
+          },
+          "pbr": {
+            "default": false,
+            "type": "boolean"
+          },
+          "color": {
+            "default": 16777215,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 16777215
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "parent": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "geometry",
+          "position",
+          "pbr",
+          "color"
         ],
         "additionalProperties": false
       }
@@ -8731,10 +11513,342 @@
       }
     },
     {
-      "name": "scene.queryEntities",
+      "name": "scene.duplicate",
+      "version": "1.0.0",
+      "category": "scene",
+      "priority": "standard",
+      "description": "Duplicate an entity (and its subtree) at an offset from the source, preserving the source's orientation/scale plus an optional extra yaw. A convenience over scene.group + scene.instantiateGroup. Recorded + replay-safe. Returns the copy's root + all created entity ids.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "entity": "string",
+        "offset": "[number,number,number]=[0,0,0]",
+        "yaw": "number=0",
+        "seed?": "integer>=-9007199254740991,<=9007199254740991"
+      },
+      "output": {
+        "root": "string",
+        "entities": "string[]"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "entity": {
+            "type": "string"
+          },
+          "offset": {
+            "default": [
+              0,
+              0,
+              0
+            ],
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "yaw": {
+            "default": 0,
+            "type": "number"
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "entity",
+          "offset",
+          "yaw"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "scene.group",
+      "version": "1.0.0",
+      "category": "scene",
+      "priority": "standard",
+      "description": "Capture an entity's subtree (its scene-hierarchy descendants) as a NAMED, reusable prefab recipe: each node's create-command + its transform relative to the root. scene.instantiateGroup then stamps the recipe many times. Recorded so replay rebuilds the recipe. Returns the recipe.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "root": "string",
+        "name": "string"
+      },
+      "output": {
+        "name": "string",
+        "nodeCount": "number",
+        "recipe": "{version,name,nodes}"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "root",
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "scene.inspect",
+      "version": "1.0.0",
+      "category": "scene",
+      "priority": "standard",
+      "description": "Summarize the whole scene for an agent to reason about: entity count, world AABB (min/max/center/size), a global tag census, and a small position sample. Pure read — the perception substrate for self-checking an authored world.",
+      "permissions": [
+        "scene.read"
+      ],
+      "input": {
+        "tag?": "string",
+        "sampleSize": "integer>=0,<=64=8"
+      },
+      "output": {
+        "entityCount": "number",
+        "bounds": "{min,max}|null",
+        "center": "[number,number,number]|null",
+        "size": "[number,number,number]|null",
+        "tagCounts": "object",
+        "sample": "{entity,position}[]"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "tag": {
+            "description": "Summarize only entities carrying this tag (the AABB/sample is over the filtered set; the tag census is always global).",
+            "type": "string"
+          },
+          "sampleSize": {
+            "default": 8,
+            "description": "How many entity positions to include in `sample` (for spot-checking placement).",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 64
+          }
+        },
+        "required": [
+          "sampleSize"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "scene.instantiateGroup",
+      "version": "1.0.0",
+      "category": "scene",
+      "priority": "standard",
+      "description": "Stamp a named prefab recipe (from scene.group) at a position/yaw/scale, re-creating its whole subtree wired with the same parenting. An optional `seed` reseeds seed-bearing parts so each instance varies (deterministic: same recipe+transform+seed → identical entities). Recorded + replay-safe. Returns the fresh root + all created entity ids.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "name": "string",
+        "position": "[number,number,number]=[0,0,0]",
+        "yaw": "number=0",
+        "scale?": "number>0|[number>0,number>0,number>0]",
+        "seed?": "integer>=-9007199254740991,<=9007199254740991"
+      },
+      "output": {
+        "root": "string",
+        "entities": "string[]"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "position": {
+            "default": [
+              0,
+              0,
+              0
+            ],
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "yaw": {
+            "default": 0,
+            "type": "number"
+          },
+          "scale": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "array",
+                "items": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                ]
+              }
+            ]
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "name",
+          "position",
+          "yaw"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "scene.moveEntity",
       "version": "1.0.0",
       "category": "scene",
       "priority": "core",
+      "description": "Move / re-orient / rescale an EXISTING entity: set its position [x,y,z] (absolute, or relative:true for an offset), turn it (yaw radians about +Y, or a full rotation quaternion), and/or rescale it (uniform number or [x,y,z]). This is how you reposition entities after creating them.",
+      "permissions": [
+        "ecs.modify"
+      ],
+      "input": {
+        "entity": "string",
+        "position?": "[number,number,number]",
+        "relative": "boolean=false",
+        "yaw?": "number",
+        "rotation?": "[number,number,number,number]",
+        "scale?": "number>0|[number>0,number>0,number>0]"
+      },
+      "output": {
+        "entity": "string",
+        "position": "[number,number,number]"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "entity": {
+            "type": "string"
+          },
+          "position": {
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "relative": {
+            "default": false,
+            "type": "boolean"
+          },
+          "yaw": {
+            "type": "number"
+          },
+          "rotation": {
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "scale": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "array",
+                "items": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "entity",
+          "relative"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "scene.queryEntities",
+      "version": "1.0.0",
+      "category": "scene",
+      "priority": "standard",
       "description": "List entities, optionally filtered by tag and/or within a radius of a point. Returns ids, positions, distances.",
       "permissions": [
         "scene.read"
@@ -8777,6 +11891,52 @@
       }
     },
     {
+      "name": "scene.reparent",
+      "version": "1.0.0",
+      "category": "scene",
+      "priority": "standard",
+      "description": "Set or clear an entity's scene-hierarchy parent. keepWorldTransform (default true) keeps the child in place; parent=null unparents to the world root. Moving a parent later propagates to its children.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "entity": "string",
+        "parent?": "string|null",
+        "keepWorldTransform": "boolean=true"
+      },
+      "output": {
+        "ok": "boolean"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "entity": {
+            "type": "string"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "keepWorldTransform": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "entity",
+          "keepWorldTransform"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "skills.browse",
       "version": "1.0.0",
       "category": "system",
@@ -8814,7 +11974,7 @@
       "name": "skills.describe",
       "version": "1.0.0",
       "category": "system",
-      "priority": "core",
+      "priority": "standard",
       "description": "Describe a skill: version, category, and JSON-Schema input.",
       "permissions": [],
       "input": {
@@ -8845,7 +12005,7 @@
       "name": "skills.list",
       "version": "1.0.0",
       "category": "system",
-      "priority": "core",
+      "priority": "standard",
       "description": "List the skills the caller is authorized to invoke (names + descriptions). `mode:\"bootstrap\"` returns only the small CORE surface an agent starts with (discover the rest via skills.search/browse); `mode:\"full\"` (default) lists everything authorized.",
       "permissions": [],
       "input": {
@@ -9439,6 +12599,415 @@
       }
     },
     {
+      "name": "terrain.create",
+      "version": "1.0.0",
+      "category": "terrain",
+      "priority": "core",
+      "description": "Create an editable heightfield terrain layer — a flat, deformable/paintable ground grid — as a world entity. Reshape it with terrain.deform. Records its params so it replays; heights are meters relative to origin.y. generate.source: 'map' rasterizes a committed WorldMap IR instead of the procedural generator.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "size": "number>0,<=8192=256",
+        "resolution": "integer>=2,<=1025=129",
+        "origin": "[number,number,number]=[0,0,0]",
+        "baseHeight": "number=0",
+        "color": "integer>=0,<=16777215=4877114",
+        "generate?": "{seed,amplitude,seaCoverage,noiseScale,octaves,lacunarity,gain,warp,erosion,source,mapAssetId}",
+        "mapHash?": "string"
+      },
+      "output": {
+        "entity": "string",
+        "mapHash?": "string"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "size": {
+            "default": 256,
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 8192
+          },
+          "resolution": {
+            "default": 129,
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 1025
+          },
+          "origin": {
+            "default": [
+              0,
+              0,
+              0
+            ],
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "baseHeight": {
+            "default": 0,
+            "type": "number"
+          },
+          "color": {
+            "default": 4877114,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 16777215
+          },
+          "generate": {
+            "type": "object",
+            "properties": {
+              "seed": {
+                "default": 1337,
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "amplitude": {
+                "default": 14,
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "seaCoverage": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "noiseScale": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "octaves": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 12
+              },
+              "lacunarity": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "gain": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "warp": {
+                "type": "number",
+                "minimum": 0
+              },
+              "erosion": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "rain": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "thermal": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "talus": {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "schema": {
+                            "type": "string",
+                            "const": "limina.erosion-recipe/v1"
+                          },
+                          "enabled": {
+                            "type": "boolean",
+                            "const": false
+                          }
+                        },
+                        "required": [
+                          "schema",
+                          "enabled"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "schema": {
+                            "type": "string",
+                            "const": "limina.erosion-recipe/v1"
+                          },
+                          "enabled": {
+                            "type": "boolean",
+                            "const": true
+                          },
+                          "rain": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 2
+                          },
+                          "thermal": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 32
+                          },
+                          "talus": {
+                            "type": "number",
+                            "minimum": 0.000001,
+                            "maximum": 10000
+                          },
+                          "lifetime": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 64
+                          },
+                          "capacity": {
+                            "type": "number",
+                            "minimum": 0.01,
+                            "maximum": 64
+                          },
+                          "deposition": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          },
+                          "erosionRate": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        },
+                        "required": [
+                          "schema",
+                          "enabled",
+                          "rain",
+                          "thermal",
+                          "talus",
+                          "lifetime",
+                          "capacity",
+                          "deposition",
+                          "erosionRate"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                ]
+              },
+              "source": {
+                "default": "procedural",
+                "type": "string",
+                "enum": [
+                  "procedural",
+                  "map"
+                ]
+              },
+              "mapAssetId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "seed",
+              "amplitude",
+              "source"
+            ],
+            "additionalProperties": false
+          },
+          "mapHash": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "size",
+          "resolution",
+          "origin",
+          "baseHeight",
+          "color"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "terrain.deform",
+      "version": "1.0.0",
+      "category": "terrain",
+      "priority": "standard",
+      "description": "Reshape an editable terrain layer with a brush stamp (raise/lower/smooth/flatten/noise) in a world-space radius. Deterministic + recorded, so hand-sculpted terrain replays and is editable.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "entity?": "string",
+        "center": "[number,number]",
+        "radius": "number>0",
+        "delta": "number=1",
+        "mode": "enum(raise|lower|smooth|flatten|noise)=\"raise\"",
+        "falloff": "enum(smooth|linear|constant)=\"smooth\""
+      },
+      "output": {
+        "ok": "boolean"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "entity": {
+            "type": "string"
+          },
+          "center": {
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "radius": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "delta": {
+            "default": 1,
+            "type": "number"
+          },
+          "mode": {
+            "default": "raise",
+            "type": "string",
+            "enum": [
+              "raise",
+              "lower",
+              "smooth",
+              "flatten",
+              "noise"
+            ]
+          },
+          "falloff": {
+            "default": "smooth",
+            "type": "string",
+            "enum": [
+              "smooth",
+              "linear",
+              "constant"
+            ]
+          }
+        },
+        "required": [
+          "center",
+          "radius",
+          "delta",
+          "mode",
+          "falloff"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "terrain.paint",
+      "version": "1.0.0",
+      "category": "terrain",
+      "priority": "standard",
+      "description": "Paint a surface material (sand/grass/rock/dirt) onto an editable terrain layer with a brush in a world-space radius. Blends a per-vertex material weight into the ground shading; deterministic + recorded so painted ground replays. Does NOT change height (pair with terrain.deform).",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "entity?": "string",
+        "center": "[number,number]",
+        "radius": "number>0",
+        "strength": "number>=0,<=1=0.5",
+        "falloff": "enum(smooth|linear|constant)=\"smooth\"",
+        "material": "enum(sand|grass|rock|dirt|snow|murk|tundra)=\"grass\"",
+        "erase": "boolean=false"
+      },
+      "output": {
+        "ok": "boolean"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "entity": {
+            "type": "string"
+          },
+          "center": {
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "radius": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "strength": {
+            "default": 0.5,
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "falloff": {
+            "default": "smooth",
+            "type": "string",
+            "enum": [
+              "smooth",
+              "linear",
+              "constant"
+            ]
+          },
+          "material": {
+            "default": "grass",
+            "type": "string",
+            "enum": [
+              "sand",
+              "grass",
+              "rock",
+              "dirt",
+              "snow",
+              "murk",
+              "tundra"
+            ]
+          },
+          "erase": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "center",
+          "radius",
+          "strength",
+          "falloff",
+          "material",
+          "erase"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "terrain.sampleClimate",
       "version": "1.0.0",
       "category": "terrain",
@@ -9541,6 +13110,167 @@
       }
     },
     {
+      "name": "three.addLight",
+      "version": "1.0.0",
+      "category": "three",
+      "priority": "standard",
+      "description": "Add one directional/point/spot light to the scene (on top of setLighting's single ambient+directional pair) and return its id for later three.removeLight. Supports color/intensity, position, a directional/spot target, point/spot range+decay, spot angle+penumbra, and real shadow-map casting.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "kind": "enum(directional|point|spot)",
+        "color": "integer>=0,<=16777215=16777215",
+        "intensity": "number>=0,<=100=1",
+        "position": "[number,number,number]=[0,0,0]",
+        "target?": "[number,number,number]",
+        "distance": "number>=0=0",
+        "decay": "number>=0=2",
+        "angle": "number>=0,<=1.5707963267948966=1.0471975511965976",
+        "penumbra": "number>=0,<=1=0",
+        "castShadow": "boolean=false",
+        "shadowMapSize": "integer>=256,<=4096=1024",
+        "shadowCameraExtent": "number>0,<=500=20",
+        "shadowCameraNear": "number>0=0.5",
+        "shadowCameraFar": "number>0=120",
+        "shadowBias": "number>=-0.01,<=0.01=-0.0008"
+      },
+      "output": {
+        "ok": "boolean",
+        "id": "string"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "directional",
+              "point",
+              "spot"
+            ]
+          },
+          "color": {
+            "default": 16777215,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 16777215
+          },
+          "intensity": {
+            "default": 1,
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "position": {
+            "default": [
+              0,
+              0,
+              0
+            ],
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "target": {
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "distance": {
+            "default": 0,
+            "type": "number",
+            "minimum": 0
+          },
+          "decay": {
+            "default": 2,
+            "type": "number",
+            "minimum": 0
+          },
+          "angle": {
+            "default": 1.0471975511965976,
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1.5707963267948966
+          },
+          "penumbra": {
+            "default": 0,
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "castShadow": {
+            "default": false,
+            "type": "boolean"
+          },
+          "shadowMapSize": {
+            "default": 1024,
+            "type": "integer",
+            "minimum": 256,
+            "maximum": 4096
+          },
+          "shadowCameraExtent": {
+            "default": 20,
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 500
+          },
+          "shadowCameraNear": {
+            "default": 0.5,
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "shadowCameraFar": {
+            "default": 120,
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "shadowBias": {
+            "default": -0.0008,
+            "type": "number",
+            "minimum": -0.01,
+            "maximum": 0.01
+          }
+        },
+        "required": [
+          "kind",
+          "color",
+          "intensity",
+          "position",
+          "distance",
+          "decay",
+          "angle",
+          "penumbra",
+          "castShadow",
+          "shadowMapSize",
+          "shadowCameraExtent",
+          "shadowCameraNear",
+          "shadowCameraFar",
+          "shadowBias"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "three.loadGLTF",
       "version": "1.0.0",
       "category": "three",
@@ -9587,6 +13317,35 @@
         "required": [
           "assetId",
           "position"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "three.removeLight",
+      "version": "1.0.0",
+      "category": "three",
+      "priority": "standard",
+      "description": "Remove a light previously added via three.addLight, by its id.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "id": "string"
+      },
+      "output": {
+        "ok": "boolean"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
         ],
         "additionalProperties": false
       }
@@ -17685,6 +21444,477 @@
       }
     },
     {
+      "name": "vegetation.grassField",
+      "version": "1.0.0",
+      "category": "terrain",
+      "priority": "standard",
+      "description": "Create a deterministic, bounded, paint-driven grass field using native WebGPU compute when available and the canonical CPU field plan otherwise.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "terrain?": "string",
+        "seed": "integer>=-2147483648,<=2147483647=1337",
+        "spacing": "number>0=0.75",
+        "tileSize": "number>0=24",
+        "elevationMin?": "number",
+        "elevationMax?": "number",
+        "slopeMax": "number>=0=0.9",
+        "sizeRange": "[number>=0,number>=0]=[0.7,1.3]",
+        "climate": "enum(summer|autumn|dry|winter)=\"summer\""
+      },
+      "output": {
+        "entity": "string",
+        "gridTiles": "integer>=-9007199254740991,<=9007199254740991",
+        "candidateSlots": "integer>=-9007199254740991,<=9007199254740991",
+        "planHash": "string"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "terrain": {
+            "type": "string"
+          },
+          "seed": {
+            "default": 1337,
+            "type": "integer",
+            "minimum": -2147483648,
+            "maximum": 2147483647
+          },
+          "spacing": {
+            "default": 0.75,
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "tileSize": {
+            "default": 24,
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "elevationMin": {
+            "type": "number"
+          },
+          "elevationMax": {
+            "type": "number"
+          },
+          "slopeMax": {
+            "default": 0.9,
+            "type": "number",
+            "minimum": 0
+          },
+          "sizeRange": {
+            "default": [
+              0.7,
+              1.3
+            ],
+            "type": "array",
+            "items": [
+              {
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "type": "number",
+                "minimum": 0
+              }
+            ]
+          },
+          "climate": {
+            "default": "summer",
+            "type": "string",
+            "enum": [
+              "summer",
+              "autumn",
+              "dry",
+              "winter"
+            ]
+          }
+        },
+        "required": [
+          "seed",
+          "spacing",
+          "tileSize",
+          "slopeMax",
+          "sizeRange",
+          "climate"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "vegetation.plant",
+      "version": "1.0.0",
+      "category": "terrain",
+      "priority": "standard",
+      "description": "Plant a SINGLE tree of a species (spruce/pine/birch) at a point — the per-tree counterpart to vegetation.scatter. A light single entity (works where a full forest is too heavy), for composing a scene tree by tree. Deterministic + recorded.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "species": "enum(spruce|pine|birch|oak|ash|dead-oak)=\"spruce\"",
+        "assets?": "{id,weight,treeLod}[]",
+        "position?": "[number,number,number]",
+        "terrain?": "string",
+        "seed": "integer>=-9007199254740991,<=9007199254740991=1",
+        "scale": "number>0=1",
+        "yaw": "number=0",
+        "tags?": "string[]"
+      },
+      "output": {
+        "entity": "string",
+        "assetId": "string",
+        "assetHash": "string"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "species": {
+            "default": "spruce",
+            "type": "string",
+            "enum": [
+              "spruce",
+              "pine",
+              "birch",
+              "oak",
+              "ash",
+              "dead-oak"
+            ]
+          },
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "weight": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "treeLod": {
+                  "type": "object",
+                  "properties": {
+                    "reducedId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "reducedDistance": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "impostorId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "impostorDistance": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "cullDistance": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "hysteresis": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "reducedId",
+                    "reducedDistance",
+                    "impostorId",
+                    "impostorDistance",
+                    "cullDistance"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "position": {
+            "type": "array",
+            "items": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "terrain": {
+            "type": "string"
+          },
+          "seed": {
+            "default": 1,
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "scale": {
+            "default": 1,
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "yaw": {
+            "default": 0,
+            "type": "number"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "species",
+          "seed",
+          "scale",
+          "yaw"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "vegetation.scatter",
+      "version": "1.0.0",
+      "category": "terrain",
+      "priority": "core",
+      "description": "Scatter a forest of tree archetypes across an editable terrain layer, gated by slope + elevation (tree line), deterministic + recorded. Instanced trees sit on the sculpted ground. Returns the forest entity + instance count.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "terrain?": "string",
+        "species?": "enum(spruce|pine|birch|oak|ash|dead-oak)[]",
+        "assets?": "{id,weight,treeLod}[]",
+        "density": "integer>=1,<=192=16",
+        "seed": "integer>=-9007199254740991,<=9007199254740991=1337",
+        "elevationMin?": "number",
+        "elevationMax?": "number",
+        "slopeMax": "number>=0=0.85",
+        "sizeRange": "[number>0,number>0]=[0.7,1.35]",
+        "coverage": "number>=0,<=1=0.9",
+        "cluster": "number>=0,<=1=0.45",
+        "exclusions?": "{x,z,r}[]",
+        "inclusions?": "{x,z,r}[]",
+        "tags?": "string[]"
+      },
+      "output": {
+        "entity": "string",
+        "instances": "integer>=-9007199254740991,<=9007199254740991",
+        "assetHashes": "object",
+        "placements": "any[]"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "terrain": {
+            "type": "string"
+          },
+          "species": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "spruce",
+                "pine",
+                "birch",
+                "oak",
+                "ash",
+                "dead-oak"
+              ]
+            }
+          },
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "weight": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "treeLod": {
+                  "type": "object",
+                  "properties": {
+                    "reducedId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "reducedDistance": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "impostorId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "impostorDistance": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "cullDistance": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "hysteresis": {
+                      "type": "number",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "reducedId",
+                    "reducedDistance",
+                    "impostorId",
+                    "impostorDistance",
+                    "cullDistance"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "density": {
+            "default": 16,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 192
+          },
+          "seed": {
+            "default": 1337,
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "elevationMin": {
+            "type": "number"
+          },
+          "elevationMax": {
+            "type": "number"
+          },
+          "slopeMax": {
+            "default": 0.85,
+            "type": "number",
+            "minimum": 0
+          },
+          "sizeRange": {
+            "default": [
+              0.7,
+              1.35
+            ],
+            "type": "array",
+            "items": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            ]
+          },
+          "coverage": {
+            "default": 0.9,
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "cluster": {
+            "default": 0.45,
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "exclusions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "number"
+                },
+                "z": {
+                  "type": "number"
+                },
+                "r": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "x",
+                "z",
+                "r"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "inclusions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "type": "number"
+                },
+                "z": {
+                  "type": "number"
+                },
+                "r": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "x",
+                "z",
+                "r"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "density",
+          "seed",
+          "slopeMax",
+          "sizeRange",
+          "coverage",
+          "cluster"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "vfx.atPosition",
       "version": "1.0.0",
       "category": "vfx",
@@ -18152,6 +22382,492 @@
       }
     },
     {
+      "name": "village.build",
+      "version": "1.0.0",
+      "category": "three",
+      "priority": "standard",
+      "description": "Lay a terrain-aware settlement onto an editable terrain layer by placing curated library GLB assets. Reads the live heightfield, runs the shared deterministic layout planner (focal on the chosen ground, cluster terraced below, edge building beyond), and invokes asset.place per building. Deterministic + replay-safe: the world log records the direction + steering + seed + PINNED asset hashes, NEVER the transforms, which replay recomputes. Returns the placed entities + computed placements.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "direction": "{palette,mood,setting,artStyle}={}",
+        "steering": "{buildings,layout,siting,anchors}",
+        "seed?": "integer>=-9007199254740991,<=9007199254740991",
+        "terrainEntity?": "string",
+        "assetHashes?": "object"
+      },
+      "output": {
+        "terrainEntity": "string",
+        "placed": "integer>=-9007199254740991,<=9007199254740991",
+        "assetHashes": "object",
+        "entities": "string[]",
+        "placements": "{assetId,role,style,x,y,z,yaw,anchorId}[]"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "direction": {
+            "default": {},
+            "type": "object",
+            "properties": {
+              "palette": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "mood": {
+                "type": "string"
+              },
+              "setting": {
+                "type": "string"
+              },
+              "artStyle": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": {}
+          },
+          "steering": {
+            "type": "object",
+            "properties": {
+              "buildings": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "role": {
+                      "type": "string"
+                    },
+                    "style": {
+                      "type": "string"
+                    },
+                    "assetId": {
+                      "type": "string"
+                    },
+                    "count": {
+                      "default": 1,
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    "kit": {
+                      "type": "boolean"
+                    },
+                    "sizeM": {
+                      "type": "array",
+                      "items": [
+                        {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        },
+                        {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        }
+                      ]
+                    },
+                    "archetype": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "role",
+                    "style",
+                    "count"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "layout": {
+                "default": {},
+                "type": "object",
+                "properties": {
+                  "focal": {
+                    "type": "string"
+                  },
+                  "density": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "siting": {
+                "type": "object",
+                "properties": {
+                  "terrace": {
+                    "default": "minimal",
+                    "type": "string",
+                    "enum": [
+                      "minimal",
+                      "graded",
+                      "plaza"
+                    ]
+                  },
+                  "yard": {
+                    "default": "lawn",
+                    "type": "string",
+                    "enum": [
+                      "lawn",
+                      "none",
+                      "earth",
+                      "cobble-courtyard"
+                    ]
+                  },
+                  "lawnVegetation": {
+                    "default": [],
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "weight": {
+                          "default": 1,
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "weight"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "lane": {
+                    "default": "dirt",
+                    "type": "string",
+                    "enum": [
+                      "dirt",
+                      "gravel",
+                      "cobble",
+                      "none"
+                    ]
+                  },
+                  "clearing": {
+                    "default": "none",
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "commons"
+                    ]
+                  },
+                  "clearingMargin": {
+                    "default": 10,
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 60
+                  }
+                },
+                "required": [
+                  "terrace",
+                  "yard",
+                  "lawnVegetation",
+                  "lane",
+                  "clearing",
+                  "clearingMargin"
+                ],
+                "additionalProperties": false
+              },
+              "anchors": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "type": "array",
+                      "items": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "role": {
+                      "type": "string"
+                    },
+                    "assetId": {
+                      "type": "string"
+                    },
+                    "count": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "position"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "buildings",
+              "layout",
+              "siting"
+            ],
+            "additionalProperties": false
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "terrainEntity": {
+            "type": "string"
+          },
+          "assetHashes": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "direction",
+          "steering"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "world.addMapRivers",
+      "version": "1.0.0",
+      "category": "world",
+      "priority": "standard",
+      "description": "Render every waterway in a validated WorldMap asset as terrain-following river ribbons without duplicating its centerline data in authoring source.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "mapAssetId": "string",
+        "mapHash?": "string",
+        "widthScale": "number>0,<=10=1",
+        "color?": "integer>=0,<=16777215",
+        "level?": "number",
+        "terrainEntity?": "string"
+      },
+      "output": {
+        "rivers": "integer>=-9007199254740991,<=9007199254740991",
+        "points": "integer>=-9007199254740991,<=9007199254740991",
+        "mapHash": "string"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "mapAssetId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mapHash": {
+            "type": "string"
+          },
+          "widthScale": {
+            "default": 1,
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 10
+          },
+          "color": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 16777215
+          },
+          "level": {
+            "type": "number"
+          },
+          "terrainEntity": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mapAssetId",
+          "widthScale"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "world.addMapWater",
+      "version": "1.0.0",
+      "category": "world",
+      "priority": "standard",
+      "description": "Mount the verified WorldMap ocean, standing WaterBodies, and waterways as one idempotent render-only water set.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "mapAssetId": "string",
+        "mapHash?": "string",
+        "widthScale": "number>0,<=10=1",
+        "color?": "integer>=0,<=16777215",
+        "level?": "number",
+        "terrainEntity?": "string"
+      },
+      "output": {
+        "ocean": "integer>=-9007199254740991,<=9007199254740991",
+        "bodies": "integer>=-9007199254740991,<=9007199254740991",
+        "rivers": "integer>=-9007199254740991,<=9007199254740991",
+        "points": "integer>=-9007199254740991,<=9007199254740991",
+        "mapHash": "string"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "mapAssetId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "mapHash": {
+            "type": "string"
+          },
+          "widthScale": {
+            "default": 1,
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 10
+          },
+          "color": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 16777215
+          },
+          "level": {
+            "type": "number"
+          },
+          "terrainEntity": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mapAssetId",
+          "widthScale"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "world.addRiver",
+      "version": "1.0.0",
+      "category": "world",
+      "priority": "standard",
+      "description": "Add a RENDER-ONLY river: a water ribbon draped along a carved channel polyline, following the terrain (a flat sea plane cannot render a river crossing elevated ground). Cosmetic only — no physics body, no ECS entity, replay rebuilds it from the logged request.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "points": "[number>=-10000000,<=10000000,number>=-10000000,<=10000000][]",
+        "widthM": "number>0,<=100000=6",
+        "widths?": "number>0,<=100000[]",
+        "class": "enum(river|stream)=\"river\"",
+        "order?": "integer>=1,<=12",
+        "color?": "integer>=-9007199254740991,<=9007199254740991",
+        "level?": "number",
+        "terrainEntity?": "string"
+      },
+      "output": {
+        "points": "integer>=-9007199254740991,<=9007199254740991",
+        "widthM": "number",
+        "level": "number"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "points": {
+            "minItems": 2,
+            "maxItems": 8192,
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": [
+                {
+                  "type": "number",
+                  "minimum": -10000000,
+                  "maximum": 10000000
+                },
+                {
+                  "type": "number",
+                  "minimum": -10000000,
+                  "maximum": 10000000
+                }
+              ]
+            }
+          },
+          "widthM": {
+            "default": 6,
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 100000
+          },
+          "widths": {
+            "minItems": 2,
+            "maxItems": 8192,
+            "type": "array",
+            "items": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 100000
+            }
+          },
+          "class": {
+            "default": "river",
+            "type": "string",
+            "enum": [
+              "river",
+              "stream"
+            ]
+          },
+          "order": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 12
+          },
+          "color": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "level": {
+            "type": "number"
+          },
+          "terrainEntity": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "points",
+          "widthM",
+          "class"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "world.addWater",
       "version": "1.0.0",
       "category": "world",
@@ -18161,10 +22877,11 @@
         "scene.write"
       ],
       "input": {
-        "level": "number=0",
+        "level?": "number",
         "size": "number>0,<=100000=400",
         "color": "integer>=0,<=16777215=2841970",
-        "region?": "{seed,type,bounds,hints,resolution}"
+        "region?": "{seed,type,bounds,hints,resolution}",
+        "terrainEntity?": "string"
       },
       "output": {
         "level": "number",
@@ -18176,7 +22893,6 @@
         "type": "object",
         "properties": {
           "level": {
-            "default": 0,
             "type": "number"
           },
           "size": {
@@ -18255,10 +22971,12 @@
               "bounds"
             ],
             "additionalProperties": false
+          },
+          "terrainEntity": {
+            "type": "string"
           }
         },
         "required": [
-          "level",
           "size",
           "color"
         ],
@@ -18526,7 +23244,7 @@
       "name": "world.populateBiome",
       "version": "1.0.0",
       "category": "world",
-      "priority": "core",
+      "priority": "standard",
       "description": "Scatter a terrain TYPE's biome content (trees/rocks/grass/cacti/palms, biome- and elevation-gated) over an ALREADY-GENERATED region (by regionId), via the deterministic asset.scatter seam. Surveys the region's relief with the hints it was generated with, resolves the type's content layers, and drives asset.scatter per layer. Deterministic + replay-safe: the world log records THIS request; the nested asset.scatter calls are recomputed on replay (no double-record). Returns the placement count + per-layer summary.",
       "permissions": [
         "scene.write"
@@ -18536,7 +23254,9 @@
         "type?": "enum(beach|mountains|forest|desert|plains|hills|islands)",
         "waterLevel?": "number",
         "waterMargin?": "number",
-        "seed?": "integer>=-9007199254740991,<=9007199254740991"
+        "cellSize?": "number>0",
+        "seed?": "integer>=-9007199254740991,<=9007199254740991",
+        "biomePack?": "object"
       },
       "output": {
         "regionId": "string",
@@ -18570,10 +23290,109 @@
           "waterMargin": {
             "type": "number"
           },
+          "cellSize": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
           "seed": {
             "type": "integer",
             "minimum": -9007199254740991,
             "maximum": 9007199254740991
+          },
+          "biomePack": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "enum": [
+                "conifer",
+                "broadleaf",
+                "boulder",
+                "bush",
+                "grass",
+                "cactus",
+                "palm"
+              ]
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "embedRadius": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "lods": {
+                  "minItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "distance": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "hysteresis": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "distance"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "treeLod": {
+                  "type": "object",
+                  "properties": {
+                    "reducedId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "reducedDistance": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "impostorId": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "impostorDistance": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "cullDistance": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    },
+                    "hysteresis": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  },
+                  "required": [
+                    "reducedId",
+                    "reducedDistance",
+                    "impostorId",
+                    "impostorDistance",
+                    "cullDistance"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -18628,6 +23447,144 @@
         },
         "required": [
           "position"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "world.setTerrainSource",
+      "version": "1.0.0",
+      "category": "world",
+      "priority": "standard",
+      "description": "Bind the streamed-terrain source for this world: kind 'map' resolves + verifies a committed WorldMap IR asset and records its raster seed, amplitude, and optional versioned master-erosion recipe; omission preserves legacy no-erosion bytes. Replay reconstructs the same once-baked MapTerrainSource. kind 'procedural' restores the default generator. Must run BEFORE any world.generateRegion. Map tiles sample the baked master and are never export-retained.",
+      "permissions": [
+        "scene.write"
+      ],
+      "input": {
+        "kind": "enum(procedural|map)",
+        "mapAssetId?": "string",
+        "hash?": "string",
+        "seed?": "integer>=-2147483648,<=2147483647",
+        "baseAmplitude?": "number>0",
+        "erosion?": "{schema,enabled}|{schema,enabled,rain,thermal,talus,lifetime,capacity,deposition,erosionRate}"
+      },
+      "output": {
+        "kind": "enum(procedural|map)",
+        "source": "string",
+        "hash?": "string"
+      },
+      "input_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "procedural",
+              "map"
+            ]
+          },
+          "mapAssetId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "hash": {
+            "type": "string"
+          },
+          "seed": {
+            "type": "integer",
+            "minimum": -2147483648,
+            "maximum": 2147483647
+          },
+          "baseAmplitude": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "erosion": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "schema": {
+                    "type": "string",
+                    "const": "limina.erosion-recipe/v1"
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "const": false
+                  }
+                },
+                "required": [
+                  "schema",
+                  "enabled"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "schema": {
+                    "type": "string",
+                    "const": "limina.erosion-recipe/v1"
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "const": true
+                  },
+                  "rain": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 2
+                  },
+                  "thermal": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 32
+                  },
+                  "talus": {
+                    "type": "number",
+                    "minimum": 0.000001,
+                    "maximum": 10000
+                  },
+                  "lifetime": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 64
+                  },
+                  "capacity": {
+                    "type": "number",
+                    "minimum": 0.01,
+                    "maximum": 64
+                  },
+                  "deposition": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "erosionRate": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                },
+                "required": [
+                  "schema",
+                  "enabled",
+                  "rain",
+                  "thermal",
+                  "talus",
+                  "lifetime",
+                  "capacity",
+                  "deposition",
+                  "erosionRate"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind"
         ],
         "additionalProperties": false
       }

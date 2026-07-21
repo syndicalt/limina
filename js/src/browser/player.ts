@@ -11,6 +11,7 @@ import { LiminaTracer, type Tracer } from "../observability/event.ts";
 import type { SkillRegistry, WorldContext } from "../skills/registry.ts";
 import {
   captureWorldState,
+  getInstalledSkillRng,
   installSeededRandom,
   PHYSICS_OP_FN,
   syncAllBodies,
@@ -59,17 +60,25 @@ export class ReplayPlayer {
   /** Apply one command by the SAME rule as replayCommands. Returns true for a
    *  `step` (a tick boundary, after which bodies are synced from the keyframe). */
   private async apply(cmd: WorldCommand): Promise<boolean> {
-    if (cmd.kind === "seed") { installSeededRandom(cmd.seed); return false; }
+    // force: a playback run REPLACES any previously-installed world RNG (the documented
+    // legitimate re-install), so an unforced install would warn on every reload.
+    // Both streams reinstall; skill commands replayed below draw ctx.world.rng.
+    if (cmd.kind === "seed") { installSeededRandom(cmd.seed, true); this.world.rng = getInstalledSkillRng(); return false; }
     if (cmd.kind === "physics") {
       const op = this.world.ops[PHYSICS_OP_FN[cmd.op]] as (...a: number[]) => unknown;
       op(...cmd.args);
       if (cmd.op === "step") { this.tickCount = cmd.tick; syncAllBodies(this.world); return true; }
       return false;
     }
-    await this.registry.invoke(cmd.tool, cmd.input, {
+    const response = await this.registry.invoke(cmd.tool, cmd.input, {
       agentId: cmd.actorId, sessionId: cmd.sessionId, permissions: new Set(cmd.perms),
       tick: cmd.tick, world: this.world, causedBy: [],
     });
+    if (!response.success) {
+      const code = response.error?.code ?? "unknown";
+      const message = response.error?.message ?? "skill invocation failed";
+      throw new Error(`ReplayPlayer: command seq ${cmd.seq} tool ${cmd.tool} failed (${code}): ${message}`);
+    }
     return false;
   }
 

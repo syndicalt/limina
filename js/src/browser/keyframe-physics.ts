@@ -12,6 +12,7 @@
 
 import type { CollisionEventRecord, EngineOps } from "../engine.ts";
 import type { Keyframe } from "../worldlog/keyframes.ts";
+import { composePortableEngineOps } from "./engine-op-composition.ts";
 
 type Transform7 = [number, number, number, number, number, number, number];
 
@@ -20,6 +21,8 @@ export class KeyframePhysics {
   private tick = 0;
   /** bodyId -> ascending keyframe ticks + the body's transform at each. */
   private readonly timelines = new Map<number, { ticks: number[]; xforms: Transform7[] }>();
+  /** Reused scratch for op_physics_body_pos so the playback hot path never allocs. */
+  private readonly scratch7 = new Float32Array(7);
 
   constructor(keyframes: Keyframe[]) {
     for (const kf of [...keyframes].sort((a, b) => a.tick - b.tick)) {
@@ -63,7 +66,8 @@ export class KeyframePhysics {
     const qy = a[4] + (b[4] * s - a[4]) * f;
     const qz = a[5] + (b[5] * s - a[5]) * f;
     const qw = a[6] + (b[6] * s - a[6]) * f;
-    const inv = 1 / (Math.hypot(qx, qy, qz, qw) || 1);
+    // sqrt is IEEE-754 correctly-rounded -> bit-stable (Math.hypot is not).
+    const inv = 1 / (Math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw) || 1);
     out[3] = qx * inv; out[4] = qy * inv; out[5] = qz * inv; out[6] = qw * inv;
   }
 
@@ -80,17 +84,26 @@ export class KeyframePhysics {
   // A heightfield consumes a body id like any insert_body (keeps id parity with
   // native); playback motion comes from keyframes, the terrain mesh from render.
   op_physics_add_heightfield(): number { return this.nextBodyId++; }
+  op_physics_add_character(): number { return this.nextBodyId++; }
+  op_physics_move_character(id: number, _dx: number, _dy: number, _dz: number, out: Float32Array): void {
+    const s = this.scratch7;
+    this.lookup(id, s);
+    out[0] = s[0]; out[1] = s[1]; out[2] = s[2]; out[3] = 1;
+  }
   op_physics_remove_body(_id: number): void { /* tombstone: ids never reused (matches native) */ }
   op_physics_apply_impulse(): void { /* motion comes from keyframes, not impulses */ }
   op_physics_step(): void { this.tick++; }
   op_physics_body_transform(id: number, out: Float32Array): void { this.lookup(id, out); }
+  op_physics_set_body_transform(): void { /* playback poses come from keyframes */ }
   op_physics_body_pos(id: number, out: Float32Array): void {
-    const s = new Float32Array(7); this.lookup(id, s); out[0] = s[0]; out[1] = s[1]; out[2] = s[2];
+    const s = this.scratch7; this.lookup(id, s); out[0] = s[0]; out[1] = s[1]; out[2] = s[2];
   }
   op_physics_drain_collisions(): CollisionEventRecord[] { return []; }
   op_physics_raycast(_ox: number, _oy: number, _oz: number, _dx: number, _dy: number, _dz: number, maxToi: number, out: Float32Array): void {
     out[0] = maxToi; out[1] = 0; out[2] = 0; out[3] = -1; // no-hit
   }
+  op_physics_overlap_box(_x: number, _y: number, _z: number, _hx: number, _hy: number, _hz: number,
+    _qx: number, _qy: number, _qz: number, _qw: number, _ignoreBodyId: number, _out: Uint32Array): number { return 0; }
   op_physics_snapshot(): Uint8Array { return new Uint8Array(0); }
   op_physics_restore(_bytes: Uint8Array): void { /* not used in playback */ }
 }
@@ -98,68 +111,8 @@ export class KeyframePhysics {
 /** Compose a full EngineOps for playback: the keyframe-driven physics + safe
  *  no-op stubs for everything else, overridable (the browser host overrides the
  *  render + trace surfaces). Used by the headless parity test and the browser
- *  runtime alike. Explicit (no Proxy) so the physics hot path stays direct. */
+ *  runtime alike. The shared explicit composition uses no Proxy, so the physics
+ *  hot path stays direct and every browser realm receives the same op inventory. */
 export function playbackOps(physics: KeyframePhysics, overrides: Partial<EngineOps> = {}): EngineOps {
-  const noop = (): void => {};
-  const base: EngineOps = {
-    // physics — the keyframe-driven implementation
-    op_physics_create_world: (g) => physics.op_physics_create_world(g),
-    op_physics_add_ground: (y) => physics.op_physics_add_ground(y),
-    op_physics_add_box: () => physics.op_physics_add_box(),
-    op_physics_add_box_material: () => physics.op_physics_add_box_material(),
-    op_physics_add_sphere: () => physics.op_physics_add_sphere(),
-    op_physics_add_capsule: () => physics.op_physics_add_capsule(),
-    op_physics_add_static_box: () => physics.op_physics_add_static_box(),
-    op_physics_add_static_sphere: () => physics.op_physics_add_static_sphere(),
-    op_physics_add_static_capsule: () => physics.op_physics_add_static_capsule(),
-    op_physics_add_heightfield: () => physics.op_physics_add_heightfield(),
-    op_physics_remove_body: (id) => physics.op_physics_remove_body(id),
-    op_physics_apply_impulse: () => physics.op_physics_apply_impulse(),
-    op_physics_step: () => physics.op_physics_step(),
-    op_physics_snapshot: () => physics.op_physics_snapshot(),
-    op_physics_restore: (b) => physics.op_physics_restore(b),
-    op_physics_body_pos: (id, out) => physics.op_physics_body_pos(id, out),
-    op_physics_body_transform: (id, out) => physics.op_physics_body_transform(id, out),
-    op_physics_drain_collisions: () => physics.op_physics_drain_collisions(),
-    op_physics_raycast: (ox, oy, oz, dx, dy, dz, maxToi, out) => physics.op_physics_raycast(ox, oy, oz, dx, dy, dz, maxToi, out),
-    // render / loop / input — stubs (browser host overrides)
-    op_create_window_context: () => ({}),
-    op_surface_present: noop,
-    op_surface_resize: noop,
-    op_set_frame_callback: noop,
-    op_set_fixed_step_callback: noop,
-    op_set_resize_callback: noop,
-    op_input_axes: noop,
-    // host services
-    op_log: noop,
-    op_http_post: () => Promise.resolve(""),
-    op_sleep_ms: () => Promise.resolve(),
-    op_read_asset: () => new Uint8Array(0),
-    op_sha256: () => "",
-    // durable trace — stubs (browser host overrides with IndexedDB)
-    op_write_trace: noop,
-    op_append_trace: noop,
-    op_read_trace: () => "",
-    // sandbox
-    op_sandbox_create: () => 0,
-    op_sandbox_eval: () => "",
-    op_sandbox_destroy: () => false,
-    op_sandbox_count: () => 0,
-    // native ECS spatial
-    op_ecs_spatial_query_batch: noop,
-    // audio
-    op_audio_init: () => 0,
-    op_audio_play: () => 0,
-    op_audio_ambient: () => 0,
-    op_audio_stop: noop,
-    op_audio_stop_all: noop,
-    op_audio_set_bus_volume: noop,
-    op_audio_play_spatial: () => 0,
-    op_audio_set_emitter: noop,
-    op_audio_set_listener: noop,
-    op_audio_set_volume: noop,
-    op_audio_speak: () => 0,
-    op_audio_play_buffer: () => 0,
-  };
-  return { ...base, ...overrides };
+  return composePortableEngineOps(physics, {}, overrides);
 }

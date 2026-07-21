@@ -26,6 +26,7 @@ const player = new CharacterController(ctx.ops, [0, HALF + RADIUS, 0], { halfHei
 // Authoring (one-time, off the hot path): load the rigged player model via the skill surface.
 const p0 = player.position;
 const model = await attachCharacterModel({
+  assetId: "robot.glb",
   world: ctx.world,
   registry: ctx.registry,
   base: ctx.base,

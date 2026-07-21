@@ -1,0 +1,135 @@
+{
+  "schema": "limina.visual-design-contract/v1",
+  "id": "building/functional-hall-house-v4/v3-functional-cross-gable",
+  "subjectKind": "building",
+  "intendedFunction": "A traversable two-storey timber hall-house whose asymmetrical front service cross-gable is a real occupied room, whose roof and foundation joints are compiler-owned, and whose evidence views mechanically prove the construction and circulation claims they carry.",
+  "prompt": "Generate the house only through BuildingProgram V3 and the architectural compiler. Preserve occupied upper-storey daylight, add one functional front service cross-gable with an exterior gable window and open passage to the main plan, terminate and flash both service roof planes at the upper headwall, use a visibly bearing edge-touching foundation, brace the compiler-owned entry canopy, and retain the complete fireplace-centerline chimney. Treat the Project Gorgon reference set as a visual floor for cohesive layered massing and construction legibility, never as pixel geometry.",
+  "references": [
+    {
+      "id": "gorgon/built-town-square",
+      "sourceUrl": "https://www.reddit.com/r/MMORPG/comments/1nwksxk/adventures_through_project_gorgon_screenshots/",
+      "creator": "u/PalwaJoko; Project: Gorgon by Elder Game, LLC",
+      "license": "All rights reserved; private internal visual reference only; not redistributed",
+      "retrievedAt": "2026-07-11T00:00:00Z",
+      "localPath": "art-direction/library/project-gorgon-floor-20260711/adventures-through-project-gorgon-screenshots-from-my-v0-58d3pxwdgssf1.webp",
+      "sha256": "sha256:d4a063fee863f1748cd1999f094987cc01e79bad2542b065c8f2286e44fd708f",
+      "roles": ["silhouette", "construction", "material", "weathering", "function"]
+    },
+    {
+      "id": "gorgon/built-mountain-town",
+      "sourceUrl": "https://www.reddit.com/r/MMORPG/comments/1nwksxk/adventures_through_project_gorgon_screenshots/",
+      "creator": "u/PalwaJoko; Project: Gorgon by Elder Game, LLC",
+      "license": "All rights reserved; private internal visual reference only; not redistributed",
+      "retrievedAt": "2026-07-11T00:00:00Z",
+      "localPath": "art-direction/library/project-gorgon-floor-20260711/adventures-through-project-gorgon-screenshots-from-my-v0-fdp0qaqzfssf1.webp",
+      "sha256": "sha256:3c3f0adedc464d2b591d61cb7f30df3d0cbe942506386c80876d6d8a44f0ccd4",
+      "roles": ["silhouette", "construction", "joinery", "material", "function"]
+    },
+    {
+      "id": "gorgon/built-desert-facade",
+      "sourceUrl": "https://www.reddit.com/r/MMORPG/comments/1nwksxk/adventures_through_project_gorgon_screenshots/",
+      "creator": "u/PalwaJoko; Project: Gorgon by Elder Game, LLC",
+      "license": "All rights reserved; private internal visual reference only; not redistributed",
+      "retrievedAt": "2026-07-11T00:00:00Z",
+      "localPath": "art-direction/library/project-gorgon-floor-20260711/adventures-through-project-gorgon-screenshots-from-my-v0-xdlyr2hvfssf1.webp",
+      "sha256": "sha256:c8e53c529b8006f03b2d5c6648701937c12f71a9c1192fa6842f52a788ae3f1f",
+      "roles": ["silhouette", "construction", "material", "weathering", "function"]
+    }
+  ],
+  "cues": [
+    {
+      "id": "functional-cross-gable-massing",
+      "statement": "The front composition reads as a main two-storey hall and one subordinate, occupied service cross-gable rather than a decorated rectangular box.",
+      "sourceIds": ["gorgon/built-town-square", "gorgon/built-mountain-town"],
+      "measurements": [
+        {"name": "functional-service-cross-gable-count", "unit": "count", "target": 1},
+        {"name": "positive-area-shell-overlap-count", "unit": "count", "target": 0},
+        {"name": "service-room-traversable", "unit": "boolean", "target": 1}
+      ],
+      "verification": "engine"
+    },
+    {
+      "id": "cross-gable-headwall-weather-layer",
+      "statement": "Both service roof planes terminate at the upper headwall with complete sloped abutment flashing; no false rear gable, eave, or rake survives inside the main building.",
+      "sourceIds": ["gorgon/built-town-square", "gorgon/built-mountain-town"],
+      "measurements": [
+        {"name": "headwall-abutment-flashing-count", "unit": "count", "target": 2},
+        {"name": "buried-service-roof-closure-count", "unit": "count", "target": 0}
+      ],
+      "verification": "compiler"
+    },
+    {
+      "id": "visible-edge-touching-foundation",
+      "statement": "The service bay bears on a compiler-owned foundation that touches but does not overlap the main foundation and retains a visible reveal above reviewed grade.",
+      "sourceIds": ["gorgon/built-mountain-town", "gorgon/built-desert-facade"],
+      "measurements": [
+        {"name": "service-foundation-count", "unit": "count", "target": 1},
+        {"name": "foundation-positive-area-overlap-count", "unit": "count", "target": 0},
+        {"name": "minimum-foundation-reveal", "unit": "m", "target": 0.18}
+      ],
+      "verification": "engine"
+    },
+    {
+      "id": "braced-primary-entry",
+      "statement": "The primary threshold is protected by one flashed wall plate, header, two bearing posts, two connected knee braces, and grade footings without intruding into the door sweep.",
+      "sourceIds": ["gorgon/built-town-square", "gorgon/built-desert-facade"],
+      "measurements": [
+        {"name": "entry-canopy-count", "unit": "count", "target": 1},
+        {"name": "connected-knee-brace-count", "unit": "count", "target": 2},
+        {"name": "door-sweep-intersection-count", "unit": "count", "target": 0}
+      ],
+      "verification": "compiler"
+    },
+    {
+      "id": "centerline-chimney-closure",
+      "statement": "The hearth flue remains centered through one distinct roof penetration with complete shaft, curb, flashing, counterflashing, cricket, cap, and liner inventories.",
+      "sourceIds": ["gorgon/built-mountain-town", "gorgon/built-desert-facade"],
+      "measurements": [
+        {"name": "fireplace-centerline-offset", "unit": "m", "target": 0},
+        {"name": "complete-chimney-assembly-count", "unit": "count", "target": 1}
+      ],
+      "verification": "compiler"
+    },
+    {
+      "id": "occupied-daylight-integrity",
+      "statement": "Every occupied upper bedroom retains its declared exterior windows and the service cross-gable owns a real exterior gable window; attic articulation substitutes for neither.",
+      "sourceIds": ["gorgon/built-town-square", "gorgon/built-desert-facade"],
+      "measurements": [
+        {"name": "upper-bedroom-window-count", "unit": "count", "target": 4},
+        {"name": "service-gable-window-count", "unit": "count", "target": 1},
+        {"name": "decorative-window-counted-as-room-daylight", "unit": "count", "target": 0}
+      ],
+      "verification": "compiler"
+    },
+    {
+      "id": "semantic-evidence-coverage",
+      "statement": "Every named review image safely frames and visibly resolves the exact semantic construction or circulation targets it claims before any GPU capture can be authorized.",
+      "sourceIds": ["gorgon/built-town-square", "gorgon/built-mountain-town", "gorgon/built-desert-facade"],
+      "measurements": [
+        {"name": "required-semantic-claim-view-count", "unit": "count", "target": 5},
+        {"name": "unresolved-semantic-target-count", "unit": "count", "target": 0},
+        {"name": "clipped-required-target-count", "unit": "count", "target": 0}
+      ],
+      "verification": "engine"
+    }
+  ],
+  "avoid": [
+    "generated whole-building GLB as architecture authority",
+    "decorative or inaccessible bump-out",
+    "overlapping shell walls or foundations",
+    "unflashed cross-gable termination",
+    "unsupported or unbraced porch",
+    "attic window counted as occupied daylight",
+    "evidence camera whose subject is absent or clipped",
+    "symmetrical box-with-roof silhouette"
+  ],
+  "requiredViews": [
+    "front-three-quarter",
+    "service-gable-elevation",
+    "frame-entry-window-detail",
+    "ground-rooms-passage-fireplace",
+    "stair-opening-headroom",
+    "upper-landing-daylight"
+  ],
+  "status": "candidate"
+}

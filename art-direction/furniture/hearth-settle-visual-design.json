@@ -1,0 +1,22 @@
+{
+  "schema": "limina.visual-design-contract/v1",
+  "id": "furniture/hearth-settle/v1",
+  "subjectKind": "furniture",
+  "intendedFunction": "A broad two-adult oak settle beside the main hall hearth, providing seating and a draught-screening back without obstructing circulation.",
+  "prompt": "Author a cohesive two-seat late-medieval oak hearth settle with a broad horizontal silhouette, framed fielded-panel back, shaped arms, tapered posts, visible mortise-and-tenon construction, drawbore pegs, separately eased seat boards, and believable age. It must read immediately as shared seating rather than a high-backed chair.",
+  "references": [
+    {"id":"commons/oak-settle-17c","sourceUrl":"https://commons.wikimedia.org/wiki/File:Settle-seventeenth-century.jpg","creator":"Frederick S. Robinson","license":"Public domain in the United States; first published 1905","retrievedAt":"2026-07-15T03:19:22.538Z","localPath":"art-direction/reference-cache/commons/oak-settle-17c.jpg","sha256":"sha256:91a89c32a2bff28f9482a811f4a445b1ce67042a5dfc3a4e00a7758c040212a0","roles":["silhouette","construction","joinery","function"]},
+    {"id":"met/bench-chest-467989","sourceUrl":"https://www.metmuseum.org/art/collection/search/467989","creator":"Unknown French maker; The Metropolitan Museum of Art","license":"Public Domain / The Met Open Access","retrievedAt":"2026-07-15T03:19:25.022Z","localPath":"art-direction/reference-cache/met/bench-chest-467989.jpg","sha256":"sha256:8c6fb76bc089c92cccf7171f8b3b75d5a2b5d27bf8e74856febfedecf87d74ee","roles":["silhouette","construction","joinery","material"]},
+    {"id":"met/high-backed-chair-471833","sourceUrl":"https://www.metmuseum.org/art/collection/search/471833","creator":"Unknown French or South Netherlandish maker; The Metropolitan Museum of Art","license":"Public Domain / The Met Open Access","retrievedAt":"2026-07-15T03:19:26.612Z","localPath":"art-direction/reference-cache/met/high-backed-chair-471833.jpg","sha256":"sha256:28f8537c27fab21b858e1eed025012d622f0449e07a467492dc1856a722008de","roles":["silhouette","construction","joinery"]}
+  ],
+  "cues": [
+    {"id":"broad-two-seat-silhouette","statement":"The front view must read as shared seating with two occupant bays; width visibly dominates height.","sourceIds":["commons/oak-settle-17c"],"measurements":[{"name":"overall-width","unit":"m","target":2.16},{"name":"width-height-ratio","unit":"ratio","minimum":1.45},{"name":"occupant-bays","unit":"count","target":2}],"verification":"engine"},
+    {"id":"framed-fielded-back","statement":"A continuous structural frame contains separately inset fielded panels rather than disconnected vertical boards.","sourceIds":["commons/oak-settle-17c","met/bench-chest-467989"],"measurements":[{"name":"back-panel-count","unit":"count","target":4},{"name":"field-depth","unit":"m","minimum":0.008,"maximum":0.018}],"verification":"blender"},
+    {"id":"visible-period-joinery","statement":"Rails terminate into posts with visible mortise-and-tenon and drawbore-peg cues; intersections cannot stand in for joints.","sourceIds":["commons/oak-settle-17c","met/bench-chest-467989"],"measurements":[{"name":"joint-tolerance","unit":"m","maximum":0.003},{"name":"visible-peg-count","unit":"count","minimum":8}],"verification":"blender"},
+    {"id":"ergonomic-shared-seat","statement":"Two supported occupancy positions have an approachable seat and modest raked back.","sourceIds":["commons/oak-settle-17c"],"measurements":[{"name":"seat-height","unit":"m","target":0.47},{"name":"seat-depth","unit":"m","target":0.47},{"name":"back-rake","unit":"deg","target":7}],"verification":"compiler"},
+    {"id":"anti-chair-proportion","statement":"Do not reproduce the narrow, vertically dominant silhouette of a single high-backed chair.","sourceIds":["met/high-backed-chair-471833"],"measurements":[{"name":"minimum-occupancy","unit":"count","target":2},{"name":"maximum-height-width-ratio","unit":"ratio","maximum":0.69}],"verification":"engine"}
+  ],
+  "avoid": ["single-chair silhouette","plain intersecting boxes","identical grain phase on adjacent boards","unsupported occupancy sockets","whole-object AABB collision","ornament that overwhelms construction readability"],
+  "requiredViews": ["front","right-side","back","three-quarter","joinery-detail","socket-overlay","collision-overlay"],
+  "status": "draft"
+}

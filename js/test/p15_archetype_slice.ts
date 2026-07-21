@@ -80,7 +80,7 @@ async function runSlice(session: string): Promise<{ log: string[]; keepEntities:
 const A = await runSlice("ses_p15_slice_A");
 
 // The keep was built from skills.
-assert(A.keepEntities === 8, `the keep is an 8-part building (got ${A.keepEntities})`);
+assert(A.keepEntities >= 10, `the keep is a real kit building (many parts; got ${A.keepEntities})`);
 
 // The intro cutscene fired its beats at the authored ticks, composed into the live loop.
 // The loop's first pump is at t=1, so the atTick-0 beat fires then (elapsed 1 ≥ 0); the atTick-5

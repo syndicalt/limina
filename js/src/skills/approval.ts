@@ -18,6 +18,7 @@ export function registerApprovalSkills(registry: SkillRegistry): void {
     description: "List agent actions currently held for human approval (id, skill, proposed input, agent).",
     category: "system",
     permissions: [REVIEW_PERMISSION],
+    effect: "read",
     input: z.object({}),
     output: z.object({
       pending: z.array(z.object({
@@ -47,6 +48,7 @@ export function registerApprovalSkills(registry: SkillRegistry): void {
     description: "Approve a held agent action by id; it is applied now and its outcome returned.",
     category: "system",
     permissions: [REVIEW_PERMISSION],
+    effect: "admin",
     input: z.object({ approvalId: z.string() }),
     output: z.object({ resolved: z.boolean(), applied: z.boolean(), error: z.string().nullable() }),
     handler: async (input, ctx) => {
@@ -64,6 +66,7 @@ export function registerApprovalSkills(registry: SkillRegistry): void {
     description: "Reject a held agent action by id; it is dropped and never applied.",
     category: "system",
     permissions: [REVIEW_PERMISSION],
+    effect: "admin",
     input: z.object({ approvalId: z.string(), reason: z.string().optional() }),
     output: z.object({ resolved: z.boolean(), error: z.string().nullable() }),
     handler: async (input, ctx) => {
@@ -80,22 +83,22 @@ export function registerApprovalSkills(registry: SkillRegistry): void {
  *  agent's `profile` in the invoke base (actionSystem / runBoundedMultiTurn do). */
 export function reviewProfileGate(reviewProfiles: ReadonlySet<string>): ApprovalGate {
   // DEFAULT-HOLD: a reviewed agent's call is HELD unless EVERY capability it requires
-  // is read-only / introspection. This is a denylist of reads, not an allowlist of a
-  // few known-mutating perms — so it catches ALL write-class skills for an ARBITRARY
-  // bundle (scene/ecs/physics writes, agent.write, ui.write, audio.play, social.act,
-  // terrain.generate, and any future write cap), which an allowlist would silently miss.
-  const READ_ONLY = new Set(["scene.read", "ecs.read", "physics.read", "agent.read", "terrain.read"]);
+  // is read-only by naming convention. This avoids a stale static allowlist: newly
+  // added reads such as `nav.read` stay ungated, while write/action caps such as
+  // scene.write, audio.play, social.act, terrain.generate, and orchestrate are held.
+  const readOnly = (permission: string): boolean => permission.endsWith(".read");
   return (name, base, skill: SkillDefinition): boolean => {
     if (base.profile === undefined || !reviewProfiles.has(base.profile)) return false;
     if (name.startsWith("approval.")) return false; // never gate the resolution skills
-    return skill.permissions.some((p) => !READ_ONLY.has(p));
+    return skill.permissions.some((p) => !readOnly(p));
   };
 }
 
 // ---- Known limitations (Phase 7 first cut; hardening is a follow-up) ------
 // 1. Re-authorization at grant (registry.resolveApproval) re-checks REVOCATION
-//    only — not quotas/budgets, since re-running the full policy would double-count
-//    the propose-time commit. Quota consumed at propose is not refunded on deny.
+//    without re-running the quota/budget-committing policy evaluation. Quota and
+//    call-budget usage are consumed exactly once, at proposal, and are not refunded
+//    on deny.
 // 2. RESOLVED — a granted action's apply-time events now carry the APPLY tick. The
 //    `approval.grant` handler passes its `ctx.tick` to `resolveApproval`, which stamps
 //    BOTH `skill.approval.granted` and `skill.executed` via registry.stampTick. The
@@ -110,10 +113,15 @@ export function reviewProfileGate(reviewProfiles: ReadonlySet<string>): Approval
 //    as if it applied at 0 — such a tick is floored back to the propose tick. A
 //    non-gated invoke() supplies no apply tick, so its `skill.executed` keeps the
 //    propose==apply base.tick exactly as before (replay-safe; p4_worldlog_* unaffected).
-// 3. Durable-log REPLAY of an APPROVAL-GATED session is not yet faithful: the
-//    recorder logs the propose-invoke (worldlog/recorder.ts `attach`), so on a
-//    gate-off replay a DENIED action would re-apply. The gate is OFF by default,
-//    so non-gated sessions replay byte-identically (verified by p4_worldlog_*).
-// 4. The pending map has no TTL/eviction; an agent that re-proposes every tick
-//    creates near-duplicate pending entries (no dedup). Fine per session; cap it
-//    for a long-lived host.
+// 3. RESOLVED — approval controls and parked proposals are not replay commands.
+//    The recorder discards a proposal when invoke returns `pending_approval`, skips
+//    approval.grant/deny controls, and records only the original skill when a grant
+//    actually applies it. Denied actions therefore never enter authoritative replay.
+//    p57_approval_recording replays this stream into a fresh world and verifies the
+//    reviewed mutation applies exactly once.
+// 4. The pending map is capacity-bounded and every reservation expires after the
+//    registry's bounded hold timeout (15 minutes by default). Expiry drops the
+//    intent and emits skill.approval.denied. Proposal-time quota/call usage is not
+//    refunded: retaining that charge prevents approval spam and the policy's own
+//    window resets it. Duplicate-looking proposals remain distinct because their
+//    tick/provenance can differ and need explicit reviewer handling.

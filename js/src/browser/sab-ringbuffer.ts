@@ -18,8 +18,10 @@
 // that orders before its plain reads (the JS SC-DRF memory model). The producer
 // writes frame N into ring slot `(N-1) % RING_FRAMES` THEN stores N as the
 // sequence; the consumer loads the sequence and reads slot `(seq-1) % RING_FRAMES`.
-// With RING_FRAMES >= 4 and at most one in-flight frame per tick, the producer can
-// never lap the slot the consumer is mid-read on, so no tearing — and no lock.
+// Frame fields are stored/loaded as atomic Int32 bit patterns, and the consumer
+// verifies the sequence again after copying. If the producer advanced during the
+// copy, the consumer retries the latest slot. This remains safe even when either
+// thread stalls long enough for the producer to lap the ring.
 //
 // ONE-FRAME LATENCY BY DESIGN: the consumer reads, at a tick boundary, whatever
 // the producer published BEFORE that boundary; a write that races the boundary is
@@ -91,6 +93,10 @@ export class InputRingBuffer {
   private readonly control: Int32Array;
   /** Float32 frame-data view: RING_FRAMES slots of FRAME_FLOATS each. */
   private readonly data: Float32Array;
+  /** Same bytes viewed as Int32 so shared frame fields are individually atomic. */
+  private readonly dataBits: Int32Array;
+  private readonly scratchF32 = new Float32Array(1);
+  private readonly scratchI32 = new Int32Array(this.scratchF32.buffer);
 
   constructor(opts: { buffer?: SharedArrayBuffer | ArrayBuffer } = {}) {
     if (opts.buffer !== undefined) {
@@ -117,6 +123,7 @@ export class InputRingBuffer {
     }
     this.control = new Int32Array(this.buffer, 0, CONTROL_INTS);
     this.data = new Float32Array(this.buffer, CONTROL_BYTES, DATA_FLOATS);
+    this.dataBits = new Int32Array(this.buffer, CONTROL_BYTES, DATA_FLOATS);
   }
 
   /** Atomically load the current publish sequence (0 == nothing published yet). */
@@ -130,57 +137,77 @@ export class InputRingBuffer {
     else this.control[SEQ_INDEX] = seq;
   }
 
+  private writeFloat(index: number, value: number): void {
+    if (!this.shared) {
+      this.data[index] = value;
+      return;
+    }
+    this.scratchF32[0] = value;
+    Atomics.store(this.dataBits, index, this.scratchI32[0]);
+  }
+
+  private readFloat(index: number): number {
+    if (!this.shared) return this.data[index];
+    this.scratchI32[0] = Atomics.load(this.dataBits, index);
+    return this.scratchF32[0];
+  }
+
   /** PRODUCER: publish the latest input frame. Single-producer — reads the current
    *  sequence, writes frame N+1 into its ring slot, then publishes N+1 as the
    *  sequence (so a consumer only ever observes a fully-written slot). Returns the
    *  published sequence number. */
   writeInput(frame: InputFrame): number {
-    const next = this.loadSeq() + 1;
+    let next = ((this.loadSeq() >>> 0) + 1) >>> 0;
+    if (next === 0) next = 1;
     const base = ((next - 1) % RING_FRAMES) * FRAME_FLOATS;
-    const d = this.data;
-    d[base + 0] = frame.move[0];
-    d[base + 1] = frame.move[1];
-    d[base + 2] = frame.move[2];
-    d[base + 3] = frame.look[0];
-    d[base + 4] = frame.look[1];
-    d[base + 5] = frame.buttons[0];
-    d[base + 6] = frame.buttons[1];
-    d[base + 7] = frame.tick;
+    this.writeFloat(base + 0, frame.move[0]);
+    this.writeFloat(base + 1, frame.move[1]);
+    this.writeFloat(base + 2, frame.move[2]);
+    this.writeFloat(base + 3, frame.look[0]);
+    this.writeFloat(base + 4, frame.look[1]);
+    this.writeFloat(base + 5, frame.buttons[0]);
+    this.writeFloat(base + 6, frame.buttons[1]);
+    this.writeFloat(base + 7, frame.tick);
     // Publish AFTER the body is fully written (release).
     this.storeSeq(next);
     return next;
   }
 
   /** CONSUMER: read the most-recently-published frame, or `null` if none has been
-   *  published yet. Wait-free (one Atomics.load + a fixed-size copy). The frame is
-   *  read from slot `(seq-1) % RING_FRAMES`; with one frame per tick the producer
-   *  cannot be mid-overwriting it. Pass `out` to read allocation-free. */
+   *  published yet. Lock-free and bounded: a racing producer causes at most three
+   *  retries before this tick yields `null`. Pass `out` to read allocation-free. */
   readLatest(out?: InputFrame): InputFrame | null {
-    const seq = this.loadSeq();
-    if (seq <= 0) return null;
-    const base = ((seq - 1) % RING_FRAMES) * FRAME_FLOATS;
-    const d = this.data;
-    if (out !== undefined) {
-      out.move[0] = d[base + 0];
-      out.move[1] = d[base + 1];
-      out.move[2] = d[base + 2];
-      out.look[0] = d[base + 3];
-      out.look[1] = d[base + 4];
-      out.buttons[0] = d[base + 5];
-      out.buttons[1] = d[base + 6];
-      out.tick = d[base + 7];
-      return out;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const seq = this.loadSeq() >>> 0;
+      if (seq === 0) return null;
+      const base = ((seq - 1) % RING_FRAMES) * FRAME_FLOATS;
+      const move0 = this.readFloat(base + 0);
+      const move1 = this.readFloat(base + 1);
+      const move2 = this.readFloat(base + 2);
+      const look0 = this.readFloat(base + 3);
+      const look1 = this.readFloat(base + 4);
+      const button0 = this.readFloat(base + 5);
+      const button1 = this.readFloat(base + 6);
+      const tick = this.readFloat(base + 7);
+      if (this.shared && (this.loadSeq() >>> 0) !== seq) continue;
+      if (out !== undefined) {
+        out.move[0] = move0;
+        out.move[1] = move1;
+        out.move[2] = move2;
+        out.look[0] = look0;
+        out.look[1] = look1;
+        out.buttons[0] = button0;
+        out.buttons[1] = button1;
+        out.tick = tick;
+        return out;
+      }
+      return { move: [move0, move1, move2], look: [look0, look1], buttons: [button0, button1], tick };
     }
-    return {
-      move: [d[base + 0], d[base + 1], d[base + 2]],
-      look: [d[base + 3], d[base + 4]],
-      buttons: [d[base + 5], d[base + 6]],
-      tick: d[base + 7],
-    };
+    return null;
   }
 
   /** The latest published sequence number (observability / tests). 0 == none. */
   get sequence(): number {
-    return this.loadSeq();
+    return this.loadSeq() >>> 0;
   }
 }

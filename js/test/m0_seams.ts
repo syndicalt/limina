@@ -27,8 +27,8 @@ ops.op_physics_body_pos(id2, pos);
 if (Math.abs(pos[1] - 5) > 0.01) throw new Error(`new body y expected ~5, got ${pos[1]}`);
 
 const removed = new Float32Array([9, 9, 9]);
-ops.op_physics_body_pos(id0, removed); // tombstoned -> op no-ops
-if (removed[0] !== 9) throw new Error("removed body still has a position");
+ops.op_physics_body_pos(id0, removed); // tombstoned -> zero-fill, never stale caller data
+if (removed.some((v) => v !== 0)) throw new Error(`removed body read did not zero-fill: ${Array.from(removed)}`);
 
 // 3. apply_impulse wakes a resting body; raycast hits the ground.
 for (let i = 0; i < 120; i++) ops.op_physics_step();

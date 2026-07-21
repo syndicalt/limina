@@ -13,35 +13,17 @@
 //
 // Prereq: bundle the engine first → (cd js && npm run bundle:runtime)
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, join, resolve, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { resolvePwc, resolveChrome } from "../_pw-resolve.mjs";
 
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
 
-function resolvePwc() {
-  if (process.env.PWC_PATH) return process.env.PWC_PATH;
-  try { return require.resolve("playwright-core"); } catch { /* fall through */ }
-  const npx = join(process.env.HOME || "", ".npm", "_npx");
-  if (existsSync(npx)) for (const d of readdirSync(npx)) {
-    const p = join(npx, d, "node_modules", "playwright-core");
-    if (existsSync(p)) return p;
-  }
-  return null;
-}
-function resolveChrome() {
-  if (process.env.CHROME_BIN && existsSync(process.env.CHROME_BIN)) return process.env.CHROME_BIN;
-  const base = join(process.env.HOME || "", ".cache", "ms-playwright");
-  if (existsSync(base)) for (const d of readdirSync(base).filter((x) => x.startsWith("chromium-")).sort().reverse()) {
-    const p = join(base, d, "chrome-linux64", "chrome");
-    if (existsSync(p)) return p;
-  }
-  return null;
-}
 function skip(m) { console.log("SKIP: " + m); process.exit(2); }
 function fail(m) { console.error("engine-browser-gate FAIL: " + m); process.exit(1); }
 

@@ -21,6 +21,7 @@ import { ops } from "../src/engine.ts";
 import {
   BEACH_SEED,
   COTTAGE_WORKERS,
+  cottageCoordinatorPermissions,
   setupCoordinatorCottage,
 } from "../src/demos/coordinator_cottage.ts";
 
@@ -52,6 +53,13 @@ async function heldTraceSig(sessionId: string): Promise<string> {
 const c = setupCoordinatorCottage("ses_cottage_main");
 const baseline = c.world.entities.ids().length;
 assert(baseline === 0, `fresh world should start empty, got ${baseline}`);
+const coordGrants = cottageCoordinatorPermissions();
+for (const worker of COTTAGE_WORKERS) {
+  for (const cap of worker.bundle) {
+    assert(coordGrants.has(cap), `coordinator does not actually hold delegated cap ${cap}`);
+  }
+}
+assert(coordGrants.has("orchestrate") && coordGrants.has("approval.review"), "coordinator lost orchestration/review authority");
 
 // (a) the coordinator decomposes + delegates the three workers.
 const built = await c.runCottageBuild(1);

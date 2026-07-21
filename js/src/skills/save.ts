@@ -160,7 +160,7 @@ function restoreWorldSnapshot(ctx: ExecutionContext, table: EntityTableSnapshot,
 
 /** A DETERMINISTIC world-log meta for the export header: createdAt is derived from the
  *  tick (NOT wall-clock), so two exports at the same tick over the same command stream
- *  are byte-identical (WorldRecorder.meta() uses new Date() — unusable for replay). */
+ *  are byte-identical. */
 function deterministicMeta(recorder: WorldRecorder, tick: number): WorldLogMeta {
   let maxTick = 0;
   for (const c of recorder.commands) {
@@ -172,7 +172,7 @@ function deterministicMeta(recorder: WorldRecorder, tick: number): WorldLogMeta 
     logVersion: LOG_VERSION,
     sessionId: recorder.sessionId,
     createdAt: `tick:${tick}`,
-    commands: recorder.commands.length,
+    commands: recorder.commandCount,
     ticks: maxTick,
   };
 }
@@ -266,6 +266,7 @@ export function registerSaveSkills(
     description: "List available checkpoints for the current session (name, tick, captured entity count).",
     category: "save",
     permissions: ["checkpoint.read"],
+    effect: "read",
     input: listCheckpointsInput,
     output: z.object({ checkpoints: z.array(z.object({ name: z.string(), tick: z.number(), entityCount: z.number() })) }),
     handler: () => ({ checkpoints: mgr.listCheckpoints() }),
@@ -309,6 +310,9 @@ export function registerSaveSkills(
       let mode: "log" | "snapshot";
       if (recorder !== undefined) {
         // LOG FACADE: the recorded command stream IS the portable, replayable format.
+        if (recorder.compactedCommandCount > 0) {
+          throw new Error("save.export: recorder command prefix was compacted; export from the durable world-log segment instead");
+        }
         const meta = deterministicMeta(recorder, ctx.tick);
         const files = assembleExport({
           worldId,

@@ -1,0 +1,67 @@
+{
+  "schema": "limina.material-pack/v1",
+  "id": "cottage-white-plaster",
+  "source": {
+    "provider": "Poly Haven",
+    "assetId": "white_plaster_02",
+    "assetUrl": "https://polyhaven.com/a/white_plaster_02",
+    "apiUrl": "https://api.polyhaven.com/files/white_plaster_02",
+    "apiVersion": "v1",
+    "licenseSpdx": "CC0-1.0"
+  },
+  "download": {
+    "resolution": "1k",
+    "format": "JPG",
+    "metadataSha256": "sha256:d25695d1a2a7ee4b3e6563bcb9c17dfe3d29a9b54e1e352555214b99c6803287"
+  },
+  "maps": {
+    "albedo": {
+      "assetId": "materials/cottage-white-plaster/albedo.jpg",
+      "sha256": "sha256:a1ebbe091bd1ae93d2abd5de8d69f9003a8d0ee6532bcf9a87c2492c97051f23",
+      "assetHash": "sha256:7847eebbc5a740ae6fdb2bca188045c72c4f350fd7334232349577229471d0f9",
+      "md5": "7b10c2686bcfd76d1f309a20fd06b57e",
+      "bytes": 527219,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/white_plaster_02/white_plaster_02_diff_1k.jpg"
+    },
+    "normal": {
+      "assetId": "materials/cottage-white-plaster/normal.jpg",
+      "sha256": "sha256:eb572ca3630d5bfde72e2601b1f02412da23ca005cd19384dced8690be4cb783",
+      "assetHash": "sha256:f043621a5734bb2e8bc1c23290d190126c6ab61fe3a6c799994dc4b597c49e8c",
+      "md5": "55fc03203ebf1dc703a380fde93ff502",
+      "bytes": 652310,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/white_plaster_02/white_plaster_02_nor_gl_1k.jpg"
+    },
+    "roughness": {
+      "assetId": "materials/cottage-white-plaster/roughness.jpg",
+      "sha256": "sha256:4ff1fe957cd161b07f721fe6c28a9459c8c2e8ec65627a26c16e483a07c80d85",
+      "assetHash": "sha256:b6e48ef58dce32db20f7f0cdbf2811159dade99a866ab99e4ccaf09062b6e44e",
+      "md5": "8b28f263360b8c4ddbdc4f7c650c4eeb",
+      "bytes": 295900,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/white_plaster_02/white_plaster_02_rough_1k.jpg"
+    },
+    "occlusion": {
+      "assetId": "materials/cottage-white-plaster/occlusion.jpg",
+      "sha256": "sha256:01a479ced98447569958ccb6d396ed700dc9f8fd3197c86e52836382b24126c6",
+      "assetHash": "sha256:a8244751c8e32c778f0619e413d94c56221e363317165b0cff2a9d2ed66cee97",
+      "md5": "08f0b52fbedc1259f571ace126c94025",
+      "bytes": 528899,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/white_plaster_02/white_plaster_02_ao_1k.jpg"
+    },
+    "displacement": {
+      "assetId": "materials/cottage-white-plaster/displacement.jpg",
+      "sha256": "sha256:72c6b1f2015cc35c0323c514be5b36a6460917336783aa7fe1200845f38ce56b",
+      "assetHash": "sha256:2c59c9c2097dbaa8dc99ac8a8ae9fff72c8b8f95aaba9533fe3c5779e68295f3",
+      "md5": "73f9cf2ee82e1a85c86ef9e607f50407",
+      "bytes": 282756,
+      "sourceUrl": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/white_plaster_02/white_plaster_02_disp_1k.jpg"
+    }
+  },
+  "materialImport": {
+    "name": "cottage-white-plaster",
+    "albedo": "materials/cottage-white-plaster/albedo.jpg",
+    "normal": "materials/cottage-white-plaster/normal.jpg",
+    "roughness": "materials/cottage-white-plaster/roughness.jpg",
+    "occlusion": "materials/cottage-white-plaster/occlusion.jpg",
+    "displacement": "materials/cottage-white-plaster/displacement.jpg"
+  }
+}

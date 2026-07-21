@@ -1,0 +1,57 @@
+{
+  "schema": "limina.material-pack/v1",
+  "id": "cottage-hearth-brick",
+  "source": {
+    "provider": "ambientCG",
+    "assetId": "Bricks097",
+    "assetUrl": "https://ambientcg.com/a/Bricks097",
+    "apiVersion": "v3",
+    "licenseSpdx": "CC0-1.0"
+  },
+  "download": {
+    "attributes": "1K-JPG",
+    "url": "https://ambientcg.com/get?file=Bricks097_1K-JPG.zip",
+    "archiveBytes": 5172084,
+    "archiveSha256": "sha256:97b5df360161e48bcfed609aef361e8115b680ddc0aea4ad9321d4b00e222ad0"
+  },
+  "maps": {
+    "albedo": {
+      "assetId": "materials/cottage-hearth-brick/albedo.jpg",
+      "sha256": "sha256:218f7343091f1c0d9044fd642247d23dd322087271df1b45c8f51fdff91042dd",
+      "assetHash": "sha256:c8a1ac034651009efcee6b2cd14df13825fca10c4b9592770136840f93608645",
+      "bytes": 831880
+    },
+    "normal": {
+      "assetId": "materials/cottage-hearth-brick/normal.jpg",
+      "sha256": "sha256:3c13ff7b8018983e0d1529fa330b2d4494f92da299b72db19dbc76282f3f23e7",
+      "assetHash": "sha256:9cd96d2af3528ad2ff9923b32e53790016bb1f3f64b86c411e7cab0412025a7f",
+      "bytes": 907097
+    },
+    "roughness": {
+      "assetId": "materials/cottage-hearth-brick/roughness.jpg",
+      "sha256": "sha256:a629784339b79cff67079a34f313ec5de18b8b6eb478455ac9b8df09c615b37d",
+      "assetHash": "sha256:5e7b57378aa9f717e56c8ec608aabfcca06aea7870874f9ba2508520629a6002",
+      "bytes": 386766
+    },
+    "occlusion": {
+      "assetId": "materials/cottage-hearth-brick/occlusion.jpg",
+      "sha256": "sha256:80e610cfe7149e3759b3c49c93566cbcd07da89fb5de332a4d64b0a1d29acd28",
+      "assetHash": "sha256:4deb2fbe32eff93eff10a5d1eb0ba077ee142627c90f8365e3b2b02a3daca667",
+      "bytes": 355118
+    },
+    "displacement": {
+      "assetId": "materials/cottage-hearth-brick/displacement.jpg",
+      "sha256": "sha256:01118cacc0b4d8d10b0c9af494d294041e1e3403bf0bc05b8182a91e93c203f7",
+      "assetHash": "sha256:4b8862ac34ac3170ce83f59d8ee0323eee1d1f183b5a53cd77c7a8a8fb668b97",
+      "bytes": 199314
+    }
+  },
+  "materialImport": {
+    "name": "cottage-hearth-brick",
+    "albedo": "materials/cottage-hearth-brick/albedo.jpg",
+    "normal": "materials/cottage-hearth-brick/normal.jpg",
+    "roughness": "materials/cottage-hearth-brick/roughness.jpg",
+    "occlusion": "materials/cottage-hearth-brick/occlusion.jpg",
+    "displacement": "materials/cottage-hearth-brick/displacement.jpg"
+  }
+}

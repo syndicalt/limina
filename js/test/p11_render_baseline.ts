@@ -13,6 +13,7 @@
 import * as THREE from "../build/three.bundle.mjs";
 import {
   applyRenderBaseline,
+  createRenderBaselineBackground,
   DEFAULT_RENDER_BASELINE,
   type RenderBaselineOverride,
 } from "../src/render-baseline.ts";
@@ -178,6 +179,106 @@ function count(scene: unknown, pred: (c: LightFlags) => boolean): number {
   assert((scene as { environment: unknown }).environment == null, "disabled baseline must not set environment");
   assert(applied.atmosphereMode === "none", "disabled baseline reports no atmosphere");
   assert((scene as { fog: unknown }).fog == null, "disabled baseline must not set fog");
+  applied.updateShadowFocus([0, 0, 0]);
+  applied.setQuality({ shadowMapSize: 1024, shadowHalfExtent: 64 });
+  applied.dispose();
+}
+
+// ===========================================================================
+// 5. Ownership and moving-shadow lifecycle — quality changes update the real
+//    shadow allocation/frustum; focus follows deterministically; dispose removes
+//    and releases only baseline-owned state and is idempotent.
+// ===========================================================================
+{
+  const scene = new THREE.Scene();
+  const previous = {
+    background: new THREE.Color(0x102030),
+    environment: new THREE.Texture(),
+    fog: { previous: "fog" },
+    fogNode: { previous: "fogNode" },
+  };
+  scene.background = previous.background;
+  scene.environment = previous.environment;
+  scene.environmentIntensity = 0.25;
+  scene.fog = previous.fog as never;
+  scene.fogNode = previous.fogNode as never;
+  const applied = applyRenderBaseline({ scene });
+  const sun = applied.sun as THREE.DirectionalLight;
+  const ground = applied.ground as THREE.Mesh;
+  const ownedBackground = scene.background as THREE.Texture;
+  const ownedEnvironment = scene.environment;
+  const ownedFog = scene.fog;
+  const firstFocus = () => [sun.target.position.x, sun.target.position.y, sun.target.position.z, sun.position.x, sun.position.y, sun.position.z].join(",");
+
+  applied.setQuality({ shadowMapSize: 1024, shadowHalfExtent: 128 });
+  assert(sun.shadow.mapSize.width === 1024 && sun.shadow.mapSize.height === 1024, "quality did not update shadow map size");
+  const shadowCamera = sun.shadow.camera as THREE.OrthographicCamera;
+  assert(shadowCamera.left === -128 && shadowCamera.right === 128 && shadowCamera.top === 128 && shadowCamera.bottom === -128, "quality did not update shadow frustum");
+  applied.updateShadowFocus([125.25, 7, -81.75]);
+  const focused = firstFocus();
+  applied.updateShadowFocus([125.25, 7, -81.75]);
+  assert(firstFocus() === focused, "identical shadow focus drifted between frames");
+  assert(sun.target.position.lengthSq() > 0 && sun.position.distanceTo(sun.target.position) > 0, "shadow focus did not move sun and target together");
+
+  let skyDisposals = 0;
+  let geometryDisposals = 0;
+  let materialDisposals = 0;
+  let sunDisposals = 0;
+  ownedBackground.dispose = () => { skyDisposals++; };
+  ground.geometry.dispose = () => { geometryDisposals++; throw new Error("injected geometry cleanup failure"); };
+  (ground.material as THREE.Material).dispose = () => { materialDisposals++; };
+  sun.dispose = () => { sunDisposals++; };
+  const originalWarn = console.warn;
+  let cleanupWarnings = 0;
+  console.warn = () => { cleanupWarnings++; };
+  try { applied.dispose(); } finally { console.warn = originalWarn; }
+  applied.dispose();
+  assert(!scene.children.includes(sun) && !scene.children.includes(sun.target) && !scene.children.includes(ground), "dispose retained baseline scene objects");
+  assert(scene.background === previous.background && scene.environment === previous.environment && scene.environmentIntensity === 0.25, "dispose did not restore prior background/environment state");
+  assert(scene.fog === previous.fog && scene.fogNode === previous.fogNode, "dispose did not restore prior atmosphere state");
+  assert(skyDisposals === 1 && geometryDisposals === 1 && materialDisposals === 1 && sunDisposals === 1, "owned resources were not disposed exactly once");
+  assert(cleanupWarnings === 1, "one cleanup failure did not remain observable while later cleanup continued");
+  assert(ownedEnvironment !== previous.environment && ownedFog !== previous.fog, "test did not install owned environment/fog state");
+}
+{
+  const scene = new THREE.Scene();
+  const applied = applyRenderBaseline({ scene });
+  const foreignBackground = new THREE.Color(0xff00ff);
+  const foreignEnvironment = new THREE.Texture();
+  const foreignFog = { foreign: true };
+  scene.background = foreignBackground;
+  scene.environment = foreignEnvironment;
+  scene.fog = foreignFog as never;
+  applied.dispose();
+  assert(scene.background === foreignBackground && scene.environment === foreignEnvironment && scene.fog === foreignFog, "dispose clobbered newer foreign scene ownership");
+}
+
+// Shared browser-host backgrounds keep one texture identity across world
+// replacement and remain owned by the host, not an individual baseline session.
+{
+  const shared = createRenderBaselineBackground();
+  const texture = shared.texture as THREE.DataTexture;
+  const originalDispose = texture.dispose.bind(texture);
+  let disposals = 0;
+  texture.dispose = (): void => { disposals++; originalDispose(); };
+  const firstScene = new THREE.Scene();
+  const first = applyRenderBaseline({ scene: firstScene }, { sky: { top: 0x102030 } }, shared);
+  assert(firstScene.background === texture, "shared background texture was not installed");
+  const firstRed = (texture.image.data as Uint8Array)[0];
+  first.dispose();
+  assert(disposals === 0, "world session disposed its host-owned background");
+
+  const secondScene = new THREE.Scene();
+  const second = applyRenderBaseline({ scene: secondScene }, { sky: { top: 0xf02010 } }, shared);
+  assert(secondScene.background === texture, "world replacement changed shared background identity");
+  assert((texture.image.data as Uint8Array)[0] !== firstRed, "shared background pixels did not update for the next preset");
+  second.dispose();
+  shared.dispose();
+  shared.dispose();
+  assert(disposals === 1, "host-owned background was not disposed exactly once");
+  let rejected = false;
+  try { shared.update(DEFAULT_RENDER_BASELINE.sky); } catch { rejected = true; }
+  assert(rejected, "disposed shared background accepted an update");
 }
 
 (globalThis as { console?: { log(s: string): void } }).console?.log(
@@ -185,5 +286,5 @@ function count(scene: unknown, pred: (c: LightFlags) => boolean): number {
   "sky-gradient background + IBL (PMREM live / gradient headless fallback), ACES tonemapping, " +
   "+ default-ON ATMOSPHERE (FogExp2 distance haze auto-matched to sky.horizon; opt-in height-falloff node fog); " +
   "renderer tonemapping/exposure/shadows applied; preset overrides (exposure/sun/ground/env/camera/atmosphere) take effect; " +
-  "enabled:false is a no-op.",
+  "quality-driven moving shadows, shared host-background ownership, and idempotent teardown are verified; enabled:false is a no-op.",
 );

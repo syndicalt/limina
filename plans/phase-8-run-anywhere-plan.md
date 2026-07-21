@@ -11,7 +11,7 @@
 > `replayCommands`), the **portable JSONL log + transform capture** (`worldlog/log.ts:316` `captureWorldState`
 > reads `op_physics_body_transform` → `[pos,quat]`), the durable trace seam (`worldlog/durable.ts`), and the
 > W0 **export contract = snapshot-keyframe** ([`web-export-portability-spike.md`](./web-export-portability-spike.md)).
-> **Status:** not started.
+> **Status:** COMPLETE — see the Status & outcomes section below and `plans/ROADMAP.md`.
 
 ## The one hard reality up front: verification
 

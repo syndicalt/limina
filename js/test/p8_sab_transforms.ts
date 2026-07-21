@@ -16,7 +16,9 @@ import {
   SharedTransformStorage,
   sharedArrayBufferAvailable,
   TRANSFORM_BUFFER_BYTES,
+  TRANSFORM_BUFFER_LAYOUT_VERSION,
   TRANSFORM_CHANNELS,
+  TRANSFORM_HEADER_BYTES,
   CHANNEL_BYTES,
 } from "../src/browser/sab-transforms.ts";
 import { createTransformStorage } from "../src/ecs/facade.ts";
@@ -149,6 +151,11 @@ reader.readScale(123, outV3);
 assert(outV3[0] === 5 && outV3[1] === 6 && outV3[2] === 7, "join: scale not shared");
 assert(reader.Rotation.w[123] === 1, "join: rotation view not shared");
 
+writer.beginPublication();
+assert((reader.publicationGeneration() & 1) === 1, "join: reader did not observe in-progress publication");
+writer.endPublication();
+assert((reader.publicationGeneration() & 1) === 0, "join: reader did not observe completed publication");
+
 // And the reverse direction — writing through `reader` is seen by `writer`
 // (a single shared block, symmetric).
 reader.writePosition(123, -1.0, -2.0, -3.0);
@@ -161,8 +168,9 @@ assert(
 // 4. LAYOUT — the 10 channels are non-overlapping, contiguous, and fit exactly.
 // ===========================================================================
 assert(
-  TRANSFORM_BUFFER_BYTES === TRANSFORM_CHANNELS * CHANNEL_BYTES,
-  "buffer size = channels x channel bytes",
+  TRANSFORM_BUFFER_LAYOUT_VERSION === 2 &&
+    TRANSFORM_BUFFER_BYTES === TRANSFORM_HEADER_BYTES + TRANSFORM_CHANNELS * CHANNEL_BYTES,
+  "v2 buffer size = seqlock header + channels x channel bytes",
 );
 assert(CHANNEL_BYTES === MAX_ENTITIES * 4, "channel bytes = MAX_ENTITIES x 4");
 
@@ -178,7 +186,7 @@ assert(channels.length === TRANSFORM_CHANNELS, "channel count");
 const ranges = channels
   .map((v) => [v.byteOffset, v.byteOffset + v.byteLength] as [number, number])
   .sort((p, q) => p[0] - q[0]);
-let cursor = 0;
+let cursor = TRANSFORM_HEADER_BYTES;
 for (const [start, end] of ranges) {
   assert(start === cursor, `channel must be contiguous (gap/overlap at ${start}, expected ${cursor})`);
   assert(end <= TRANSFORM_BUFFER_BYTES, "channel must fit within buffer");
@@ -201,6 +209,6 @@ assert(threw, "wrong-sized donor buffer must be rejected");
 const backing = sab ? "SharedArrayBuffer" : "ArrayBuffer (fallback; cross-thread SAB sharing is browser-UAT)";
 console.log(
   `p8_sab_transforms OK: backing=${backing}; ` +
-    `layout=${TRANSFORM_CHANNELS}ch x ${MAX_ENTITIES}ent x 4B = ${TRANSFORM_BUFFER_BYTES}B; ` +
+    `layout=v${TRANSFORM_BUFFER_LAYOUT_VERSION} header ${TRANSFORM_HEADER_BYTES}B + ${TRANSFORM_CHANNELS}ch x ${MAX_ENTITIES}ent x 4B = ${TRANSFORM_BUFFER_BYTES}B; ` +
     `roundtrip+isomorphism+join+layout+validation all pass.`,
 );

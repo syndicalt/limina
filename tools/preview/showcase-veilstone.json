@@ -1,0 +1,10 @@
+{
+  "_comment": "Showcase #7: the Veilstone monolith — low dramatic angle, camera near the ground looking up the 12.5 m stone.",
+  "commands": [
+    { "kind": "physics", "op": "op_physics_create_world", "args": [-9.81] },
+    { "kind": "skill", "tool": "terrain.create", "input": { "size": 60, "resolution": 48, "color": 7295796 } },
+    { "kind": "skill", "tool": "terrain.paint", "input": { "center": [7, 0], "radius": 8, "strength": 0.5, "material": "grass" } },
+    { "kind": "skill", "tool": "asset.place", "input": { "assetId": "veilstone-monolith.glb", "position": [0, 0, 0], "rotation": [0, 0.5, 0], "ground": true } }
+  ],
+  "camera": { "center": [0, 6.2, 1.2], "radius": 8.5, "height": -3.2, "autoSpin": 0 }
+}

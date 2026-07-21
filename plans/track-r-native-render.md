@@ -23,7 +23,12 @@ The host owns the winit window; three.js renders into a **host-owned native surf
 - **(a) No `GPUQueue.copyExternalImageToTexture`** → ImageBitmap textures upload black; re-homed onto `DataTexture`/`queue.writeTexture`. `crates/limina-render/js/00_bootstrap.js:77-83`; workaround `js/src/skills/three.ts:240-282`.
 - **(b) No reliable fresh-frame present per camera move → live post DISABLED.** `js/src/skills/render.ts:12-16`. **Key nuance: the bare `renderer.render` path DOES present fresh live** — the staleness is **post-composite-specific**, implicating three's multi-pass→surface mapping, not the present op.
 - **(c) No MSAA / sampleCount>1** — documented in plan prose only; source actually passes `antialias:true` (`engine.ts:355`). **Treat as documented-but-unverified** — confirm empirically.
-- **(d) Depth-attachment sampling limited** — depth-as-MRT works (`js/src/render/post.ts:18-22`); sampling the depth a live/transparent pass is writing does not (`js/src/water.ts:28-36`), so water uses a heightfield/proxy.
+- **(d) Depth-attachment sampling was limited in the old water graph.** The current Three node renderer now
+  exposes renderer-managed opaque snapshots: `viewportSharedTexture()` plus `viewportSafeUV()` perform
+  scene-colour sampling with a viewport-depth foreground rejection without sampling the attachment being
+  written. Limina's WB-W1 water material uses that path with a SwiftShader/WebGL compile/readback proof;
+  native NVIDIA/WebGPU validation remains open. The deterministic terrain-depth field still controls water
+  column colour/coverage and is no longer standing in for scene optics.
 
 Versions: deno_core `=0.404.0`, **deno_webgpu `=0.218.0`** (hard-pinned), winit `0.30`. Transitive: **wgpu-core 29.0.1 / wgpu-hal 29.0.3 / naga 29.0.3**. The `wgpu` facade is absent — deno_webgpu binds wgpu-core directly. wgpu-core 29 is locked by the `=`-pinned deno_webgpu.
 
@@ -48,7 +53,9 @@ Versions: deno_core `=0.404.0`, **deno_webgpu `=0.218.0`** (hard-pinned), winit 
 - **Phase 1 — Native scene blit + MSAA.** Native pass samples three's offscreen scene color, resolves a `sampleCount=4` target to the surface. *Gated on the sharing spike (Risk 1).* Settles limit (c) empirically.
 - **Phase 2 — Live post (the Track-R gate).** Port `post.ts`'s GTAO→bloom→HDR-grade chain to native WGSL over three's MRT. **Acceptance:** post runs during free-fly with fresh frames; the `USE_POST` static gates are removed.
 - **Phase 3 — Direct texture upload.** Native `write_texture` replacing the DataTexture re-home (limit a); `js/test/p3_textured_gltf.ts` passes through the native path.
-- **Phase 4 — Real depth pre-pass.** Sampleable scene-depth for water/refraction, retiring the proxies (limit d).
+- **Phase 4 — Scene-depth water validation (re-scoped).** The renderer-managed viewport snapshot path now
+  supplies depth-safe refraction without a native pre-pass rewrite. Validate it on the guarded native
+  WebGPU target; keep a native MRT/depth implementation only as fallback if that target proof fails.
 - **Phase 5 (out of scope, noted):** native scene geometry render to retire three.
 
 ## Risks

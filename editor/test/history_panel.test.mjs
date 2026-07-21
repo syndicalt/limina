@@ -2,8 +2,7 @@
 //
 // The controller LOGIC is proven by js/test/p16_editor_controller.ts. This test proves the BROWSER
 // BINDING is correct without a browser: under a minimal DOM stub it builds the panel, ingests
-// world-log events onto the timeline, time-travels via the scrub control, and branches via the
-// button — asserting the controller state the DOM drives. The only thing it cannot cover is literal
+// world-log events onto the timeline and time-travels via the read-only scrub control. The only thing it cannot cover is literal
 // pixel rendering, which is the in-browser step.
 //
 // Run: node editor/test/history_panel.test.mjs   (exit 0 = pass)
@@ -26,8 +25,7 @@ function makeEl(tag) {
 }
 const byId = { "history-body": makeEl("div") };
 globalThis.document = { getElementById: (id) => byId[id] || null, createElement: (t) => makeEl(t) };
-let promptAnswer = "wip-test";
-globalThis.window = { prompt: () => promptAnswer };
+globalThis.window = {};
 
 // Walk the rendered panel tree to find a control (e.g. the scrub range input, or a button by text).
 function find(root, pred) {
@@ -39,7 +37,9 @@ function find(root, pred) {
 const { createHistoryPanel } = await import("../src/history.js");
 
 let lastScrubPrefixLen = -1;
-const panel = createHistoryPanel({ onScrub: (cmds) => { lastScrubPrefixLen = cmds.length; }, onLog: () => {} });
+// onScrub now receives a { commands, live } payload (not the bare command array) so the host can
+// replay the viewport to the playhead AND know whether it's live-tracking.
+const panel = createHistoryPanel({ onScrub: (payload) => { lastScrubPrefixLen = payload.commands.length; }, onLog: () => {} });
 const ctrl = panel.controller();
 const body = byId["history-body"];
 
@@ -48,12 +48,12 @@ assert(ctrl.tip() === 0, "starts with an empty main branch");
 assert(find(body, (e) => /no edits yet/.test(e._text || "")) !== null, "empty state hint rendered");
 
 // ── 2. Ingesting world-log events grows the timeline on main. ─────────────────────────────────
-panel.recordEvents([
-  { id: "e1", type: "scene.createEntity" }, { id: "e2", type: "player.move" }, { id: "e3", type: "scene.createEntity" },
-  { id: "e4", type: "world.generateRegion" }, { id: "e5", type: "quest.accept" },
+panel.recordCommands([
+  { seq: 1, tool: "scene.createEntity" }, { seq: 2, tool: "player.move" }, { seq: 3, tool: "scene.createEntity" },
+  { seq: 4, tool: "world.generateRegion" }, { seq: 5, tool: "quest.accept" },
 ]);
 assert(ctrl.tip() === 5, `timeline grew to 5 edits (got ${ctrl.tip()})`);
-panel.recordEvents([{ id: "e3", type: "dup" }, { id: "e6", type: "ability.cast" }]); // e3 dup ignored
+panel.recordCommands([{ seq: 3, tool: "dup" }, { seq: 6, tool: "ability.cast" }]); // seq 3 dup ignored
 assert(ctrl.tip() === 6, `dedupes already-seen events; tip 6 (got ${ctrl.tip()})`);
 
 // ── 3. The scrub control time-travels the playhead and emits the prefix. ──────────────────────
@@ -65,19 +65,14 @@ scrub.dispatch("input");
 assert(!ctrl.isLive() && ctrl.playheadAt() === 2, `scrubbing to 2 time-travels the playhead (live=${ctrl.isLive()}, at=${ctrl.playheadAt()})`);
 assert(lastScrubPrefixLen === 2, `onScrub emitted the 2-command prefix for viewport replay (got ${lastScrubPrefixLen})`);
 
-// ── 4. The "+ branch" button forks at the playhead. ──────────────────────────────────────────
-promptAnswer = "experiment";
-const branchBtn = find(body, (e) => e.tagName === "button" && /branch/.test(e._text || ""));
-assert(branchBtn !== null, "a '+ branch' button is rendered");
-branchBtn.dispatch("click");
-assert(ctrl.branches().some((b) => b.name === "experiment"), "branch-from-here created 'experiment'");
-assert(ctrl.currentBranch() === "experiment" && ctrl.tip() === 2, "checked out the new branch at the forked prefix (tip 2)");
+// ── 4. The timeline is explicitly view-only; fake branch/merge controls are absent. ───────────
+assert(find(body, (e) => e.tagName === "select") === null, "no branch or merge selector is rendered");
+assert(find(body, (e) => /view only/.test(e._text || "")) !== null, "view-only status is rendered");
 
-// ── 5. Ongoing world-log events still land on MAIN, preserving the user's branch view. ────────
-panel.recordEvents([{ id: "e7", type: "scene.createEntity" }]);
-assert(ctrl.currentBranch() === "experiment", "the user stays on their branch while events ingest");
-assert(ctrl.diff("main", "experiment").commonPrefix === 2, "main advanced (its tip grew) while 'experiment' held its fork point");
+// ── 5. Ongoing world-log events preserve the user's scrubbed playhead. ────────────────────────
+panel.recordCommands([{ seq: 7, tool: "scene.createEntity" }]);
+assert(ctrl.tip() === 7, "the observed timeline keeps growing");
+assert(!ctrl.isLive() && ctrl.playheadAt() === 2, "the scrubbed read-only view stays at edit 2");
 
-console.log("history_panel.test OK: the editor History binding builds the panel, ingests world-log events onto main, " +
-  "dedupes, time-travels via the scrub control (emitting the viewport prefix), branches-from-here, and keeps ingesting onto " +
-  "main while the user views a branch — all asserted under a headless DOM. Pixel rendering is the in-browser step.");
+console.log("history_panel.test OK: the editor History binding dedupes observed edits, exposes an explicit read-only scrub, " +
+  "preserves a past playhead while live events arrive, and renders no fake branch/merge controls.");

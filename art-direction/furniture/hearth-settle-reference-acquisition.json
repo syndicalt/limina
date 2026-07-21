@@ -1,0 +1,31 @@
+{
+  "schema": "limina.visual-reference-acquisition/v1",
+  "id": "furniture/hearth-settle/v1",
+  "subjectKind": "furniture",
+  "sources": [
+    {
+      "id": "commons/oak-settle-17c",
+      "sourceUrl": "https://commons.wikimedia.org/wiki/File:Settle-seventeenth-century.jpg",
+      "imageUrl": "https://upload.wikimedia.org/wikipedia/commons/1/10/Settle-seventeenth-century.jpg",
+      "creator": "Frederick S. Robinson",
+      "license": "Public domain in the United States; first published 1905",
+      "roles": ["silhouette", "construction", "joinery", "function"]
+    },
+    {
+      "id": "met/bench-chest-467989",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/467989",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/md/original/LC-41_190_277.jpg",
+      "creator": "Unknown French maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "roles": ["silhouette", "construction", "joinery", "material"]
+    },
+    {
+      "id": "met/high-backed-chair-471833",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/471833",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/cl/original/cdi57-144-1.jpg",
+      "creator": "Unknown French or South Netherlandish maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "roles": ["silhouette", "construction", "joinery"]
+    }
+  ]
+}

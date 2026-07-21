@@ -1,4 +1,4 @@
-{"kind":"meta","logVersion":1,"sessionId":"ses_demo_export","createdAt":"2026-06-30T15:06:08.565Z","commands":2711,"ticks":300}
+{"kind":"meta","logVersion":1,"sessionId":"ses_demo_export","createdAt":"tick:300","commands":2711,"ticks":300}
 {"kind":"seed","seq":0,"seed":4442}
 {"kind":"physics","seq":1,"tick":0,"op":"create_world","args":[-9.81]}
 {"kind":"physics","seq":2,"tick":0,"op":"add_ground","args":[0]}

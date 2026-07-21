@@ -91,8 +91,16 @@ pub fn op_create_window_context<'s>(
         )
     };
 
-    // SAFETY: the host owns the window for the whole program; the raw handles
-    // stay valid until shutdown, well past any surface use.
+    // SAFETY: `instance_create_surface` requires the raw window/display handles
+    // to stay valid for the entire lifetime of the surface it returns. That holds
+    // here ONLY because the host creates its winit window exactly once at startup
+    // and never recreates, replaces, or drops it before shutdown: the
+    // `WindowTarget` handles are Copy snapshots that are detached from the Window
+    // yet the Window outlives the surface (and the whole program).
+    // INVARIANT — guard for future changes: if the host is ever made to recreate
+    // or resize-by-replace the window at runtime, this surface AND its
+    // `SurfacePresenter` must be torn down and rebuilt from the fresh handles
+    // first; otherwise these detached handles dangle and this call is unsound.
     let surface_id =
         unsafe { instance.instance_create_surface(Some(display_handle), window_handle, None) }
             .map_err(|e| JsErrorBox::generic(format!("create surface: {e}")))?;
@@ -109,6 +117,20 @@ pub fn op_create_window_context<'s>(
     });
 
     let canvas_obj = v8::Object::new(scope);
+    // Preserve the compositor-returned PHYSICAL inner size on the canvas object. A Wayland
+    // compositor may round a requested physical dimension (for example 1920 -> 1921 under
+    // fractional scaling); JS must configure its renderer/camera and capture contract from the
+    // actual surface rather than silently stretching caller-requested dimensions over it.
+    for (name, value) in [("width", width), ("height", height)] {
+        let key = v8::String::new(scope, name)
+            .ok_or_else(|| JsErrorBox::generic("failed to allocate window canvas dimension key"))?;
+        let number = v8::Integer::new_from_unsigned(scope, value);
+        if canvas_obj.set(scope, key.into(), number.into()) != Some(true) {
+            return Err(JsErrorBox::generic(format!(
+                "failed to publish window canvas {name}"
+            )));
+        }
+    }
     let canvas_global = v8::Global::new(scope, canvas_obj);
     let options: v8::Local<v8::Value> = v8::undefined(scope).into();
     canvas::create(
@@ -125,33 +147,55 @@ pub fn op_create_window_context<'s>(
 /// Present the current swapchain image and clear the context's cached texture so
 /// the next `getCurrentTexture()` acquires a fresh one (this is what Deno's own
 /// `UnsafeWindowSurface.present` does).
+///
+/// Error classification: wgpu-core reports the transient surface conditions
+/// (`Outdated`/`Lost`/`Timeout`/`Occluded`, e.g. mid-resize) as an `Ok` status,
+/// not an error — those frames are simply skipped and the next
+/// configure/acquire recovers. Among the genuine `SurfaceError`s,
+/// `AlreadyAcquired` (no freshly acquired texture to present — the resize-race
+/// shape of a redundant present) is also treated as a skipped frame; the rest
+/// (invalid/unconfigured surface, destroyed texture, device loss) have no
+/// recovery path in this host and throw.
 #[op2(fast)]
 pub fn op_surface_present(
     state: &mut OpState,
     #[cppgc] context: &GPUCanvasContext,
 ) -> Result<(), JsErrorBox> {
+    use deno_webgpu::wgpu_core::present::SurfaceError;
+
     let (instance, surface_id) = {
         let presenter = state
             .try_borrow::<SurfacePresenter>()
             .ok_or_else(|| JsErrorBox::generic("surface not created"))?;
         (presenter.instance.clone(), presenter.surface.borrow().id)
     };
-    instance
-        .surface_present(surface_id)
-        .map_err(|e| JsErrorBox::generic(format!("present: {e}")))?;
+    match instance.surface_present(surface_id) {
+        Ok(_status) => {}
+        Err(SurfaceError::AlreadyAcquired) => {}
+        Err(e) => return Err(JsErrorBox::generic(format!("present: {e}"))),
+    }
     context.current_texture.borrow_mut().take();
     Ok(())
 }
 
 /// Update the surface dimensions after a window resize. JS must then re-call
 /// `context.configure(...)` (which reads these dims) to reconfigure the swapchain.
+/// Zero is rejected: a 0-sized swapchain configuration is invalid in wgpu and
+/// would only fail later, far from the caller that passed the bad size (the host
+/// already clamps real winit resize events to >= 1).
 #[op2(fast)]
-pub fn op_surface_resize(state: &mut OpState, width: u32, height: u32) {
+pub fn op_surface_resize(state: &mut OpState, width: u32, height: u32) -> Result<(), JsErrorBox> {
+    if width == 0 || height == 0 {
+        return Err(JsErrorBox::generic(format!(
+            "surface resize dimensions must be non-zero (got {width}x{height})"
+        )));
+    }
     if let Some(presenter) = state.try_borrow::<SurfacePresenter>() {
         let mut surface = presenter.surface.borrow_mut();
         surface.width = width;
         surface.height = height;
     }
+    Ok(())
 }
 
 /// Register the JS function the host loop invokes each frame.
@@ -175,9 +219,12 @@ pub fn op_set_fixed_step_callback(state: &mut OpState, #[scoped] cb: v8::Global<
 /// Write the current movement axes into `out[0..3]` (x = strafe, y = up,
 /// z = forward), as set by the host from keyboard state. Zero when unset.
 #[op2(fast)]
-pub fn op_input_axes(state: &mut OpState, #[buffer] out: &mut [f32]) {
+pub fn op_input_axes(state: &mut OpState, #[buffer] out: &mut [f32]) -> Result<(), JsErrorBox> {
     if out.len() < 3 {
-        return;
+        return Err(JsErrorBox::generic(format!(
+            "input axes output buffer requires at least 3 elements, got {}",
+            out.len()
+        )));
     }
     let input = state
         .try_borrow::<InputState>()
@@ -186,15 +233,19 @@ pub fn op_input_axes(state: &mut OpState, #[buffer] out: &mut [f32]) {
     out[0] = input.move_x;
     out[1] = input.move_y;
     out[2] = input.move_z;
+    Ok(())
 }
 
 /// Write the mouse-look delta into `out[0..2]` (dx, dy in raw device units),
 /// accumulated by the host since the last frame; zero when the cursor isn't
 /// grabbed. Drives a free-fly / FPS camera (yaw += dx, pitch += dy).
 #[op2(fast)]
-pub fn op_input_look(state: &mut OpState, #[buffer] out: &mut [f32]) {
+pub fn op_input_look(state: &mut OpState, #[buffer] out: &mut [f32]) -> Result<(), JsErrorBox> {
     if out.len() < 2 {
-        return;
+        return Err(JsErrorBox::generic(format!(
+            "input look output buffer requires at least 2 elements, got {}",
+            out.len()
+        )));
     }
     let input = state
         .try_borrow::<InputState>()
@@ -202,6 +253,7 @@ pub fn op_input_look(state: &mut OpState, #[buffer] out: &mut [f32]) {
         .unwrap_or_default();
     out[0] = input.look_dx;
     out[1] = input.look_dy;
+    Ok(())
 }
 
 /// Write the discrete action-button states into `out[0..2]` as 0/1 floats
@@ -209,14 +261,26 @@ pub fn op_input_look(state: &mut OpState, #[buffer] out: &mut [f32]) {
 /// bitmask. Drives a character controller (jump on the rising edge, run while
 /// held). Zero when unset.
 #[op2(fast)]
-pub fn op_input_buttons(state: &mut OpState, #[buffer] out: &mut [f32]) {
+pub fn op_input_buttons(state: &mut OpState, #[buffer] out: &mut [f32]) -> Result<(), JsErrorBox> {
     if out.len() < 2 {
-        return;
+        return Err(JsErrorBox::generic(format!(
+            "input buttons output buffer requires at least 2 elements, got {}",
+            out.len()
+        )));
     }
     let input = state
         .try_borrow::<InputState>()
         .copied()
         .unwrap_or_default();
-    out[0] = if input.buttons & BUTTON_JUMP != 0 { 1.0 } else { 0.0 };
-    out[1] = if input.buttons & BUTTON_RUN != 0 { 1.0 } else { 0.0 };
+    out[0] = if input.buttons & BUTTON_JUMP != 0 {
+        1.0
+    } else {
+        0.0
+    };
+    out[1] = if input.buttons & BUTTON_RUN != 0 {
+        1.0
+    } else {
+        0.0
+    };
+    Ok(())
 }

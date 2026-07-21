@@ -20,6 +20,13 @@ export interface TerrainTile {
   scale: [number, number, number];
   /** Row-major elevation samples (index = row*ncols + col), length nrows*ncols. */
   heights: Float32Array;
+  /** OPTIONAL surface-material paint (in-game terrain.paint). Row-major, length nrows*ncols.
+   *  paintMat[i] = material id (0 none, 1 sand, 2 grass, 3 rock, 4 dirt, 5 snow, 6 murk, 7 tundra);
+   *  paintW[i] = blend weight
+   *  0..1 toward that material's albedo. Like heights, reconstructed deterministically from the
+   *  terrain.paint commands on replay (never snapshotted). Absent until the tile is first painted. */
+  paintMat?: Uint8Array;
+  paintW?: Float32Array;
   /** Optional per-cell climate grid, flat row-major, length = climateChannels *
    *  nrows * ncols. Channels are packed in the fixed CLIMATE_* order below —
    *  [tempC, precipMm, biome], climateChannels === CLIMATE_CHANNELS — matching
@@ -28,6 +35,10 @@ export interface TerrainTile {
    *  (source-agnostic) and may assert climateChannels === CLIMATE_CHANNELS. */
   climate?: Float32Array;
   climateChannels?: number;
+  /** OPTIONAL per-cell BLIGHT (caesura) mask, row-major, length nrows*ncols, 0 (clean) .. 1
+   *  (fully corrupt). Baked into the climate texture's alpha channel for a world-space desaturation
+   *  drain in the render ramp; absent = no blight. Sourced from painted blight regions. */
+  blight?: Float32Array;
 }
 
 /** The fixed channel layout of `TerrainTile.climate` (and the order a source must
@@ -88,6 +99,12 @@ export interface ClimateSample {
 export interface TerrainSource {
   /** Stable identifier recorded for provenance (e.g. "procedural", "model:terrain-diffusion-30m"). */
   readonly name: string;
+  /** OPT-IN cache-retention exemption: true means this source's tiles RE-DERIVE
+   *  deterministically from a logged/pinned artifact (e.g. MapTerrainSource's WorldMap
+   *  IR, rebound by the recorded world.setTerrainSource), so TileCache keeps them
+   *  transient-LRU instead of export-retained — the export ships the artifact, never
+   *  the tiles. Absent/false (every pre-existing source) keeps retention unchanged. */
+  readonly derived?: boolean;
   /** Generate one tile. Deterministic per (seed, lod, tx, tz[, hints]). */
   generateTile(req: TileRequest): TerrainTile | Promise<TerrainTile>;
   /** O(1) point elevation query (snapping/queries). Deterministic per (seed, x, z, lod

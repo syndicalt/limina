@@ -7,10 +7,10 @@
 //
 // Run: limina js/test/p11_terrain_ramp.ts   (exit 0 = pass)
 
-import { buildTerrainMesh } from "../src/terrain/render.ts";
+import { buildTerrainMesh, disposeTerrainMesh } from "../src/terrain/render.ts";
 import { ProceduralTerrainSource, TILE_SIZE } from "../src/terrain/procedural.ts";
 import { terrainTypeHints } from "../src/terrain/terrain-types.ts";
-import { biomeScatterConfigs, surveyRegionRelief } from "../src/terrain/biome-content.ts";
+import { biomeScatterConfigs, surveyRegionRelief, type BiomePack } from "../src/terrain/biome-content.ts";
 import { scatterAssets } from "../src/terrain/asset-scatter.ts";
 import { ops } from "../src/engine.ts";
 
@@ -19,6 +19,17 @@ function assert(cond: boolean, msg: string): asserts cond {
 }
 
 const SEED = 1234;
+// The engine ships NO biome pack; this gate supplies a TEST PACK binding each role to the SAME glb
+// + embed radius the catalog hardcoded before decoupling, so the gated scatter is byte-identical.
+const TEST_PACK: BiomePack = {
+  conifer: { id: "pine.glb", embedRadius: 1.2 },
+  broadleaf: { id: "broadleaf.glb", embedRadius: 1.3 },
+  boulder: { id: "rock.glb", embedRadius: 0.5 },
+  bush: { id: "bush.glb" },
+  grass: { id: "grass.glb" },
+  cactus: { id: "cactus.glb" },
+  palm: { id: "palm.glb" },
+};
 const source = new ProceduralTerrainSource();
 const bounds = { minTx: 0, minTz: 0, maxTx: 1, maxTz: 1 };
 const hints = { ...terrainTypeHints("mountains", bounds), erode: 1 };
@@ -42,6 +53,12 @@ const rampMat = ramp.material as any;
 assert(rampMat.colorNode !== undefined && rampMat.colorNode !== null, "palette must set a colorNode");
 assert(rampMat.roughnessNode !== undefined && rampMat.roughnessNode !== null, "palette must set a roughnessNode");
 assert(ramp.geometry.getAttribute("position").count === tile.nrows * tile.ncols, "ramp geometry vertex count wrong");
+const rampOwnedTextures = rampMat.userData?.liminaOwnedTextures as { dispose?: () => void }[] | undefined;
+assert(Array.isArray(rampOwnedTextures) && rampOwnedTextures.length === 1, "palette material must track its baked climate texture for disposal");
+let rampTextureDisposes = 0;
+for (const tex of rampOwnedTextures) tex.dispose = () => { rampTextureDisposes++; };
+disposeTerrainMesh(ramp);
+assert(rampTextureDisposes === 1, "disposeTerrainMesh must dispose the palette climate texture");
 
 // (3) PALETTE with default relief (derived from the tile heights) also builds.
 const ramp2 = buildTerrainMesh(tile, { palette: { seaLevel: sea } });
@@ -81,7 +98,7 @@ for (let tz = rbounds.minTz; tz <= rbounds.maxTz; tz++) {
   }
 }
 
-const gatedConfigs = biomeScatterConfigs("mountains", rsurvey, waterLevel, MARGIN);
+const gatedConfigs = biomeScatterConfigs("mountains", TEST_PACK, rsurvey, waterLevel, MARGIN);
 let gatedTotal = 0, gatedBelow = 0;
 for (const cfg of gatedConfigs) {
   for (const t of rtiles) {
@@ -92,7 +109,7 @@ assert(gatedTotal > 0, "water-exclusion: expected SOME gated props to place abov
 assert(gatedBelow === 0, `water-exclusion: ${gatedBelow}/${gatedTotal} gated props are AT/BELOW the water line (must be 0)`);
 
 // Falsifiability: the SAME content with NO water level placed props below the water line.
-const looseConfigs = biomeScatterConfigs("mountains", rsurvey); // no waterLevel → no water floor
+const looseConfigs = biomeScatterConfigs("mountains", TEST_PACK, rsurvey); // no waterLevel → no water floor
 let looseBelow = 0;
 for (const cfg of looseConfigs) {
   for (const t of rtiles) {
@@ -114,7 +131,7 @@ for (let tz = lbounds.minTz; tz <= lbounds.maxTz; tz++) {
     ltiles.push(source.generateTile({ seed: SEED, tx, tz, lod: 0, hints: lhints }));
   }
 }
-const [pineCfg, boulderCfg] = biomeScatterConfigs("mountains", lsurvey, lsea, 1.0);
+const [pineCfg, boulderCfg] = biomeScatterConfigs("mountains", TEST_PACK, lsurvey, lsea, 1.0);
 let pineN = 0, boulderN = 0, pineBelow = 0;
 for (const t of ltiles) {
   for (const inst of scatterAssets(t, SEED, pineCfg)) { pineN++; if (inst.y < lsea) pineBelow++; }

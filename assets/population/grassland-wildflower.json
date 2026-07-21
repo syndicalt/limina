@@ -1,0 +1,13 @@
+{
+  "schema": "limina.biome-population-asset/v1",
+  "id": "grassland-wildflower",
+  "version": "1.0.0",
+  "role": "flora/wildflower",
+  "backend": "instanced-asset",
+  "assetId": "vegetation/temperate-fern-lod0.glb",
+  "contentHash": "sha256:526f96306ccb89f388217716f164d663d21da5d355e45f0facce8ef52f7f779d",
+  "provenance": {
+    "licenseId": "CC0-1.0",
+    "sourceUri": "https://polyhaven.com/a/fern_02"
+  }
+}

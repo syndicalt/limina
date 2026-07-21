@@ -1,0 +1,505 @@
+#!/usr/bin/env node
+
+import { spawn } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { BoundedByteTail } from "./process/bounded-byte-tail.mjs";
+
+// three + its GLTFExporter live in js/node_modules (there is no repo-root node_modules). Resolve
+// them by explicit path so this baker runs from any cwd. GLTFExporter's own bare `three` import
+// resolves to the SAME js/node_modules/three (same module URL → one instance), which the exporter
+// requires to serialize ez-tree's meshes (ez-core is bundled --external:three against this same copy).
+import * as THREE from "../js/node_modules/three/build/three.module.js";
+import { GLTFExporter } from "../js/node_modules/three/examples/jsm/exporters/GLTFExporter.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const REPO_ROOT = path.resolve(path.dirname(__filename), "..");
+const TOOLS_DIR = path.join(REPO_ROOT, "tools");
+const ASSET_DIR = path.join(REPO_ROOT, "assets", "trees");
+// The ez-core bundle must sit under js/ so its (--external) bare `three` import resolves to
+// js/node_modules/three — the same copy bake-trees imports above.
+const EZ_CORE_BUNDLE = path.join(REPO_ROOT, "js", ".ez-core.mjs");
+const ESBUILD_BIN = path.join(REPO_ROOT, "js", "node_modules", ".bin", "esbuild");
+const SEEDS = [1, 2, 3];
+const LEAF_COLOR = 0x2f5d34;
+const BARK_COLOR = 0x5b4636;
+// The AUTHORED species catalog — every species with a configureTree option set. A pack recipe
+// references these by name; bake-trees can bake any subset (recipe mode) or all of them (dev bake).
+const SPECIES = ["spruce", "pine", "birch", "oak", "ash", "dead-oak"];
+// Per-species material override (bark / leaf color). Default = the living temperate palette; the
+// dead-oak reads as a bare skeleton via grey-brown bark + a dry desaturated-brown leaf.
+const SPECIES_MATERIALS = {
+  "dead-oak": { bark: 0x4a4239, leaf: 0x6b5a3c },
+};
+
+installHeadlessThreeShims();
+
+function installHeadlessThreeShims() {
+  globalThis.document = {
+    createElementNS(_namespace, tagName) {
+      return tagName === "img"
+        ? {
+            addEventListener() {},
+            removeEventListener() {},
+            set src(_value) {},
+            get src() {
+              return "";
+            },
+          }
+        : { getContext: () => null };
+    },
+    createElement(tagName) {
+      return this.createElementNS(null, tagName);
+    },
+  };
+
+  globalThis.FileReader = class {
+    readAsArrayBuffer(blob) {
+      blob.arrayBuffer().then(
+        (arrayBuffer) => {
+          this.result = arrayBuffer;
+          this.onloadend && this.onloadend();
+        },
+        (error) => {
+          this.onerror && this.onerror(error);
+        },
+      );
+    }
+  };
+}
+
+function run(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: REPO_ROOT,
+      stdio: ["ignore", "pipe", "pipe"],
+      ...options,
+    });
+
+    // Subprocess output is diagnostic only. Keeping the full stream let a noisy
+    // or compromised tool grow this long-lived baker without bound.
+    const stdout = new BoundedByteTail(64 * 1024);
+    const stderr = new BoundedByteTail(64 * 1024);
+    child.stdout.on("data", (chunk) => stdout.append(chunk));
+    child.stderr.on("data", (chunk) => stderr.append(chunk));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve({ stdout: stdout.toString(), stderr: stderr.toString() });
+      } else {
+        reject(
+          new Error(
+            `${command} ${args.join(" ")} failed with exit ${code}\n${stdout.toString()}${stderr.toString()}`,
+          ),
+        );
+      }
+    });
+  });
+}
+
+async function bundleEzTreeCore() {
+  const bundleDir = await mkdtemp(path.join(tmpdir(), "limina-ez-tree-"));
+  try {
+    const entry = path.join(bundleDir, "entry.mjs");
+    await symlink(path.join(REPO_ROOT, "js", "node_modules"), path.join(bundleDir, "node_modules"));
+    await writeFile(
+      entry,
+      'export * from "./node_modules/@dgreenheck/ez-tree/src/lib/index.js";\n',
+      "utf8",
+    );
+    await run(ESBUILD_BIN, [
+      entry,
+      "--bundle",
+      "--platform=node",
+      "--format=esm",
+      "--external:three",
+      "--loader:.jpg=dataurl",
+      "--loader:.png=dataurl",
+      `--outfile=${EZ_CORE_BUNDLE}`,
+    ]);
+  } finally {
+    await rm(bundleDir, { recursive: true, force: true });
+  }
+}
+
+async function loadEzTreeCore() {
+  await bundleEzTreeCore();
+  return import(pathToFileURL(EZ_CORE_BUNDLE).href);
+}
+
+function configureTree(tree, ez, species, seed) {
+  const { BarkType, Billboard, LeafType, TreeType } = ez;
+  const options = tree.options;
+  options.seed = seed;
+  options.trellis.enabled = false;
+  options.leaves.billboard = Billboard.Double;
+  options.bark.textured = false;
+  options.bark.tint = 0xffffff;
+  options.leaves.tint = 0xffffff;
+  options.leaves.alphaTest = 0.3;
+
+  if (species === "spruce") {
+    options.type = TreeType.Evergreen;
+    options.bark.type = BarkType.Pine;
+    options.leaves.type = LeafType.Pine;
+    options.branch.levels = 2;
+    options.branch.angle = { 1: 123, 2: 112, 3: 60 };
+    options.branch.children = { 0: 64, 1: 4, 2: 0 };
+    options.branch.force = { direction: { x: 0, y: 1, z: 0 }, strength: 0.004 };
+    options.branch.gnarliness = { 0: 0.025, 1: 0.04, 2: 0.035, 3: 0 };
+    options.branch.length = { 0: 38, 1: 10, 2: 4.5, 3: 1 };
+    options.branch.radius = { 0: 0.82, 1: 0.28, 2: 0.13, 3: 0.08 };
+    options.branch.sections = { 0: 14, 1: 7, 2: 5, 3: 4 };
+    options.branch.segments = { 0: 8, 1: 5, 2: 4, 3: 3 };
+    options.branch.start = { 1: 0.13, 2: 0.28, 3: 0.3 };
+    options.branch.taper = { 0: 0.82, 1: 0.72, 2: 0.7, 3: 0.7 };
+    options.branch.twist = { 0: 0, 1: 0, 2: 0, 3: 0 };
+    options.leaves.angle = 8;
+    options.leaves.count = 14;
+    options.leaves.start = 0.04;
+    options.leaves.size = 0.72;
+    options.leaves.sizeVariance = 0.22;
+    return;
+  }
+
+  if (species === "pine") {
+    options.type = TreeType.Evergreen;
+    options.bark.type = BarkType.Pine;
+    options.leaves.type = LeafType.Pine;
+    options.branch.levels = 1;
+    options.branch.angle = { 1: 126, 2: 60, 3: 60 };
+    options.branch.children = { 0: 44, 1: 0, 2: 0 };
+    options.branch.force = { direction: { x: 0, y: 1, z: 0 }, strength: 0.006 };
+    options.branch.gnarliness = { 0: 0.035, 1: 0.08, 2: 0, 3: 0 };
+    options.branch.length = { 0: 48, 1: 18, 2: 10, 3: 1 };
+    options.branch.radius = { 0: 0.72, 1: 0.24, 2: 0.7, 3: 0.7 };
+    options.branch.sections = { 0: 13, 1: 8, 2: 8, 3: 6 };
+    options.branch.segments = { 0: 8, 1: 5, 2: 4, 3: 3 };
+    options.branch.start = { 1: 0.48, 2: 0.3, 3: 0.3 };
+    options.branch.taper = { 0: 0.82, 1: 0.7, 2: 0.7, 3: 0.7 };
+    options.branch.twist = { 0: 0, 1: 0, 2: 0, 3: 0 };
+    options.leaves.angle = 15;
+    options.leaves.count = 10;
+    options.leaves.start = 0.16;
+    options.leaves.size = 1.35;
+    options.leaves.sizeVariance = 0.28;
+    return;
+  }
+
+  if (species === "birch") {
+    options.type = TreeType.Deciduous;
+    options.bark.type = BarkType.Birch;
+    options.leaves.type = LeafType.Aspen;
+    options.leaves.alphaTest = 0.45;
+    options.branch.levels = 2;
+    options.branch.angle = { 1: 58, 2: 34, 3: 18 };
+    options.branch.children = { 0: 8, 1: 3, 2: 0 };
+    options.branch.force = { direction: { x: 0.06, y: 1, z: 0.02 }, strength: 0.018 };
+    options.branch.gnarliness = { 0: 0.035, 1: 0.09, 2: 0.08, 3: 0.02 };
+    options.branch.length = { 0: 42, 1: 8.5, 2: 9.5, 3: 1 };
+    options.branch.radius = { 0: 0.46, 1: 0.22, 2: 0.14, 3: 0.08 };
+    options.branch.sections = { 0: 13, 1: 8, 2: 6, 3: 4 };
+    options.branch.segments = { 0: 7, 1: 5, 2: 4, 3: 3 };
+    options.branch.start = { 1: 0.52, 2: 0.28, 3: 0.3 };
+    options.branch.taper = { 0: 0.38, 1: 0.32, 2: 0.42, 3: 0.7 };
+    options.branch.twist = { 0: 0, 1: 0.02, 2: 0.02, 3: 0 };
+    options.leaves.angle = 32;
+    options.leaves.count = 7;
+    options.leaves.start = 0.1;
+    options.leaves.size = 1.55;
+    options.leaves.sizeVariance = 0.35;
+    return;
+  }
+
+  if (species === "oak") {
+    // Broad, stout Hearthborn hardwood — wide low canopy (ez-tree oak_medium, adapted).
+    options.type = TreeType.Deciduous;
+    options.bark.type = BarkType.Oak;
+    options.leaves.type = LeafType.Oak;
+    options.leaves.alphaTest = 0.5;
+    options.branch.levels = 3;
+    options.branch.angle = { 1: 54, 2: 58, 3: 32 };
+    options.branch.children = { 0: 6, 1: 4, 2: 3 };
+    options.branch.force = { direction: { x: 0, y: 1, z: 0 }, strength: -0.01 };
+    options.branch.gnarliness = { 0: 0.03, 1: 0.08, 2: 0.1, 3: 0.09 };
+    options.branch.length = { 0: 32, 1: 12, 2: 12, 3: 7 };
+    options.branch.radius = { 0: 1.35, 1: 0.86, 2: 0.6, 3: 0.7 };
+    options.branch.sections = { 0: 10, 1: 6, 2: 4, 3: 2 };
+    options.branch.segments = { 0: 8, 1: 6, 2: 4, 3: 3 };
+    options.branch.start = { 1: 0.45, 2: 0.1, 3: 0.12 };
+    options.branch.taper = { 0: 0.73, 1: 0.5, 2: 0.6, 3: 0.7 };
+    options.branch.twist = { 0: 0.1, 1: 0.2, 2: 0.1, 3: 0 };
+    options.leaves.angle = 42;
+    options.leaves.count = 18;
+    options.leaves.start = 0.16;
+    options.leaves.size = 2.2;
+    options.leaves.sizeVariance = 0.6;
+    return;
+  }
+
+  if (species === "ash") {
+    // Taller, more upright farmland broadleaf with a lighter, higher canopy (ez-tree ash_medium).
+    options.type = TreeType.Deciduous;
+    options.bark.type = BarkType.Oak;
+    options.leaves.type = LeafType.Ash;
+    options.leaves.alphaTest = 0.5;
+    options.branch.levels = 3;
+    options.branch.angle = { 1: 48, 2: 75, 3: 60 };
+    options.branch.children = { 0: 7, 1: 4, 2: 3 };
+    options.branch.force = { direction: { x: 0, y: 1, z: 0 }, strength: 0.01 };
+    options.branch.gnarliness = { 0: 0.02, 1: 0.05, 2: 0.06, 3: 0.03 };
+    options.branch.length = { 0: 40, 1: 22, 2: 9.5, 3: 4.6 };
+    options.branch.radius = { 0: 1.6, 1: 0.6, 2: 0.5, 3: 0.5 };
+    options.branch.sections = { 0: 10, 1: 7, 2: 4, 3: 2 };
+    options.branch.segments = { 0: 8, 1: 6, 2: 4, 3: 3 };
+    options.branch.start = { 1: 0.4, 2: 0.2, 3: 0.2 };
+    options.branch.taper = { 0: 0.7, 1: 0.5, 2: 0.6, 3: 0.7 };
+    options.branch.twist = { 0: 0, 1: 0.05, 2: 0.02, 3: 0 };
+    options.leaves.angle = 55;
+    options.leaves.count = 16;
+    options.leaves.start = 0;
+    options.leaves.size = 2.4;
+    options.leaves.sizeVariance = 0.6;
+    return;
+  }
+
+  if (species === "dead-oak") {
+    // A gnarled, near-bare oak skeleton for the Caesura / Blight heart — heavy gnarliness + twist,
+    // downward force (no reaching for light), and almost no foliage. Its dead read comes from the
+    // silhouette + the grey-brown material override below, not from a green canopy.
+    options.type = TreeType.Deciduous;
+    options.bark.type = BarkType.Oak;
+    options.leaves.type = LeafType.Oak;
+    options.leaves.alphaTest = 0.6;
+    options.branch.levels = 3;
+    options.branch.angle = { 1: 62, 2: 80, 3: 52 };
+    options.branch.children = { 0: 7, 1: 5, 2: 3 };
+    options.branch.force = { direction: { x: 0.05, y: 0.7, z: 0.03 }, strength: -0.02 };
+    options.branch.gnarliness = { 0: 0.07, 1: 0.18, 2: 0.22, 3: 0.15 };
+    options.branch.length = { 0: 26, 1: 12, 2: 10, 3: 6 };
+    options.branch.radius = { 0: 1.2, 1: 0.7, 2: 0.5, 3: 0.4 };
+    options.branch.sections = { 0: 9, 1: 6, 2: 4, 3: 2 };
+    options.branch.segments = { 0: 7, 1: 5, 2: 4, 3: 3 };
+    options.branch.start = { 1: 0.35, 2: 0.15, 3: 0.15 };
+    options.branch.taper = { 0: 0.6, 1: 0.5, 2: 0.55, 3: 0.7 };
+    options.branch.twist = { 0: 0.15, 1: 0.3, 2: 0.25, 3: 0.1 };
+    options.leaves.angle = 40;
+    options.leaves.count = 2;
+    options.leaves.start = 0.2;
+    options.leaves.size = 0.8;
+    options.leaves.sizeVariance = 0.4;
+    return;
+  }
+
+  throw new Error(`Unknown tree species: ${species}`);
+}
+
+function rematerialTree(tree, species) {
+  // ez-tree exposes the two meshes explicitly (tree.js: this.branchesMesh / this.leavesMesh);
+  // GLTFExporter renames them to mesh_0/mesh_1, so identify by these references, NOT by name.
+  const mat = SPECIES_MATERIALS[species] || {};
+  const bark = mat.bark ?? BARK_COLOR;
+  const leaf = mat.leaf ?? LEAF_COLOR;
+  const apply = (mesh, isLeaf) => {
+    if (!mesh) return;
+    if (Array.isArray(mesh.material)) {
+      for (const material of mesh.material) material.dispose();
+    } else if (mesh.material) {
+      mesh.material.dispose();
+    }
+    mesh.name = isLeaf ? "leaves" : "branches";
+    mesh.material = new THREE.MeshStandardMaterial({
+      color: isLeaf ? leaf : bark,
+      roughness: 0.9,
+      metalness: 0,
+      side: isLeaf ? THREE.DoubleSide : THREE.FrontSide,
+    });
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+  };
+  apply(tree.branchesMesh, false);
+  apply(tree.leavesMesh, true);
+}
+
+// Authored REAL-WORLD species heights (metres). ez-tree generates in its own
+// units (the raw bakes measured 60–80 m tall — flagged EXCLUDED OVERSIZE by
+// check:assets, and towering over whole terrain reliefs the first time a
+// browser actually rendered them). Every bake normalizes to these targets by
+// scaling the GEOMETRY, so the shipped GLB is intrinsically metre-scale — the
+// asset quality bar; never a runtime rescale.
+const TARGET_HEIGHT_M = {
+  spruce: 22,
+  pine: 17,
+  birch: 13,
+  oak: 15,
+  ash: 19,
+  "dead-oak": 11,
+};
+
+function normalizeTreeScale(tree, species) {
+  const target = TARGET_HEIGHT_M[species];
+  if (target === undefined) throw new Error(`bake-trees: no authored height for species '${species}'`);
+  const bounds = new THREE.Box3().setFromObject(tree);
+  const height = bounds.max.y - Math.min(bounds.min.y, 0);
+  if (!(height > 0)) throw new Error(`bake-trees: '${species}' generated a degenerate height ${height}`);
+  const factor = target / height;
+  for (const mesh of [tree.branchesMesh, tree.leavesMesh]) {
+    if (mesh?.geometry === undefined) continue;
+    mesh.geometry.scale(factor, factor, factor);
+    mesh.geometry.computeBoundingBox();
+    mesh.geometry.computeBoundingSphere();
+  }
+  return { rawHeightM: height, factor };
+}
+
+function buildTree(ez, species, seed) {
+  const tree = new ez.Tree();
+  tree.name = `${species}-${seed}`;
+  configureTree(tree, ez, species, seed);
+  tree.generate();
+  rematerialTree(tree, species);
+  const scale = normalizeTreeScale(tree, species);
+  console.log(`  ${species}-${seed}: raw ${scale.rawHeightM.toFixed(1)}m -> ${TARGET_HEIGHT_M[species]}m (x${scale.factor.toFixed(3)})`);
+  return tree;
+}
+
+async function exportGlbBuffer(tree) {
+  const exporter = new GLTFExporter();
+  const result = await exporter.parseAsync(tree, { binary: true });
+  if (!(result instanceof ArrayBuffer)) {
+    throw new Error("GLTFExporter returned JSON data; expected binary GLB ArrayBuffer");
+  }
+  return Buffer.from(result);
+}
+
+async function bakeOne(ez, species, seed) {
+  const tree = buildTree(ez, species, seed);
+  const buffer = await exportGlbBuffer(tree);
+  return {
+    filename: `${species}-${seed}.glb`,
+    buffer,
+    vertices: tree.vertexCount,
+    triangles: tree.triangleCount,
+  };
+}
+
+async function writeManifest(manifest) {
+  await writeFile(
+    path.join(ASSET_DIR, "manifest.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    "utf8",
+  );
+}
+
+// Bake an explicit (species × seeds) set into `outDir`, returning the per-file results. This is the
+// RECIPE seam: pack-import (and the gate) call it to generate exactly the trees a recipe asks for,
+// into the project's asset root — no committed GLBs, no manifest side effects.
+export async function bakeSpecies({ ez, species, seeds, outDir }) {
+  const list = Array.isArray(species) ? species : [];
+  const seedList = Array.isArray(seeds) && seeds.length > 0 ? seeds : SEEDS;
+  await mkdir(outDir, { recursive: true });
+  const results = [];
+  for (const sp of list) {
+    if (!SPECIES.includes(sp)) throw new Error(`unknown species '${sp}' (known: ${SPECIES.join(", ")})`);
+    for (const seed of seedList) {
+      const r = await bakeOne(ez, sp, seed);
+      await writeFile(path.join(outDir, r.filename), r.buffer);
+      results.push({ species: sp, seed, filename: r.filename, bytes: r.buffer.length, vertices: r.vertices, triangles: r.triangles });
+    }
+  }
+  return results;
+}
+
+async function bakeAll(ez) {
+  const manifest = { generator: "ez-tree", species: {} };
+  for (const species of SPECIES) manifest.species[species] = [];
+  const results = await bakeSpecies({ ez, species: SPECIES, seeds: SEEDS, outDir: ASSET_DIR });
+  for (const r of results) {
+    manifest.species[r.species].push(r.filename);
+    console.log(`${r.filename}: ${r.bytes} bytes, ${r.vertices} verts, ${r.triangles} tris`);
+  }
+  await writeManifest(manifest);
+  console.log(`manifest.json: wrote ${results.length} archetypes`);
+}
+
+async function checkDeterminism(ez) {
+  const first = await bakeOne(ez, "spruce", 1);
+  const second = await bakeOne(ez, "spruce", 1);
+  if (Buffer.compare(first.buffer, second.buffer) !== 0) {
+    throw new Error(
+      `bake-trees determinism: FAIL (${first.filename} differed across two same-process bakes)`,
+    );
+  }
+  console.log("bake-trees determinism: PASS");
+}
+
+async function verifyFullBake(ez) {
+  for (const species of SPECIES) {
+    for (const seed of SEEDS) {
+      const filename = path.join(ASSET_DIR, `${species}-${seed}.glb`);
+      const buffer = await readFile(filename);
+      if (buffer.length === 0) {
+        throw new Error(`Generated empty GLB: ${filename}`);
+      }
+    }
+  }
+
+  const manifest = JSON.parse(await readFile(path.join(ASSET_DIR, "manifest.json"), "utf8"));
+  for (const species of SPECIES) {
+    const expected = SEEDS.map((seed) => `${species}-${seed}.glb`);
+    const actual = manifest.species?.[species] ?? [];
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      throw new Error(`Manifest entry for ${species} was ${JSON.stringify(actual)}`);
+    }
+  }
+
+  await checkDeterminism(ez);
+}
+
+function flagValue(argv, name) {
+  const i = argv.indexOf(name);
+  return i >= 0 && i + 1 < argv.length ? argv[i + 1] : undefined;
+}
+
+async function main() {
+  const argv = process.argv.slice(2);
+  const args = new Set(argv);
+  if (args.has("--help") || args.has("-h")) {
+    console.log("Usage: node tools/bake-trees.mjs [--check] [--species a,b] [--seeds 1,2] [--out DIR]");
+    console.log(`Known species: ${SPECIES.join(", ")}`);
+    return;
+  }
+
+  const ez = await loadEzTreeCore();
+  if (args.has("--check")) {
+    await checkDeterminism(ez);
+    return;
+  }
+
+  // RECIPE mode: bake an explicit species/seed subset into --out (used by pack-import). Prints one
+  // JSON line of results so a spawning parent can parse what was baked.
+  const speciesArg = flagValue(argv, "--species");
+  if (speciesArg !== undefined) {
+    const species = speciesArg.split(",").map((s) => s.trim()).filter(Boolean);
+    const seedsArg = flagValue(argv, "--seeds");
+    const seeds = seedsArg ? seedsArg.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n)) : SEEDS;
+    const outDir = flagValue(argv, "--out") || ASSET_DIR;
+    const results = await bakeSpecies({ ez, species, seeds, outDir });
+    console.log(JSON.stringify({ ok: true, outDir, results }));
+    return;
+  }
+
+  await bakeAll(ez);
+  await verifyFullBake(ez);
+}
+
+// Only run the CLI when invoked directly (`node tools/bake-trees.mjs ...`). When imported by a gate
+// or by pack-import for `bakeSpecies`, the module must NOT auto-bake.
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
+}

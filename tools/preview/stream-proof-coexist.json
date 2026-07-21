@@ -1,0 +1,19 @@
+{
+  "_comment": "Map Phase 3.3 coexistence proof: an EDITABLE terrain.create slab (map-rasterized island, recorded world state) plus CLIENT-streamed map tiles around it. Streamed tiles fully inside the slab footprint are externally-owned (never double-mounted); boundary tiles pass beneath the slab edge. Wide top-down camera.",
+  "commands": [
+    { "kind": "physics", "op": "op_physics_create_world", "args": [-9.81] },
+    { "kind": "skill", "tool": "world.setTerrainSource", "input": { "kind": "map", "mapAssetId": "maps/primary.worldmap.json" } },
+    {
+      "kind": "skill",
+      "tool": "terrain.create",
+      "input": {
+        "size": 200,
+        "resolution": 129,
+        "origin": [0, 0, 0],
+        "color": 5926970,
+        "generate": { "source": "map", "mapAssetId": "maps/primary.worldmap.json", "seed": 11, "amplitude": 12 }
+      }
+    }
+  ],
+  "camera": { "center": [10, 0, -15], "radius": 20, "height": 210, "autoSpin": 0, "far": 900 }
+}

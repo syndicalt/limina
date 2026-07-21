@@ -1,0 +1,80 @@
+{
+  "_comment": "Task #72 fix: whole-GLB buildings at the fmg-1km WorldMap IR's burg anchors (assets/maps/fmg-1km.worldmap.json anchors: burg-highkeep civic [187.5,-62.5], burg-fisherton dwelling [62.5,312.5]), placed on the STREAMED map terrain (world.setTerrainSource kind:map, no editable terrain.create layer). village.build cannot be used here \u2014 it hard-requires an editable terrainEntity ('village.build: no terrain layer to build on') which the streamed path never creates. Fix: asset.place directly with an EXPLICIT y sampled offline from MapTerrainSource.sampleHeight at each anchor (Highkeep y=1.944225390752157, Fisherton y=2.0452205075158005), ground:true so the authored GLB's measured base sits exactly there. Both buildings are the SAME curated whole-GLB library assets village.build's KIND_TO_GLB uses (tools/design/build-world.mjs): civic->norman-manor-building.glb, dwelling->cottage-authored.glb. No archetype/kit/parametric path used anywhere.",
+  "commands": [
+    {
+      "kind": "physics",
+      "op": "op_physics_create_world",
+      "args": [
+        -9.81
+      ]
+    },
+    {
+      "kind": "skill",
+      "tool": "world.setTerrainSource",
+      "input": {
+        "kind": "map",
+        "mapAssetId": "maps/fmg-1km.worldmap.json"
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "world.streamFollow",
+      "input": {
+        "regionId": "no-such-region",
+        "anchor": [
+          125,
+          0,
+          -60
+        ],
+        "radius": 14
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "norman-manor-building.glb",
+        "position": [
+          187.5,
+          1.944225390752157,
+          -62.5
+        ],
+        "rotation": [
+          0,
+          0.4,
+          0
+        ],
+        "ground": true
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "asset.place",
+      "input": {
+        "assetId": "cottage-authored.glb",
+        "position": [
+          62.5,
+          2.0452205075158005,
+          312.5
+        ],
+        "rotation": [
+          0,
+          -0.6,
+          0
+        ],
+        "ground": true
+      }
+    }
+  ],
+  "camera": {
+    "center": [
+      187.5,
+      4,
+      -62.5
+    ],
+    "radius": 40,
+    "height": 22,
+    "autoSpin": 0,
+    "far": 1000
+  }
+}

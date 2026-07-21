@@ -77,6 +77,12 @@ const CREST_SLOPE = 0.05;     // pivot slope below which the convex/concave bran
 export interface ScatterAsset {
   id: string;
   weight?: number;
+  /** Optional lower-detail assets for population rendering. The base `id` is always
+   *  level 0 at distance 0; these levels must use strictly increasing distances. */
+  lods?: ScatterAssetLod[];
+  /** Production B2 tree chain. Kept separate from generic `lods`: the far artifact is a
+   * self-contained octahedral atlas, not an ordinary geometry level. */
+  treeLod?: ScatterTreeLod;
   /** OPT-IN footprint radius (world units at scale 1, the XZ half-extent of the
    *  asset's flat base). 0 (default) → no change, byte-identical. >0 enables CURVATURE-AWARE
    *  placement: on a convex ridge the instance seats at the lowest point of its footprint
@@ -85,6 +91,30 @@ export interface ScatterAsset {
    *  into the floor). See the curvature-aware block in scatterAssets.
    *  Per-asset; overrides the layer-default ScatterConfig.embedRadius. */
   embedRadius?: number;
+}
+
+export interface ScatterTreeLod {
+  reducedId: string;
+  reducedDistance: number;
+  impostorId: string;
+  impostorDistance: number;
+  cullDistance: number;
+  hysteresis?: number;
+}
+
+export interface ScatterAssetLod {
+  id: string;
+  distance: number;
+  hysteresis?: number;
+}
+
+/** A circular keep-out disc in world XZ (center + radius). A candidate whose XZ falls
+ *  inside ANY exclusion is skipped — used to carve tree-free clearings around a
+ *  settlement's building/courtyard/lane footprints. Pure data, replay-safe. */
+export interface ScatterExclusion {
+  x: number;
+  z: number;
+  r: number;
 }
 
 /** An agent-set scatter recipe. Pure data — recorded verbatim in the world log as
@@ -97,6 +127,9 @@ export interface ScatterConfig {
   density?: number;
   /** The curated asset palette (>=1). Weighted, deterministic pick per candidate. */
   assets: ScatterAsset[];
+  /** Render-cell size in world units. LOD-enabled assets default to 24; non-LOD
+   *  assets use an explicit value for independent frustum-culling batches. */
+  cellSize?: number;
   /** Inclusive world-Y floor: no assets below this elevation (e.g. above water). */
   elevationMin?: number;
   /** Inclusive world-Y ceiling — the TREE LINE: no assets above this elevation. */
@@ -126,6 +159,19 @@ export interface ScatterConfig {
   /** Optional inclusive temperature window (reads the climate grid's tempC channel). */
   tempMin?: number;
   tempMax?: number;
+  /** OPT-IN footprint-exclusion discs (world XZ). A candidate whose XZ falls inside ANY
+   *  disc is REJECTED — carving tree-free clearings around a settlement's buildings,
+   *  courtyard and lane. Applied as a PURE post-RNG filter (like the elevation/slope
+   *  gates): the per-candidate draw ORDER is unchanged, so an excluded candidate is simply
+   *  skipped and every surviving placement is byte-identical to an un-excluded run minus
+   *  the removed ones (the same superset/replay guarantee the other gates carry).
+   *  Empty/absent → byte-identical back-compat. */
+  exclusions?: ScatterExclusion[];
+  /** INCLUSION discs (world XZ) — the inverse of `exclusions`. When present, a candidate survives only
+   *  if it falls INSIDE at least one inclusion disc; everything outside is skipped. Used to confine a
+   *  scatter to a region — e.g. a tended LAWN or a wildflower bed on a building's yard. Same pure
+   *  post-RNG filter as exclusions (draw order unchanged → deterministic). */
+  inclusions?: ScatterExclusion[];
 }
 
 /** One placed asset instance. `y` is the terrain surface at (x,z). Serializable,
@@ -191,6 +237,17 @@ export function scatterAssets(tile: TerrainTile, seed: number, config: ScatterCo
   const clusterSeed = (baseSeed(seed, config.seed) ^ 0x7f4a7c15) | 0;
   const [sizeLo, sizeHi] = config.sizeRange ?? [0.8, 1.2];
   const wantClimate = config.biomes !== undefined || config.tempMin !== undefined || config.tempMax !== undefined;
+  // Footprint-exclusion discs (world XZ). Pre-square the radii once so the per-candidate
+  // test is a branch-free squared-distance compare (no per-candidate sqrt).
+  const exclusions = config.exclusions ?? [];
+  const exN = exclusions.length;
+  const exX = new Float64Array(exN), exZ = new Float64Array(exN), exR2 = new Float64Array(exN);
+  for (let e = 0; e < exN; e++) { exX[e] = exclusions[e].x; exZ[e] = exclusions[e].z; exR2[e] = exclusions[e].r * exclusions[e].r; }
+  // Inclusion discs (the inverse): survivors must fall INSIDE one of these (empty = no inclusion gate).
+  const inclusions = config.inclusions ?? [];
+  const inN = inclusions.length;
+  const inX = new Float64Array(inN), inZ = new Float64Array(inN), inR2 = new Float64Array(inN);
+  for (let e = 0; e < inN; e++) { inX[e] = inclusions[e].x; inZ[e] = inclusions[e].z; inR2[e] = inclusions[e].r * inclusions[e].r; }
 
   const [ox, oy, oz] = tile.origin;
   const [sx, sy, sz] = tile.scale;
@@ -275,6 +332,26 @@ export function scatterAssets(tile: TerrainTile, seed: number, config: ScatterCo
       if (coverRoll > effCoverage) continue;
       if (y < elevationMin || y > elevationMax) continue; // tree line / water line (heights)
       if (slope > slopeMax) continue; // cliffs (heights)
+      // FOOTPRINT EXCLUSION: skip a candidate inside any keep-out disc (settlement clearings).
+      // A pure post-RNG filter — all per-candidate draws above already happened in fixed order,
+      // so the surviving placements are byte-identical to the un-excluded run minus the removed.
+      if (exN > 0) {
+        let blocked = false;
+        for (let e = 0; e < exN; e++) {
+          const dx = x - exX[e], dz = z - exZ[e];
+          if (dx * dx + dz * dz <= exR2[e]) { blocked = true; break; }
+        }
+        if (blocked) continue;
+      }
+      // INCLUSION: when a region gate is set, keep ONLY candidates inside one of the discs (a lawn/bed).
+      if (inN > 0) {
+        let inside = false;
+        for (let e = 0; e < inN; e++) {
+          const dx = x - inX[e], dz = z - inZ[e];
+          if (dx * dx + dz * dz <= inR2[e]) { inside = true; break; }
+        }
+        if (!inside) continue;
+      }
       if (wantClimate) {
         const r = Math.min(nrows - 1, Math.max(0, Math.round(fr)));
         const c = Math.min(ncols - 1, Math.max(0, Math.round(fc)));

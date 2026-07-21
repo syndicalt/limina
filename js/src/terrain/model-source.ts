@@ -49,6 +49,7 @@ import {
   type TerrainTile,
   type TileRequest,
 } from "./types.ts";
+import { requestKey } from "./tilecache.ts";
 
 // Re-export the canonical biome enum so the model source's classifier and its tests share
 // the SAME single source of truth as the procedural source + the content gates.
@@ -93,6 +94,8 @@ export interface ModelTerrainSourceOptions {
   name?: string;
   /** Injectable transport (defaults to {@link httpTransport}). */
   transport?: TileTransport;
+  /** Maximum generated tiles kept hot for synchronous point queries. */
+  maxCachedTiles?: number;
 }
 
 /** The worker's JSON response envelope. Geometry (origin/scale) is owned by the
@@ -121,6 +124,7 @@ const DEFAULTS = {
   elevMinM: -500, // metre floor of the normalization range (origin.y)
   elevMaxM: 9000, // metre ceiling; span = ceiling − floor becomes scaleY
   timeoutMs: 30_000,
+  maxCachedTiles: 512,
   name: "model:terrain-diffusion-30m",
 };
 
@@ -218,6 +222,7 @@ export class ModelTerrainSource implements TerrainSource {
   readonly elevMinM: number;
   readonly elevMaxM: number;
   readonly timeoutMs: number;
+  readonly maxCachedTiles: number;
 
   /** World metres spanned by one tile edge. */
   readonly extent: number;
@@ -225,8 +230,9 @@ export class ModelTerrainSource implements TerrainSource {
   readonly heightSpan: number;
 
   private readonly transport: TileTransport;
-  /** Generated tiles, keyed by `${seed}:${lod}:${tx}:${tz}`. Backs O(1) point queries
-   *  and the snapshot path; the model is never re-run for a cached coordinate. */
+  /** Generated tiles, keyed by the full TileRequest, including shaping hints. Backs
+   *  point queries without re-running the model. Bounded LRU: export/replay retention
+   *  is owned by TileCache, not this hot authoring-source cache. */
   private readonly cache = new Map<string, TerrainTile>();
 
   constructor(opts: ModelTerrainSourceOptions = {}) {
@@ -240,6 +246,7 @@ export class ModelTerrainSource implements TerrainSource {
     this.elevMinM = opts.elevMinM ?? DEFAULTS.elevMinM;
     this.elevMaxM = opts.elevMaxM ?? DEFAULTS.elevMaxM;
     this.timeoutMs = opts.timeoutMs ?? DEFAULTS.timeoutMs;
+    this.maxCachedTiles = cacheLimit("maxCachedTiles", opts.maxCachedTiles ?? DEFAULTS.maxCachedTiles);
     this.transport = opts.transport ?? httpTransport;
     this.extent = this.tilePx * this.metersPerPx;
     this.heightSpan = this.elevMaxM - this.elevMinM;
@@ -250,15 +257,15 @@ export class ModelTerrainSource implements TerrainSource {
     }
   }
 
-  private key(seed: number, lod: number, tx: number, tz: number): string {
-    return `${seed}:${lod}:${tx}:${tz}`;
+  private key(seed: number, lod: number, tx: number, tz: number, hints?: Record<string, number>): string {
+    return requestKey({ seed, lod, tx, tz, hints });
   }
 
   /** Generate one tile via the worker (off-loop, async). Deterministic per request:
    *  the worker is bit-identical (S0) and parsing is byte-faithful. */
   async generateTile(req: TileRequest): Promise<TerrainTile> {
-    const cacheKey = this.key(req.seed, req.lod, req.tx, req.tz);
-    const cached = this.cache.get(cacheKey);
+    const cacheKey = requestKey(req);
+    const cached = this.getCached(cacheKey);
     if (cached) return cached;
 
     const body = JSON.stringify({
@@ -286,7 +293,7 @@ export class ModelTerrainSource implements TerrainSource {
     }
 
     const tile = this.parseEnvelope(text, req);
-    this.cache.set(cacheKey, tile);
+    this.store(cacheKey, tile);
     return tile;
   }
 
@@ -398,14 +405,13 @@ export class ModelTerrainSource implements TerrainSource {
    *  heights: y = origin.y + h·scaleY (matching the heightfield collider's surface). Throws
    *  if the covering tile isn't cached yet, directing the caller to generateTile first.
    *
-   *  `hints` is part of the TerrainSource contract (the opt-in shaping a region was generated
-   *  with) and is accepted to match the interface + callers like surveyRegionRelief; this
-   *  source bakes whole tiles via the worker, so a point query just reads the cached tile and
-   *  the hints are unused here (the shaping rode the generateTile request that baked the tile). */
-  sampleHeight(seed: number, x: number, z: number, lod: number, _hints?: Record<string, number>): number {
+   *  `hints` is part of the cache identity: a point query over a shaped/model-authored
+   *  region must read the tile baked for those same hints, not a same-coordinate tile
+   *  generated for a different shaping request. */
+  sampleHeight(seed: number, x: number, z: number, lod: number, hints?: Record<string, number>): number {
     const tx = Math.floor(x / this.extent);
     const tz = Math.floor(z / this.extent);
-    const tile = this.cache.get(this.key(seed, lod, tx, tz));
+    const tile = this.getCached(this.key(seed, lod, tx, tz, hints));
     if (!tile) {
       throw new Error(
         `ModelTerrainSource.sampleHeight: no cached tile (seed=${seed} lod=${lod} ` +
@@ -419,9 +425,9 @@ export class ModelTerrainSource implements TerrainSource {
 
   /** Per-coordinate climate (agent perception). Served from the cache; nearest cell of
    *  the canonical 3-channel [tempC, precipMm, biome] grid. */
-  sampleClimate(seed: number, x: number, z: number): ClimateSample {
+  sampleClimate(seed: number, x: number, z: number, hints?: Record<string, number>): ClimateSample {
     // Point climate is independent of lod; use the finest cached lod that covers (x,z).
-    const tile = this.findCoveringTile(seed, x, z);
+    const tile = this.findCoveringTile(seed, x, z, hints);
     if (!tile) {
       throw new Error(
         `ModelTerrainSource.sampleClimate: no cached tile covers (${x},${z}); ` +
@@ -441,10 +447,10 @@ export class ModelTerrainSource implements TerrainSource {
   }
 
   /** True if the tile covering (seed,lod,x,z) has been generated. */
-  has(seed: number, x: number, z: number, lod: number): boolean {
+  has(seed: number, x: number, z: number, lod: number, hints?: Record<string, number>): boolean {
     const tx = Math.floor(x / this.extent);
     const tz = Math.floor(z / this.extent);
-    return this.cache.has(this.key(seed, lod, tx, tz));
+    return this.cache.has(this.key(seed, lod, tx, tz, hints));
   }
 
   /** Number of cached tiles (snapshot/streaming bookkeeping). */
@@ -485,13 +491,33 @@ export class ModelTerrainSource implements TerrainSource {
 
   // --- internals ---
 
-  private findCoveringTile(seed: number, x: number, z: number): TerrainTile | undefined {
+  private findCoveringTile(seed: number, x: number, z: number, hints?: Record<string, number>): TerrainTile | undefined {
     const tx = Math.floor(x / this.extent);
     const tz = Math.floor(z / this.extent);
-    for (const [k, tile] of this.cache) {
-      if (k.startsWith(`${seed}:`) && k.endsWith(`:${tx}:${tz}`)) return tile;
+    for (let lod = 0; lod <= 4; lod++) {
+      const tile = this.getCached(this.key(seed, lod, tx, tz, hints));
+      if (tile !== undefined) return tile;
     }
     return undefined;
+  }
+
+  private getCached(key: string): TerrainTile | undefined {
+    const tile = this.cache.get(key);
+    if (tile === undefined) return undefined;
+    this.cache.delete(key);
+    this.cache.set(key, tile);
+    return tile;
+  }
+
+  private store(key: string, tile: TerrainTile): void {
+    if (this.maxCachedTiles === 0) return;
+    this.cache.delete(key);
+    this.cache.set(key, tile);
+    while (this.cache.size > this.maxCachedTiles) {
+      const oldest = this.cache.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.cache.delete(oldest);
+    }
   }
 
   /** Map world (x,z) to fractional grid cell within `tile`, clamped to the grid. */
@@ -520,4 +546,11 @@ function bilinear(grid: Float32Array, ncols: number, nrows: number, fx: number, 
   const top = h00 + (h10 - h00) * dc;
   const bot = h01 + (h11 - h01) * dc;
   return top + (bot - top) * dr;
+}
+
+function cacheLimit(name: string, value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`ModelTerrainSource: ${name} must be a non-negative safe integer`);
+  }
+  return value;
 }

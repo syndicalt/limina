@@ -1,0 +1,16 @@
+{
+  "schema": "limina.biome-population-asset/v1",
+  "id": "river-riparian-reed",
+  "version": "1.0.2",
+  "role": "flora/riparian-reed",
+  "backend": "grass-field",
+  "visualPackageId": "limina.grass.riparian-reed",
+  "visualPackageVersion": "1.0.1",
+  "densityScale": 0.7,
+  "bladeScale": [0.65, 1.15],
+  "climate": "summer",
+  "provenance": {
+    "licenseId": "CC0-1.0",
+    "sourceUri": "limina://procedural/grass-field/riparian-reed"
+  }
+}

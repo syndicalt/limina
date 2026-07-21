@@ -27,28 +27,33 @@
 //
 //   block      channels  float offset (elems)   byte offset            bytes
 //   ---------  --------  ---------------------   --------------------   --------
-//   Position.x   1       0*N                     0                      4*N
-//   Position.y   1       1*N                     4*N                    4*N
-//   Position.z   1       2*N                     8*N                    4*N
-//   Rotation.x   1       3*N                     12*N                   4*N
-//   Rotation.y   1       4*N                     16*N                   4*N
-//   Rotation.z   1       5*N                     20*N                   4*N
-//   Rotation.w   1       6*N                     24*N                   4*N
-//   Scale.x      1       7*N                     28*N                   4*N
-//   Scale.y      1       8*N                     32*N                   4*N
-//   Scale.z      1       9*N                     36*N                   4*N
+//   generation   -       -                       0                      4
+//   Position.x   1       0*N                     4                      4*N
+//   Position.y   1       1*N                     4+4*N                  4*N
+//   Position.z   1       2*N                     4+8*N                  4*N
+//   Rotation.x   1       3*N                     4+12*N                 4*N
+//   Rotation.y   1       4*N                     4+16*N                 4*N
+//   Rotation.z   1       5*N                     4+20*N                 4*N
+//   Rotation.w   1       6*N                     4+24*N                 4*N
+//   Scale.x      1       7*N                     4+28*N                 4*N
+//   Scale.y      1       8*N                     4+32*N                 4*N
+//   Scale.z      1       9*N                     4+36*N                 4*N
 //   ---------------------------------------------------------------------------
-//   TOTAL       10                               TRANSFORM_BUFFER_BYTES = 40*N
+//   TOTAL       10                               TRANSFORM_BUFFER_BYTES = 4+40*N
 //
 // Each channel is a tightly-packed Float32Array(buffer, byteOffset, N) — no
 // interleaving, no padding, contiguous and cache-friendly per-channel, matching
 // the heap-backed SoA in world.ts exactly so reads/writes are bit-identical.
 // ---------------------------------------------------------------------------
 
-import { MAX_ENTITIES } from "../ecs/world.ts";
+import { MAX_ENTITIES, Position, Rotation, Scale } from "../ecs/world.ts";
 import type { TransformStorage } from "../ecs/facade.ts";
 
 const BYTES_PER_FLOAT = Float32Array.BYTES_PER_ELEMENT; // 4
+
+/** Transform buffer ABI v2 adds a seqlock generation before the v1 float lanes. */
+export const TRANSFORM_BUFFER_LAYOUT_VERSION = 2;
+export const TRANSFORM_HEADER_BYTES = Int32Array.BYTES_PER_ELEMENT;
 
 /** Channel count: Position(3) + Rotation(4) + Scale(3). */
 export const TRANSFORM_CHANNELS = 10;
@@ -57,19 +62,19 @@ export const TRANSFORM_CHANNELS = 10;
 export const CHANNEL_BYTES = MAX_ENTITIES * BYTES_PER_FLOAT;
 
 /** Total backing-buffer size for the full Position+Rotation+Scale SoA. */
-export const TRANSFORM_BUFFER_BYTES = TRANSFORM_CHANNELS * CHANNEL_BYTES;
+export const TRANSFORM_BUFFER_BYTES = TRANSFORM_HEADER_BYTES + TRANSFORM_CHANNELS * CHANNEL_BYTES;
 
 // Fixed channel byte offsets within the single buffer (see layout table above).
-const OFF_POS_X = 0 * CHANNEL_BYTES;
-const OFF_POS_Y = 1 * CHANNEL_BYTES;
-const OFF_POS_Z = 2 * CHANNEL_BYTES;
-const OFF_ROT_X = 3 * CHANNEL_BYTES;
-const OFF_ROT_Y = 4 * CHANNEL_BYTES;
-const OFF_ROT_Z = 5 * CHANNEL_BYTES;
-const OFF_ROT_W = 6 * CHANNEL_BYTES;
-const OFF_SCL_X = 7 * CHANNEL_BYTES;
-const OFF_SCL_Y = 8 * CHANNEL_BYTES;
-const OFF_SCL_Z = 9 * CHANNEL_BYTES;
+const OFF_POS_X = TRANSFORM_HEADER_BYTES + 0 * CHANNEL_BYTES;
+const OFF_POS_Y = TRANSFORM_HEADER_BYTES + 1 * CHANNEL_BYTES;
+const OFF_POS_Z = TRANSFORM_HEADER_BYTES + 2 * CHANNEL_BYTES;
+const OFF_ROT_X = TRANSFORM_HEADER_BYTES + 3 * CHANNEL_BYTES;
+const OFF_ROT_Y = TRANSFORM_HEADER_BYTES + 4 * CHANNEL_BYTES;
+const OFF_ROT_Z = TRANSFORM_HEADER_BYTES + 5 * CHANNEL_BYTES;
+const OFF_ROT_W = TRANSFORM_HEADER_BYTES + 6 * CHANNEL_BYTES;
+const OFF_SCL_X = TRANSFORM_HEADER_BYTES + 7 * CHANNEL_BYTES;
+const OFF_SCL_Y = TRANSFORM_HEADER_BYTES + 8 * CHANNEL_BYTES;
+const OFF_SCL_Z = TRANSFORM_HEADER_BYTES + 9 * CHANNEL_BYTES;
 
 /** True when this host exposes the `SharedArrayBuffer` constructor. */
 export function sharedArrayBufferAvailable(): boolean {
@@ -112,6 +117,8 @@ export class SharedTransformStorage implements TransformStorage {
   readonly Scale: Vec3Soa;
 
   private storageVersion = 0;
+  private readonly publication: Int32Array;
+  private publicationDepth = 0;
 
   constructor(opts: { buffer?: SharedArrayBuffer | ArrayBuffer } = {}) {
     if (opts.buffer !== undefined) {
@@ -120,9 +127,9 @@ export class SharedTransformStorage implements TransformStorage {
       const buf = opts.buffer;
       if (buf.byteLength !== TRANSFORM_BUFFER_BYTES) {
         throw new RangeError(
-          `SharedTransformStorage: buffer size ${buf.byteLength} bytes does not ` +
+            `SharedTransformStorage: buffer size ${buf.byteLength} bytes does not ` +
             `match the expected transform layout (${TRANSFORM_BUFFER_BYTES} bytes ` +
-            `= ${TRANSFORM_CHANNELS} channels x ${MAX_ENTITIES} entities x ` +
+            `= ${TRANSFORM_HEADER_BYTES}-byte header + ${TRANSFORM_CHANNELS} channels x ${MAX_ENTITIES} entities x ` +
             `${BYTES_PER_FLOAT} bytes).`,
         );
       }
@@ -141,6 +148,7 @@ export class SharedTransformStorage implements TransformStorage {
     }
 
     const b = this.buffer;
+    this.publication = new Int32Array(b, 0, 1);
     // One Float32Array per channel at its fixed byte offset; tightly packed.
     this.Position = {
       x: new Float32Array(b, OFF_POS_X, MAX_ENTITIES),
@@ -164,12 +172,51 @@ export class SharedTransformStorage implements TransformStorage {
     return this.storageVersion;
   }
 
+  private loadPublicationGeneration(): number {
+    return this.shared ? Atomics.load(this.publication, 0) : this.publication[0];
+  }
+
+  private storePublicationGeneration(value: number): void {
+    if (this.shared) Atomics.store(this.publication, 0, value);
+    else this.publication[0] = value;
+  }
+
+  /** Current seqlock generation. Even values are stable; odd values mean the
+   * single writer is publishing a multi-entity transform set. */
+  publicationGeneration(): number {
+    return this.loadPublicationGeneration();
+  }
+
+  /** Begin one atomic transform publication. Nesting is supported so a higher
+   * level authoring transaction can contain the fixed-step sync helper. */
+  beginPublication(): void {
+    if (this.publicationDepth++ > 0) return;
+    const current = this.loadPublicationGeneration();
+    const odd = (current + ((current & 1) === 0 ? 1 : 2)) | 0;
+    this.storePublicationGeneration(odd);
+  }
+
+  /** Publish every transform write since beginPublication as one stable set. */
+  endPublication(): void {
+    if (this.publicationDepth < 1) throw new Error("SharedTransformStorage.endPublication without beginPublication");
+    if (--this.publicationDepth > 0) return;
+    const current = this.loadPublicationGeneration();
+    this.storePublicationGeneration((current + ((current & 1) === 1 ? 1 : 2)) | 0);
+  }
+
   // --- TransformStorage write surface (matches facade.ts EXACTLY) ----------
+  // Every write ALSO mirrors into the module SoA (the facade contract): the SoA
+  // is the sim-truth store creation writes and every capture/skill read path
+  // uses; without the mirror the sim worker's authoring writes were invisible
+  // to the scene adapter's after-state capture and commit replays diverged.
 
   writePosition(eid: number, x: number, y: number, z: number): void {
     this.Position.x[eid] = x;
     this.Position.y[eid] = y;
     this.Position.z[eid] = z;
+    Position.x[eid] = x;
+    Position.y[eid] = y;
+    Position.z[eid] = z;
     this.storageVersion++;
   }
 
@@ -178,6 +225,10 @@ export class SharedTransformStorage implements TransformStorage {
     this.Rotation.y[eid] = y;
     this.Rotation.z[eid] = z;
     this.Rotation.w[eid] = w;
+    Rotation.x[eid] = x;
+    Rotation.y[eid] = y;
+    Rotation.z[eid] = z;
+    Rotation.w[eid] = w;
     this.storageVersion++;
   }
 
@@ -185,6 +236,9 @@ export class SharedTransformStorage implements TransformStorage {
     this.Scale.x[eid] = x;
     this.Scale.y[eid] = y;
     this.Scale.z[eid] = z;
+    Scale.x[eid] = x;
+    Scale.y[eid] = y;
+    Scale.z[eid] = z;
     this.storageVersion++;
   }
 
@@ -217,15 +271,4 @@ export class SharedTransformStorage implements TransformStorage {
     out[2] = this.Scale.z[eid];
     return out;
   }
-}
-
-/**
- * Convenience matching `createTransformStorage(world)` from facade.ts: returns a
- * fresh SAB-backed storage (allocate path). `world` is accepted for call-site
- * symmetry and is not retained (the SoA lives in the buffer, not the bitECS world).
- */
-export function createSharedTransformStorage(
-  _world?: unknown,
-): SharedTransformStorage {
-  return new SharedTransformStorage();
 }

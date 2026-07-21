@@ -6,7 +6,9 @@ import * as THREE from "../build/three.bundle.mjs";
 import { createTransformStorage, type TransformStorage } from "./ecs/facade.ts";
 import { createEcsWorld, type Transformable } from "./ecs/world.ts";
 import { UniformGridSpatialIndex } from "./spatial/index.ts";
-import { applyRenderBaseline, type RenderBaselineOverride } from "./render-baseline.ts";
+import { applyRenderBaseline, type AppliedRenderBaseline, type RenderBaselineOverride } from "./render-baseline.ts";
+import { HdrEnvironmentCache, type HdrEnvironmentCacheOptions } from "./render/environment-hdri.ts";
+import type { BehaviorSpec } from "./behavior/behavior-spec.ts";
 
 // ---- Typed op surface (provider-agnostic; no `any`) ----------------------
 
@@ -74,21 +76,41 @@ export interface EngineOps {
   op_physics_restore(bytes: Uint8Array): void;
   op_physics_body_pos(id: number, out: Float32Array): void;
   op_physics_body_transform(id: number, out: Float32Array): void;
+  /** Re-pose a body (translation + rotation) by id — used when an entity with a body is moved so
+   *  its collider follows instead of the per-tick body→SoA sync snapping the entity back. */
+  op_physics_set_body_transform(id: number, x: number, y: number, z: number, qx: number, qy: number, qz: number, qw: number): void;
   op_physics_drain_collisions(): CollisionEventRecord[];
+  /** Number of collision events dropped since the last read because the bounded
+   *  native queue was full. Browser adapters without overflow return zero. */
+  op_physics_take_collision_overflow_count?(): number;
   op_physics_raycast(
     ox: number, oy: number, oz: number,
     dx: number, dy: number, dz: number,
     maxToi: number, out: Float32Array,
   ): void;
+  /** Write sorted, unique stable body ids intersecting an oriented box into `out`.
+   *  Returns the number written; `ignoreBodyId=-1` ignores none. Native results are
+   *  bounded to 4096 even when a larger output buffer is supplied. */
+  op_physics_overlap_box(
+    x: number, y: number, z: number,
+    hx: number, hy: number, hz: number,
+    qx: number, qy: number, qz: number, qw: number,
+    ignoreBodyId: number, out: Uint32Array,
+  ): number;
   // host services
   op_log(msg: string): void;
   op_http_post(url: string, body: string): Promise<string>;
+  op_http_post_headers(url: string, body: string, headersJson: string): Promise<string>;
   op_sleep_ms(ms: number): Promise<void>;
   op_read_asset(relativeId: string): Uint8Array;
   op_sha256(input: string): string;
+  op_read_env(name: string): string;
   op_write_trace(name: string, content: string): void;
   op_append_trace(name: string, content: string): void;
   op_read_trace(name: string): string;
+  /** Native bounded durable-log suffix read. Optional so browser/player hosts
+   *  that do not offer append-backed authoring remain source-compatible. */
+  op_read_trace_delta?(name: string, offset: number, maxBytes: number): string;
   // untrusted-code isolation (limina-sandbox QuickJS host)
   op_sandbox_create(memLimitBytes: number, maxStackBytes: number, readCapsJson: string): number;
   op_sandbox_eval(handle: number, code: string, perceptionJson: string, deadlineMs: number): string;
@@ -114,9 +136,22 @@ export interface EngineOps {
   op_audio_speak(text: string, ex: number, ey: number, ez: number, volume: number, pitch: number): number;
   op_audio_play_buffer(data: Float32Array, sampleRate: number, channels: number, bus: number, volume: number, loop: boolean): number;
 }
-interface Adapter { requestDevice(): Promise<unknown>; }
-declare const navigator: { gpu: { requestAdapter(): Promise<Adapter | null> } };
 declare const Deno: { core: { ops: EngineOps } } | undefined;
+
+/** Runtime capabilities that cannot be inferred from the shape of EngineOps.
+ * Browser realms deliberately install callable no-op placeholders for ops they
+ * cannot implement, so function presence is not an honest capability probe. */
+export interface EngineCapabilities {
+  readonly ecsSpatialQueryBatch: boolean;
+}
+
+const NO_ENGINE_CAPABILITIES: Readonly<EngineCapabilities> = Object.freeze({
+  ecsSpatialQueryBatch: false,
+});
+
+const NATIVE_ENGINE_CAPABILITIES: Readonly<EngineCapabilities> = Object.freeze({
+  ecsSpatialQueryBatch: true,
+});
 
 // ---- Host-capabilities boundary ------------------------------------------
 // The native host exposes its ops as `Deno.core.ops`; bind to them lazily and
@@ -133,11 +168,24 @@ export let ops: EngineOps =
     ? Deno.core.ops
     : (undefined as unknown as EngineOps);
 
+/** Capabilities for the currently installed op host. Kept as a live binding for
+ * the same reason as `ops`: browser/test hosts may replace the host at runtime. */
+export let engineCapabilities: Readonly<EngineCapabilities> =
+  typeof Deno !== "undefined" && Deno?.core?.ops
+    ? NATIVE_ENGINE_CAPABILITIES
+    : NO_ENGINE_CAPABILITIES;
+
 /** Inject the host capability surface (a browser/wasm host, or a test harness).
  *  Native runs auto-bind to `Deno.core.ops` at import, so this is only needed
  *  off the native host. Call it before any op is used. */
-export function installOps(host: EngineOps): void {
+export function installOps(
+  host: EngineOps,
+  capabilities: Partial<EngineCapabilities> = NO_ENGINE_CAPABILITIES,
+): void {
   ops = host;
+  engineCapabilities = Object.freeze({
+    ecsSpatialQueryBatch: capabilities.ecsSpatialQueryBatch === true,
+  });
 }
 
 // Capability sub-surfaces a non-native host must implement — explicit subsets of
@@ -157,7 +205,7 @@ export type PhysicsOps = Pick<
   | "op_physics_add_heightfield" | "op_physics_add_character" | "op_physics_move_character"
   | "op_physics_remove_body" | "op_physics_apply_impulse" | "op_physics_step"
   | "op_physics_snapshot" | "op_physics_restore" | "op_physics_body_pos"
-  | "op_physics_body_transform" | "op_physics_drain_collisions" | "op_physics_raycast"
+  | "op_physics_body_transform" | "op_physics_set_body_transform" | "op_physics_drain_collisions" | "op_physics_raycast" | "op_physics_overlap_box"
 >;
 /** Durable world-log I/O. INVARIANT: a trace is seed + the command stream +
  *  content hashes — NEVER raw runtime bytes; snapshots are caches, not the
@@ -178,21 +226,80 @@ export interface SceneLike extends Object3DLike {
   environmentIntensity?: number;
 }
 export interface CameraLike {
-  position: { set(x: number, y: number, z: number): void };
-  aspect: number;
-  lookAt(x: number, y: number, z: number): void;
+  position: { set(x: number, y: number, z: number): void; x?: number; y?: number; z?: number; copy?(value: unknown): unknown };
+  aspect?: number;
+  near?: number;
+  far?: number;
+  fov?: number;
+  matrixWorld?: unknown;
+  lookAt(x: number | unknown, y?: number, z?: number): void;
   updateProjectionMatrix(): void;
+  updateMatrixWorld?(): void;
+  getWorldQuaternion?(target: unknown): unknown;
 }
 export interface RendererLike {
-  init(): Promise<void>;
+  init(): Promise<unknown>;
   setSize(w: number, h: number, updateStyle?: boolean): void;
   render(scene: unknown, camera: unknown): void;
+  backend?: {
+    trackTimestamp: boolean;
+    device?: {
+      queue: { onSubmittedWorkDone(): Promise<void> };
+      pushErrorScope?(filter: "validation"): void;
+      popErrorScope?(): Promise<{ message?: string } | null>;
+    };
+    /** Three configures the default GPUCanvasContext lazily when this getter is read. */
+    readonly context?: unknown;
+    timestampQueryPool?: { render?: { frames?: readonly number[]; timestamps?: ReadonlyMap<string, number> } | null };
+  };
+  resolveTimestampsAsync?(type?: "render" | "compute"): Promise<number | undefined>;
+  hasFeature?(name: string): boolean;
   /** Real-time shadow-map config (WebGPU path). `type` is one of THREE's
    *  PCFShadowMap / PCFSoftShadowMap / VSMShadowMap constants. */
   shadowMap: { enabled: boolean; type: number };
   /** Tone-mapping operator constant (e.g. ACESFilmicToneMapping) + exposure. */
   toneMapping: number;
   toneMappingExposure: number;
+  domElement?: unknown;
+}
+
+/** Configure Three's native default surface while a validation scope can still expose the
+ * backend's real rejection. Deno reports GPUCanvasContext.configure failures through the device
+ * error handler instead of throwing them synchronously; without this gate the first render only
+ * produces the secondary and much less useful "surface is not configured" failure. */
+export async function configureNativeRendererSurface(renderer: RendererLike): Promise<void> {
+  const backend = renderer.backend;
+  const device = backend?.device;
+  if (!backend || !device || typeof device.pushErrorScope !== "function" || typeof device.popErrorScope !== "function") {
+    throw new Error("engine: native surface validation scopes are unavailable");
+  }
+
+  device.pushErrorScope("validation");
+  let accessFailure: unknown;
+  try {
+    void backend.context;
+  } catch (error) {
+    accessFailure = error;
+  }
+
+  let validationFailure: { message?: string } | null = null;
+  let scopeFailure: unknown;
+  try {
+    validationFailure = await device.popErrorScope();
+  } catch (error) {
+    scopeFailure = error;
+  }
+
+  if (accessFailure !== undefined || scopeFailure !== undefined) {
+    const failures = [accessFailure, scopeFailure].filter((error) => error !== undefined);
+    throw new AggregateError(failures, "engine: native surface configuration diagnostics failed");
+  }
+  if (validationFailure !== null) {
+    const detail = typeof validationFailure.message === "string" && validationFailure.message.trim() !== ""
+      ? validationFailure.message.trim()
+      : "unknown WebGPU validation error";
+    throw new Error(`engine: native surface configuration failed: ${detail}`);
+  }
 }
 export interface MaterialLike {
   color: { set(value: number): void };
@@ -228,15 +335,70 @@ export interface LoadedResourceMetadata {
 
 // ---- Entity table: opaque ent_ ids -> internal handles -------------------
 
+/** The authoring command ({tool, input}) that CREATED this entity. Kept as a runtime
+ *  binding so a self-sufficient world snapshot (M2 v3) can carry the STRUCTURAL params
+ *  (shape/size/material for primitives — which live only in the create command, not in
+ *  world state) to a viewer that rebuilds meshes after the create command has been
+ *  compacted out of the live log. Not part of the identity slice; rebound on re-creation. */
+export interface EntityOrigin {
+  tool: string;
+  input: Record<string, unknown>;
+}
+
+/** The entity's surface material as first-class world state — not merely a property of a
+ *  THREE mesh — so it survives on a headless or asset-backed entity that has no local mesh
+ *  in this context. three.setMaterial and scene.createEntity write it here, the inspector
+ *  reads it, and a self-sufficient snapshot carries it. `name`/`pbr` record a palette or
+ *  imported material; the numeric fields are the resolved PBR params the inspector shows and
+ *  a bounded-tail viewer rebuilds from. */
+export interface MaterialState {
+  color?: number;
+  roughness?: number;
+  metalness?: number;
+  /** A palette ("sand", "wood", …) or imported texture-pack material name, when set by name. */
+  name?: string;
+  /** Whether a palette material was upgraded to a procedural-PBR surface. */
+  pbr?: boolean;
+}
+
+/** A child's transform relative to its parent, captured when the parent is set. The
+ *  world-space SoA stays authoritative; on a parent move, propagation recomputes the
+ *  child's world transform = parentWorld ∘ localOffset (js/src/ecs/hierarchy.ts). */
+export interface TransformOffset {
+  pos: [number, number, number];
+  rot: [number, number, number, number];
+  scale: [number, number, number];
+}
+
 export interface EntityEntry {
   eid: number;
   generation: number;
   mesh?: SceneObject;
   bodyId?: number;
   resource?: LoadedResourceMetadata;
+  origin?: EntityOrigin;
+  /** Parent entity id (scene hierarchy). Root entities have none. */
+  parent?: string;
+  /** This entity's transform relative to `parent`, captured at parent-set time. */
+  localOffset?: TransformOffset;
+  /** First-class surface material (see MaterialState) — written by three.setMaterial /
+   *  scene.createEntity so it survives without a local mesh (asset/headless entities). */
+  material?: MaterialState;
+  /** First-class DECLARATIVE behaviour (see BehaviorSpec) — what this entity DOES (idle/patrol/
+   *  wander/script), as data. Written by behavior.set; carried by a self-sufficient snapshot so a
+   *  saved scene reloads with its behaviour. B1 is the FORMAT + threading; runtime execution is B2. */
+  behavior?: BehaviorSpec;
+  /** Runtime-only teardown hook for entity-owned resources that are not reachable from `mesh`
+   * (compute kernels, direct scene mounts, controllers, registry callbacks). Never serialized. */
+  runtimeDispose?: () => void;
+  /** Standalone physics body ids OWNED by this entity but deliberately not bound to `bodyId`
+   *  (asset.place/placeLod building colliders). Unlike `runtimeDispose` (a closure), this IS
+   *  serialized (M18): a world snapshot carries the ids so restore can re-arm the remove-body
+   *  dispose — destroying a restored placed asset must remove its collider, not leak it. */
+  runtimeBodyIds?: number[];
 }
 
-/** The serializable identity slice of one entity-table entry. The mesh/resource
+/** The serializable identity slice of one entity-table entry. The mesh/resource/runtime-disposer
  *  bindings are runtime-only objects (rebound on re-creation), so a snapshot
  *  carries only the stable identity fields. */
 export interface EntityEntrySnapshot {
@@ -260,26 +422,226 @@ export interface EntityTableSnapshot {
  *  a recycled bitECS eid can never be reached through a stale `ent_`. */
 export class EntityTable {
   private readonly map = new Map<string, EntityEntry>();
+  /** Reverse index `bodyId -> ent_ id`, maintained alongside `map` so a physics
+   *  body can be resolved to its entity in O(1) (collision events, raycasts)
+   *  instead of a linear scan of every entry. `bodyId` is set once at `create`
+   *  and never mutated on a live entry, so this stays consistent with `map`. */
+  private readonly byBody = new Map<number, string>();
+  /** Reverse index `parent id -> set of child ids` (scene hierarchy), maintained
+   *  alongside `map` so children/subtree lookups are O(children) not O(world). */
+  private readonly byParent = new Map<string, Set<string>>();
+  /** Reverse index `eid -> ent_ id`, maintained alongside `map` so a bitECS eid (what a
+   *  renderable/pick carries) resolves to its entity in O(1) instead of a full-table scan.
+   *  An entry's `eid` is set once at `create` and never mutated, so this stays consistent;
+   *  eids CAN be recycled after destroy (unlike `ent_` strings), so this answers only for
+   *  the CURRENT live owner. */
+  private readonly byEid = new Map<number, string>();
   private seq = 0;
   private tableVersion = 0;
+  /** One-shot hooks fired at the TOP of the next identity mutation (create/
+   *  destroy/restore/rewindAllocator), BEFORE any state changes. The registry's
+   *  per-chain undo ledger arms one so its O(entities) allocator capture runs
+   *  only when a chain actually touches entities (lazy head-frame capture); a
+   *  companion hook on the bitECS side (ecs/world.ts armEntityIndexMutationHook)
+   *  covers eid allocation, which happens BEFORE `create` is called. All armed
+   *  hooks fire once and clear; frame end disarms via the returned function. */
+  private readonly mutationHooks = new Set<() => void>();
 
   get version(): number {
     return this.tableVersion;
   }
 
+  /** Arm a one-shot pre-mutation hook. Returns its disarm function (idempotent). */
+  armMutationHook(fn: () => void): () => void {
+    this.mutationHooks.add(fn);
+    return () => { this.mutationHooks.delete(fn); };
+  }
+
+  private fireMutationHooks(): void {
+    if (this.mutationHooks.size === 0) return;
+    const fired = [...this.mutationHooks];
+    this.mutationHooks.clear();
+    for (const fn of fired) fn();
+  }
+
   create(entry: Omit<EntityEntry, "generation">): string {
+    this.fireMutationHooks();
     const id = `ent_${this.seq++}`;
     this.map.set(id, { generation: 0, ...entry });
+    if (entry.bodyId !== undefined) this.byBody.set(entry.bodyId, id);
+    this.byEid.set(entry.eid, id);
     this.tableVersion++;
     return id;
   }
   resolve(id: string): EntityEntry | undefined {
     return this.map.get(id);
   }
+  /** Re-attach a resource binding to a live entry after a snapshot restore. The
+   *  identity slice (EntityEntrySnapshot) deliberately omits mesh/resource, so a
+   *  self-sufficient world snapshot (M2 v3) rebinds the resource metadata here
+   *  rather than widening the identity contract. No-op if the id is not live. */
+  bindResource(id: string, resource: LoadedResourceMetadata): void {
+    const entry = this.map.get(id);
+    if (entry !== undefined) entry.resource = resource;
+  }
+  /** Re-attach the origin (create command) to a live entry after a snapshot restore —
+   *  the companion to bindResource for the structural rebuild binding. No-op if not live. */
+  bindOrigin(id: string, origin: EntityOrigin): void {
+    const entry = this.map.get(id);
+    if (entry !== undefined) entry.origin = origin;
+  }
+  /** Re-point a live entry's physics `bodyId`, keeping the `byBody` reverse index consistent.
+   *  Used when a collider is REBUILT in place (e.g. terrain.deform reshapes a heightfield: the
+   *  old body is removed and a fresh one added, so the entity must follow the new id). No-op if
+   *  the id is not live. Passing `undefined` detaches the body (drops the reverse entry). */
+  rebindBody(id: string, bodyId: number | undefined): void {
+    const entry = this.map.get(id);
+    if (entry === undefined) return;
+    if (entry.bodyId !== undefined) this.byBody.delete(entry.bodyId);
+    entry.bodyId = bodyId;
+    if (bodyId !== undefined) this.byBody.set(bodyId, id);
+    this.tableVersion++;
+  }
+  /** Merge a material update into a live entry's first-class material state. three.setMaterial
+   *  and scene.createEntity write here so the surface survives without a local mesh (asset/headless
+   *  entities), and a snapshot restore rebinds it. Only defined fields overwrite — an undefined
+   *  field leaves the prior value, so a partial edit (just roughness, say) is non-destructive.
+   *  No-op if the id is not live. */
+  bindMaterial(id: string, material: MaterialState): void {
+    const entry = this.map.get(id);
+    if (entry === undefined) return;
+    const merged: MaterialState = { ...entry.material };
+    if (material.color !== undefined) merged.color = material.color;
+    if (material.roughness !== undefined) merged.roughness = material.roughness;
+    if (material.metalness !== undefined) merged.metalness = material.metalness;
+    if (material.name !== undefined) merged.name = material.name;
+    if (material.pbr !== undefined) merged.pbr = material.pbr;
+    entry.material = merged;
+  }
+  /** Bind (replace) a live entry's first-class DECLARATIVE behaviour. behavior.set writes here so
+   *  the behaviour survives on a mesh-less / asset-backed entity (mirrors bindMaterial), and a
+   *  snapshot restore rebinds it. A BehaviorSpec is a whole discriminated-union value, so it is
+   *  REPLACED wholesale (unlike material's per-field merge) — setting patrol over idle is a swap,
+   *  not a merge. Callers pass a canonical spec. No-op if the id is not live. */
+  bindBehavior(id: string, behavior: BehaviorSpec): void {
+    const entry = this.map.get(id);
+    if (entry !== undefined) entry.behavior = behavior;
+  }
+  /** Replace a live entry's standalone-owned physics body ids (M18) — used by the writing
+   *  skill (append via record + chainRuntimeDispose) and by snapshot restore (wholesale
+   *  rebind before re-arming the dispose). No-op if the id is not live. */
+  bindRuntimeBodies(id: string, bodyIds: readonly number[]): void {
+    const entry = this.map.get(id);
+    if (entry !== undefined) entry.runtimeBodyIds = [...bodyIds];
+  }
+  /** Chain a runtime-only cleanup onto a live entry's `runtimeDispose`. The chained closure is
+   *  finished-guarded (idempotent): teardownEntity runs runtimeDispose exactly once, and an undo
+   *  path that already disposed makes the later teardown call a no-op — never a double
+   *  op_physics_remove_body. Failures from both links aggregate so neither masks the other.
+   *  No-op if the id is not live. */
+  chainRuntimeDispose(id: string, label: string, cleanup: () => void): void {
+    const entry = this.map.get(id);
+    if (entry === undefined) return;
+    const prior = entry.runtimeDispose;
+    let finished = false;
+    entry.runtimeDispose = () => {
+      if (finished) return;
+      finished = true;
+      const errors: unknown[] = [];
+      try { cleanup(); } catch (error) { errors.push(error); }
+      try { prior?.(); } catch (error) { errors.push(error); }
+      if (errors.length > 0) throw new AggregateError(errors, `${label} runtime disposal failed`);
+    };
+  }
+  /** Set (or move) a child's parent + captured local offset, maintaining the byParent
+   *  index. `parentId === undefined` unparents to the world root. No-op if child not live. */
+  setParent(childId: string, parentId: string | undefined, localOffset?: TransformOffset): void {
+    const entry = this.map.get(childId);
+    if (entry === undefined) return;
+    if (entry.parent !== undefined) this.byParent.get(entry.parent)?.delete(childId);
+    entry.parent = parentId;
+    entry.localOffset = parentId === undefined ? undefined : localOffset;
+    if (parentId !== undefined) {
+      let set = this.byParent.get(parentId);
+      if (set === undefined) { set = new Set(); this.byParent.set(parentId, set); }
+      set.add(childId);
+    }
+    this.tableVersion++;
+  }
+  /** The direct child ids of `parentId` (empty if none). Order is insertion order. */
+  childrenOf(parentId: string): string[] {
+    const set = this.byParent.get(parentId);
+    return set === undefined ? [] : [...set];
+  }
+  /** O(1) lookup of the `ent_` id bound to a physics `bodyId`, or `undefined`
+   *  when no live entity owns that body. Replaces the per-call linear scan the
+   *  collision/raycast skills used at scale. */
+  entityByBody(bodyId: number): string | undefined {
+    return this.byBody.get(bodyId);
+  }
+  /** The live `bodyId -> ent_ id` reverse index (read-only). Iterating this visits ONLY
+   *  the body-bound entities — the per-tick transform-sync set — instead of scanning every
+   *  entry via `ids()` (a fresh N-element array where most entries are bodiless statics). */
+  bodyBound(): ReadonlyMap<number, string> {
+    return this.byBody;
+  }
+  /** O(1) lookup of the live `ent_` id owning a bitECS `eid`, or `undefined` when no live
+   *  entity holds it (eids are recycled after destroy, so a stale eid resolves to nothing —
+   *  never to its former owner). Replaces the pick path's full-table scan. */
+  entityByEid(eid: number): string | undefined {
+    return this.byEid.get(eid);
+  }
+  /** The next `ent_` sequence number. Capture before a mutation and pass to
+   *  `idsCreatedSince` to enumerate exactly what the mutation created — O(1),
+   *  replacing a full-table before-set snapshot. */
+  get nextSeq(): number {
+    return this.seq;
+  }
+  /** The still-live ids created at or after a captured `nextSeq`, in creation order.
+   *  `ent_` ids are `ent_<seq>` with a monotonic never-reused counter, so the seq range
+   *  IS the created set — O(created) instead of an O(world) scan diffed against a
+   *  before-set. Ids destroyed since creation are omitted (they no longer resolve). */
+  idsCreatedSince(seq: number): string[] {
+    const out: string[] = [];
+    for (let s = seq; s < this.seq; s++) {
+      const id = `ent_${s}`;
+      if (this.map.has(id)) out.push(id);
+    }
+    return out;
+  }
+  /** Rewind the `ent_` allocation counter + table version to a captured point,
+   *  after a failed skill chain's compensation (the registry's per-chain undo
+   *  ledger). Only sound when every id allocated at or after `seq` is no longer
+   *  live — a live survivor means a future create would RE-ISSUE its id, so this
+   *  throws instead of corrupting identity (the caller treats that as a failed
+   *  rollback and poisons). Rewinding version keeps version-gated derived state
+   *  (spatial index, reconcilers) consistent with replay, which never ran the
+   *  failed chain. */
+  rewindAllocator(seq: number, version: number): void {
+    this.fireMutationHooks();
+    if (seq > this.seq || version > this.tableVersion) {
+      throw new Error(`EntityTable.rewindAllocator: cannot rewind forward (seq ${this.seq}→${seq}, version ${this.tableVersion}→${version})`);
+    }
+    for (let s = seq; s < this.seq; s++) {
+      if (this.map.has(`ent_${s}`)) {
+        throw new Error(`EntityTable.rewindAllocator: 'ent_${s}' allocated by the unwound chain is still live — rewinding would re-issue its id`);
+      }
+    }
+    this.seq = seq;
+    this.tableVersion = version;
+  }
   destroy(id: string): EntityEntry | undefined {
+    this.fireMutationHooks();
     const entry = this.map.get(id);
     if (entry !== undefined) {
       this.map.delete(id);
+      if (entry.bodyId !== undefined) this.byBody.delete(entry.bodyId);
+      this.byEid.delete(entry.eid);
+      // Keep the hierarchy index consistent: drop this id from its parent's child set
+      // and drop its own child set. Cascading the subtree is the caller's job (scene
+      // teardown), so any surviving children keep a now-dangling `parent` until then.
+      if (entry.parent !== undefined) this.byParent.get(entry.parent)?.delete(id);
+      this.byParent.delete(id);
       this.tableVersion++;
     }
     return entry;
@@ -303,9 +665,17 @@ export class EntityTable {
    *  index's version gate behave exactly as in the original run. Mesh/resource
    *  bindings are runtime-only and left unbound (rebound on demand). */
   restore(snapshot: EntityTableSnapshot): void {
+    this.fireMutationHooks();
     this.map.clear();
+    this.byBody.clear();
+    this.byEid.clear();
+    // Parent relations are rebound by restoreSnapshot via setParent (like resource/origin),
+    // so start with an empty hierarchy index; setParent repopulates it.
+    this.byParent.clear();
     for (const entry of snapshot.entries) {
       this.map.set(entry.id, { eid: entry.eid, generation: entry.generation, bodyId: entry.bodyId });
+      if (entry.bodyId !== undefined) this.byBody.set(entry.bodyId, entry.id);
+      this.byEid.set(entry.eid, entry.id);
     }
     this.seq = snapshot.seq;
     this.tableVersion = snapshot.version;
@@ -316,11 +686,15 @@ export class EntityTable {
 
 export interface Engine {
   device: unknown;
+  /** Adapter metadata exposed by WebGPU. Empty strings mean the backend did not expose a field. */
+  gpuAdapter: Readonly<{ vendor: string; architecture: string; device: string; description: string }>;
+  /** The device owns timestamp-query, but Three tracking remains off until an explicit capture. */
+  gpuTimingAvailable: boolean;
   context: unknown;
   renderer: RendererLike;
   scene: SceneLike;
   camera: CameraLike;
-  world: unknown; // bitECS world
+  world: ReturnType<typeof createEcsWorld>;
   transforms: TransformStorage;
   spatial: UniformGridSpatialIndex;
   entities: EntityTable;
@@ -330,6 +704,14 @@ export interface Engine {
   /** The render-only post-processing pipeline built by `render.enablePost` (opt-in,
    *  static/cinematic). A PostPipeline from render/post.ts; never sim/log state. */
   post?: unknown;
+  /** Native renderer-owned baseline and HDR cache. Exposed for deterministic teardown. */
+  renderBaselineState?: AppliedRenderBaseline;
+  hdrEnvironmentCache?: HdrEnvironmentCache;
+  /** Release baseline lights/textures, the active HDR lease, and cached PMREM resources. Idempotent. */
+  disposeRenderBaseline(): void;
+  /** Screen-distance and population-residency controllers driven by the render loop's
+   *  per-frame `lod.update(camera)` pass. Render-only (rebuilt from the log on replay); never sim state. */
+  lods?: unknown[];
   width: number;
   height: number;
   mode?: "windowed" | "headless";
@@ -341,20 +723,92 @@ export interface Engine {
 export async function createEngine(opts: {
   width: number;
   height: number;
+  /** Benchmark-only timestamp capability. Tracking remains disabled until a bounded capture. */
+  gpuTimestampMode?: "disabled" | "required";
+  /** Optional safe texture-compression capability for production KTX2 assets. */
+  gpuTextureCompression?: "disabled" | "bc-required";
   /** Phase 11 render baseline. Omit for the tasteful default (lit + IBL +
    *  tonemapped sky). Pass a partial to tweak, or `false` to opt out entirely
    *  (a bare scene — the pre-Phase-11 void). */
   renderBaseline?: RenderBaselineOverride | false;
+  /** Verified, content-addressed HDR bytes. createEngine builds the renderer-scoped
+   *  decode/PMREM cache after renderer initialization and leases this entry to the baseline. */
+  renderEnvironment?: { assetId: string; hash: string; bytes: Uint8Array };
+  hdrEnvironmentCache?: Omit<HdrEnvironmentCacheOptions, "decode" | "buildPmrem">;
 }): Promise<Engine> {
-  const adapter = await navigator.gpu.requestAdapter();
+  if (opts.renderBaseline === false && opts.renderEnvironment !== undefined) {
+    throw new TypeError("engine: renderEnvironment requires the render baseline");
+  }
+  type GpuPowerPreference = "low-power" | "high-performance";
+  interface GpuAdapterLike {
+    features: { has(name: string): boolean };
+    info?: Partial<{ vendor: string; architecture: string; device: string; description: string }>;
+    requestDevice(descriptor?: { requiredFeatures?: string[] }): Promise<unknown>;
+  }
+  const configuredPreference = ops.op_read_env("LIMINA_GPU_POWER_PREFERENCE");
+  if (configuredPreference !== "" && configuredPreference !== "low-power" && configuredPreference !== "high-performance") {
+    throw new Error("engine: LIMINA_GPU_POWER_PREFERENCE must be 'low-power' or 'high-performance'");
+  }
+  const powerPreference = configuredPreference === "" ? undefined : configuredPreference as GpuPowerPreference;
+  const adapter = await (navigator as unknown as {
+    gpu: { requestAdapter(options?: { powerPreference?: GpuPowerPreference }): Promise<GpuAdapterLike | null> };
+  }).gpu.requestAdapter({ powerPreference });
   if (!adapter) throw new Error("engine: no WebGPU adapter");
-  const device = await adapter.requestDevice();
+  const gpuTimestampMode = opts.gpuTimestampMode ?? "disabled";
+  const gpuTimingAvailable = gpuTimestampMode === "required";
+  if (gpuTimingAvailable && !adapter.features.has("timestamp-query")) {
+    throw new Error("engine: required timestamp-query feature is unavailable");
+  }
+  const gpuTextureCompression = opts.gpuTextureCompression ?? "disabled";
+  if (gpuTextureCompression !== "disabled" && gpuTextureCompression !== "bc-required") {
+    throw new Error("engine: gpuTextureCompression must be 'disabled' or 'bc-required'");
+  }
+  if (gpuTextureCompression === "bc-required" && !adapter.features.has("texture-compression-bc")) {
+    throw new Error("engine: required texture-compression-bc feature is unavailable");
+  }
+  const requiredFeatures: string[] = [];
+  if (gpuTimingAvailable) requiredFeatures.push("timestamp-query");
+  if (gpuTextureCompression === "bc-required") requiredFeatures.push("texture-compression-bc");
+  const device = await adapter.requestDevice(requiredFeatures.length > 0 ? { requiredFeatures } : undefined);
+  const gpuAdapter = Object.freeze({
+    vendor: adapter.info?.vendor ?? "",
+    architecture: adapter.info?.architecture ?? "",
+    device: adapter.info?.device ?? "",
+    description: adapter.info?.description ?? "",
+  });
   const context = ops.op_create_window_context();
 
-  const canvas = { width: opts.width, height: opts.height, style: {} };
-  const renderer: RendererLike = new THREE.WebGPURenderer({ device, context, canvas, antialias: true });
+  const contextCanvas = (context as { canvas?: { width?: unknown; height?: unknown } }).canvas;
+  const actualWidth = typeof contextCanvas?.width === "number" && Number.isSafeInteger(contextCanvas.width)
+      && contextCanvas.width > 0
+    ? contextCanvas.width
+    : opts.width;
+  const actualHeight = typeof contextCanvas?.height === "number" && Number.isSafeInteger(contextCanvas.height)
+      && contextCanvas.height > 0
+    ? contextCanvas.height
+    : opts.height;
+
+  const canvas = { width: actualWidth, height: actualHeight, style: {} };
+  const renderer = new THREE.WebGPURenderer({
+    device,
+    context,
+    canvas: canvas as unknown as HTMLCanvasElement,
+    antialias: true,
+    // Native window surfaces are presentation targets, not composited transparent canvases. Keep
+    // the swapchain opaque so backends such as NVIDIA/X11 that expose only Opaque alpha configure
+    // successfully; the engine already renders an explicit opaque scene background.
+    alpha: false,
+    // Device capability and active query writes are intentionally separate. A bounded benchmark
+    // capture toggles the pinned backend only after warmup and CPU sampling are complete.
+    trackTimestamp: false,
+  } as never) as unknown as RendererLike;
   await renderer.init();
-  renderer.setSize(opts.width, opts.height, false);
+  if (renderer.backend?.trackTimestamp !== false) throw new Error("engine: timestamp tracking escaped enabled during initialization");
+  if (gpuTimingAvailable && renderer.hasFeature?.("timestamp-query") !== true) {
+    throw new Error("engine: renderer did not expose the required timestamp-query feature");
+  }
+  renderer.setSize(actualWidth, actualHeight, false);
+  await configureNativeRendererSurface(renderer);
   // Real-time fidelity: PCF-soft shadow maps, ACES Filmic tone mapping, and MSAA
   // (antialias above). These are the WebGPU-path renderer properties three reads
   // each frame; entities opt into shadows via the three.* skills.
@@ -365,16 +819,26 @@ export async function createEngine(opts: {
 
   const scene: SceneLike = new THREE.Scene();
   scene.background = new THREE.Color(0x0b0e14);
-  const camera: CameraLike = new THREE.PerspectiveCamera(60, opts.width / opts.height, 0.1, 200);
+  const camera: CameraLike = new THREE.PerspectiveCamera(60, actualWidth / actualHeight, 0.1, 200);
 
   const world = createEcsWorld();
   const transforms = createTransformStorage(world);
   const spatial = new UniformGridSpatialIndex();
 
+  let baselineState: AppliedRenderBaseline | undefined;
+  let hdrEnvironmentCache: HdrEnvironmentCache | undefined;
   const engine: Engine = {
-    device, context, renderer, scene, camera, world,
+    device, gpuAdapter, gpuTimingAvailable, context, renderer, scene, camera, world,
     transforms, spatial,
-    entities: new EntityTable(), tags: new Map(), ops, width: opts.width, height: opts.height, mode: "windowed",
+    entities: new EntityTable(), tags: new Map(), ops, width: actualWidth, height: actualHeight, mode: "windowed",
+    disposeRenderBaseline(): void {
+      baselineState?.dispose();
+      baselineState = undefined;
+      engine.renderBaselineState = undefined;
+      hdrEnvironmentCache?.dispose();
+      hdrEnvironmentCache = undefined;
+      engine.hdrEnvironmentCache = undefined;
+    },
   };
 
   // Default windowed resize handling. The compositor sends a resize on first
@@ -397,7 +861,25 @@ export async function createEngine(opts: {
   // ground + framing) unless the caller opts out with `renderBaseline: false`.
   // The renderer is live (init() awaited above), so PMREM IBL runs here.
   if (opts.renderBaseline !== false) {
-    applyRenderBaseline(engine, opts.renderBaseline);
+    let environmentLease;
+    try {
+      if (opts.renderEnvironment !== undefined) {
+        hdrEnvironmentCache = new HdrEnvironmentCache(renderer, opts.hdrEnvironmentCache);
+        engine.hdrEnvironmentCache = hdrEnvironmentCache;
+        environmentLease = hdrEnvironmentCache.acquire(
+          opts.renderEnvironment.assetId,
+          opts.renderEnvironment.hash,
+          opts.renderEnvironment.bytes,
+        );
+      }
+      baselineState = applyRenderBaseline(engine, opts.renderBaseline, undefined, environmentLease);
+      engine.renderBaselineState = baselineState;
+    } catch (error) {
+      environmentLease?.release();
+      hdrEnvironmentCache?.dispose();
+      engine.hdrEnvironmentCache = undefined;
+      throw error;
+    }
   }
 
   return engine;

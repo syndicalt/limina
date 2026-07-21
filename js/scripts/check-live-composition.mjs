@@ -25,7 +25,11 @@ function expect(cond, label) {
 }
 
 const entry = read("browser-entry.ts");
+const runLiveStart = entry.indexOf("export async function runLive");
+const runLiveEnd = entry.indexOf("// ---- Auto-bootstrap", runLiveStart);
+const runLiveSource = runLiveStart >= 0 && runLiveEnd > runLiveStart ? entry.slice(runLiveStart, runLiveEnd) : "";
 const live = read("browser/live-runtime.ts");
+const engineOpComposition = read("browser/engine-op-composition.ts");
 const workerEntry = read("browser/sim-worker-entry.ts");
 
 console.log("Phase 8 M5 — live runtime composition guard");
@@ -61,9 +65,22 @@ expect(/interp\.push\(\s*ring\.freeze\(/.test(entry), "M4: freezes each consumed
 expect(/startAccumulatorLoop\(/.test(entry), "reuses the host.ts accumulator rAF loop");
 expect(/Atomics\.load\(statusView/.test(entry), "reads the worker's tick via Atomics on the status SAB");
 
-// ── renderSyncSystem-style scene drive + real renderer (Mode-A buildRenderTarget). ──
-expect(/renderSyncSystem\(ecs\)/.test(entry), "drives the scene transforms (renderSyncSystem)");
-expect(/buildRenderTarget\(/.test(entry), "builds the real WebGPU renderer/scene/camera (buildRenderTarget reuse)");
+// ── renderSyncSystem-style scene drive + persistent renderer-host ownership. ──
+// runLive drives the scene via `renderSyncSystem(ecs, suppressedEids)` — the second arg is the
+// entity-residency streaming set (detach-but-retain), added after this check was first written.
+// Match `ecs` followed by a comma OR close-paren so the check verifies the transform drive is
+// present without being brittle to that argument (the original `ecs\)` regex predated it).
+expect(/renderSyncSystem\(ecs[,)]/.test(entry), "drives the scene transforms (renderSyncSystem)");
+expect(/createBrowserRenderHost/.test(runLiveSource), "creates a renderer host only when the caller did not supply one");
+expect(/renderHost\.acquireWorld\(/.test(runLiveSource), "acquires one exclusive world render session");
+expect(/renderSession\.render\(/.test(runLiveSource), "routes live frames through session telemetry and ownership");
+expect(/onTelemetry:\s*opts\.onRenderTelemetry/.test(runLiveSource), "binds telemetry at the world session for external hosts");
+expect(/renderSession\.resize\(/.test(runLiveSource) && /renderSession\.setQuality\(/.test(runLiveSource), "exposes session resize and quality transitions");
+expect(/cleanupEntityStream\?\.clear\(\)/.test(runLiveSource)
+  && /cleanupTerrainStream\?\.clear\(\)/.test(runLiveSource)
+  && /cleanupRenderSession\?\.dispose\(\)/.test(runLiveSource), "unified teardown releases dormant entities, streams, and the world session");
+expect(/if \(ownsRenderHost\).*cleanupRenderHost\?\.dispose\(\)/.test(runLiveSource), "internally-owned renderer hosts are always released");
+expect(!/buildRenderTarget\(/.test(runLiveSource), "runLive does not allocate through the Mode-A one-shot render target");
 
 // ── Graceful degradation (no crash when SAB/WebGPU absent). ──
 expect(/crossOriginIsolatedAvailable\(\)/.test(entry), "gates on cross-origin isolation (SAB precondition)");
@@ -75,9 +92,17 @@ expect(/@dimforge\/rapier3d-compat/.test(workerEntry), "worker entry bundles rap
 expect(/WorkerGlobalScope/.test(workerEntry), "worker entry is gated on WorkerGlobalScope (inert at non-worker import)");
 
 // ── NO STUBS in the live integration path: the render side never fabricates poses
-//    or fakes physics transforms — it reads them from the JOINed SAB. ──
+//    or fakes physics transforms — it reads them from the JOINed SAB. The binding table now
+//    lives in the shared realm-safe composition module; check both the live caller and that
+//    authority instead of pinning the pre-refactor inline spelling. Behavioral receiver/output
+//    proof lives in p_engine_op_composition.ts and runs in the aggregate Limina suite. ──
 expect(!/stubScene|stubCamera|fakeTransform|TODO|FIXME/.test(live), "live-runtime carries no scene/camera stubs or TODO placeholders");
-expect(/P\.op_physics_body_transform\.bind\(P\)/.test(live), "authoring ops bind the REAL physics body transform (no fabricated transforms)");
+expect(/import\s*\{\s*composePortableEngineOps\s*\}\s*from\s*"\.\/engine-op-composition\.ts"/.test(live)
+  && /return\s+composePortableEngineOps\(P,\s*\{\s*readAsset\s*\}\)/.test(live),
+"authoring ops delegate to the shared portable engine-op authority");
+expect(/op_physics_body_transform:\s*provider\.op_physics_body_transform\.bind\(provider\)/.test(engineOpComposition)
+  && /\.\.\.bindPhysicsEngineOps\(physics\)/.test(engineOpComposition),
+"shared composition binds the REAL physics body transform (no fabricated transforms)");
 
 for (const o of ok) console.log("  PASS  " + o);
 if (fails.length > 0) {

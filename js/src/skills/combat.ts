@@ -14,6 +14,7 @@
 
 import { z } from "../../build/zod.bundle.mjs";
 import type { ExecutionContext, SkillDefinition, SkillRegistry } from "./registry.ts";
+import { num } from "./_util.ts";
 
 const MetaField = z.record(z.string(), z.unknown()).optional().describe("Agent-supplied extension metadata.");
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -141,19 +142,44 @@ export class StatsManager {
     return this.entityStats.get(entity)?.statusEffects ?? [];
   }
 
-  tickStatusEffects(dtMs: number): { entity: string; effectId: string; expired: boolean }[] {
-    const results: { entity: string; effectId: string; expired: boolean }[] = [];
-    for (const [entity, es] of this.entityStats) {
-      for (const effect of es.statusEffects) {
-        effect.elapsed += dtMs;
-        if (effect.elapsed >= effect.duration * 1000) {
-          results.push({ entity, effectId: effect.id, expired: true });
-        }
-      }
-      es.statusEffects = es.statusEffects.filter((e) => e.elapsed < e.duration * 1000);
-    }
-    return results;
+  /** Deterministic capture of the whole manager (snapshot participant, H2): entities
+   *  sorted, stats by name; status effects keep application order (ids are dense
+   *  `status_N`, so order is deterministic). `seq` rides so a post-restore
+   *  applyStatusEffect mints the SAME next id it would have live. */
+  captureSnapshot(): StatsManagerSnapshot {
+    const byString = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+    return {
+      seq: this.seq,
+      entities: [...this.entityStats.values()].sort((a, b) => byString(a.entity, b.entity)).map((es) => ({
+        entity: es.entity,
+        stats: [...es.stats.values()].sort((a, b) => byString(a.name, b.name)).map((s) => ({ ...s })),
+        // Explicit key order (canonical capture): a live StatusEffect is built as
+        // `{ ...effect, id, elapsed }`, whose key order differs from a restored one —
+        // spreading it would make capture bytes depend on construction history.
+        statusEffects: es.statusEffects.map((e) => ({
+          id: e.id, type: e.type, duration: e.duration, elapsed: e.elapsed, magnitude: e.magnitude,
+          tickInterval: e.tickInterval, onApply: e.onApply, onRemove: e.onRemove, onTick: e.onTick, config: e.config,
+        })),
+      })),
+    };
   }
+
+  /** Wholesale replace the manager's state with a captured snapshot (participant restore). */
+  restoreSnapshot(snap: StatsManagerSnapshot): void {
+    this.entityStats.clear();
+    this.seq = snap.seq;
+    for (const e of snap.entities) {
+      const stats = new Map<string, StatDef>();
+      for (const s of e.stats) stats.set(s.name, { ...s });
+      this.entityStats.set(e.entity, { entity: e.entity, stats, statusEffects: e.statusEffects.map((fx) => ({ ...fx })) });
+    }
+  }
+}
+
+/** The whole StatsManager state as the snapshot participant carries it (H2). */
+export interface StatsManagerSnapshot {
+  seq: number;
+  entities: { entity: string; stats: StatDef[]; statusEffects: StatusEffect[] }[];
 }
 
 /** A live defensive stance (combat.defend): reduces incoming damage until it expires by tick. */
@@ -231,6 +257,27 @@ export class CombatManager {
     const after = change?.value ?? before;
     return { healed: after - before, remaining: after }; // ACTUAL clamped delta, not the request
   }
+
+  /** Deterministic capture of the live defend stances, entity-sorted (snapshot participant, H2).
+   *  Stat state itself is the StatsManager participant's; this carries only combat's own state. */
+  captureSnapshot(): CombatManagerSnapshot {
+    return {
+      stances: [...this.stances.entries()]
+        .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+        .map(([entity, s]) => ({ entity, ...s })),
+    };
+  }
+
+  /** Wholesale replace the defend stances (participant restore). */
+  restoreSnapshot(snap: CombatManagerSnapshot): void {
+    this.stances.clear();
+    for (const s of snap.stances) this.stances.set(s.entity, { damageReduction: s.damageReduction, reflectChance: s.reflectChance, expiresTick: s.expiresTick });
+  }
+}
+
+/** The whole CombatManager state as the snapshot participant carries it (H2). */
+export interface CombatManagerSnapshot {
+  stances: ({ entity: string } & DefendStance)[];
 }
 
 // ---- Deterministic crit (pure hash, NO RNG) ----
@@ -249,11 +296,6 @@ function hash32(s: string): number {
  *  so replay recomputes identical crits without any RNG. */
 function critRoll(tick: number, attacker: string, target: string): number {
   return hash32(`${tick}|${attacker}|${target}`) / 0x100000000;
-}
-
-/** Read a finite number from agent config, else a default. */
-function num(v: unknown, d: number): number {
-  return typeof v === "number" && Number.isFinite(v) ? v : d;
 }
 
 // ---- Schemas (closure-free; the SkillDefinitions that use them live in registerCombatSkills) ----
@@ -403,6 +445,7 @@ export function registerCombatSkills(registry: SkillRegistry, opts?: { statsMana
     description: "Get the current value, max, and min of a stat on an entity.",
     category: "stats",
     permissions: ["stats.read"],
+    effect: "read",
     input: getStatInput,
     output: z.object({ value: z.number(), maxValue: z.number(), minValue: z.number() }),
     handler: (input) => {
@@ -524,6 +567,7 @@ export function registerCombatSkills(registry: SkillRegistry, opts?: { statsMana
     description: "List active status effects on an entity.",
     category: "status",
     permissions: ["status.read"],
+    effect: "read",
     input: listStatusInput,
     output: z.object({ effects: z.array(z.object({ id: z.string(), type: z.string(), duration: z.number(), elapsed: z.number(), magnitude: z.number() })) }),
     handler: (input) => {
@@ -551,7 +595,7 @@ export function registerCombatSkills(registry: SkillRegistry, opts?: { statsMana
       const crit = critChance > 0 && critRoll(ctx.tick, input.attackerEntity, input.targetEntity) < critChance;
       const dmg = crit ? input.damage * critMult : input.damage;
       const { fired, ...result } = combatMgr.applyDamage(input.targetEntity, dmg, "physical", ctx.tick, input.attackerEntity);
-      ctx.emit("combat.melee", { attacker: input.attackerEntity, target: input.targetEntity, damage: input.damage, knockback: input.knockback, crit, ...input.meta, ...result });
+      ctx.emit("combat.melee", { attacker: input.attackerEntity, target: input.targetEntity, knockback: input.knockback, crit, ...input.meta, ...result });
       fireOnZero(ctx, input.targetEntity, "hp", fired);
       return { hit: true, damage: result.damage, killed: result.killed, crit };
     },
@@ -576,7 +620,7 @@ export function registerCombatSkills(registry: SkillRegistry, opts?: { statsMana
       const crit = critChance > 0 && critRoll(ctx.tick, input.attackerEntity, input.targetEntity) < critChance;
       const dmg = crit ? input.damage * critMult : input.damage;
       const { fired, ...result } = combatMgr.applyDamage(input.targetEntity, dmg, "physical", ctx.tick, input.attackerEntity);
-      ctx.emit("combat.ranged", { attacker: input.attackerEntity, target: input.targetEntity, damage: input.damage, speed: input.speed, crit, ...input.meta, ...result });
+      ctx.emit("combat.ranged", { attacker: input.attackerEntity, target: input.targetEntity, speed: input.speed, crit, ...input.meta, ...result });
       fireOnZero(ctx, input.targetEntity, "hp", fired);
       return { fired: true, hit: true, damage: result.damage, killed: result.killed, crit };
     },

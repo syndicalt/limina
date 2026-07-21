@@ -162,27 +162,35 @@ const TILES = (BOUNDS.maxTx - BOUNDS.minTx + 1) * (BOUNDS.maxTz - BOUNDS.minTz +
   const { world } = makeCapturingWorld();
   const base = { agentId: "agt_b", sessionId: "ses_p11_default_b", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
 
+  // The engine ships NO biome content (engine↔content decoupling): populateBiome scatters nothing
+  // for unmapped roles, so this MECHANISM test supplies its own pack inline — binding the roles the
+  // mountains/desert types reference to bundled test GLBs — rather than depending on an ambient
+  // project biome-pack.json. Self-contained + deterministic (the gate owns its content).
+  const TEST_BIOME_PACK = { conifer: { id: "triangle.glb" }, boulder: { id: "textured-triangle.gltf" }, cactus: { id: "triangle.glb" } };
+
   const gen = ok(await registry.invoke("world.generateRegion", { seed: SEED, bounds: BOUNDS, lod: 0, type: "mountains", hints: SHAPE }, base));
   const regionId = gen.regionId as string;
   const relief = gen.relief as { minY: number; maxY: number };
   const seaLevel = relief.minY + 0.18 * (relief.maxY - relief.minY);
 
   // Populate via the SKILL (type resolved from the region). Props place, gated to dry land.
-  const pop = ok(await registry.invoke("world.populateBiome", { regionId, waterLevel: seaLevel, waterMargin: 2.5 }, base));
+  const pop = ok(await registry.invoke("world.populateBiome", { regionId, waterLevel: seaLevel, waterMargin: 2.5, biomePack: TEST_BIOME_PACK }, base));
   assert(pop.type === "mountains", `populateBiome resolved type '${pop.type}', expected the region's 'mountains'`);
   assert((pop.instances as number) > 0, `world.populateBiome placed NO props (instances=${pop.instances}) — the populate path is broken`);
   const layers = pop.layers as { instances: number; mounted: number }[];
   assert(layers.length > 0 && layers.some((l) => l.mounted > 0), "populateBiome mounted no InstancedMeshes");
+  assert(pop.mounted === layers.reduce((sum, layer) => sum + layer.mounted, 0),
+    "populateBiome whole-population mounted total does not equal its layer sum");
 
   // GATED — 0 in water: flood the region OVER its peak so EVERY candidate is in water; the
   // waterGated mountains layers must then place ZERO. Falsifiable against the run above.
-  const flooded = ok(await registry.invoke("world.populateBiome", { regionId, waterLevel: relief.maxY + 50, waterMargin: 2.5 }, base));
+  const flooded = ok(await registry.invoke("world.populateBiome", { regionId, waterLevel: relief.maxY + 50, waterMargin: 2.5, biomePack: TEST_BIOME_PACK }, base));
   assert((flooded.instances as number) === 0, `flooding the region to its peak still placed ${flooded.instances} props (props in water — the water gate is not load-bearing)`);
   assert((flooded.instances as number) < (pop.instances as number), "flooded run did not place strictly fewer than the dry run (gate vacuous)");
 
   // Biome-correctness: a DESERT region scatters its (biome-gated) cacti content too.
   const dgen = ok(await registry.invoke("world.generateRegion", { seed: SEED, bounds: { minTx: 8, minTz: 0, maxTx: 9, maxTz: 1 }, lod: 0, type: "desert" }, base));
-  const dpop = ok(await registry.invoke("world.populateBiome", { regionId: dgen.regionId as string }, base));
+  const dpop = ok(await registry.invoke("world.populateBiome", { regionId: dgen.regionId as string, biomePack: TEST_BIOME_PACK }, base));
   assert(dpop.type === "desert" && (dpop.instances as number) > 0, `desert populate placed nothing (instances=${dpop.instances})`);
 }
 
@@ -199,19 +207,43 @@ const TILES = (BOUNDS.maxTx - BOUNDS.minTx + 1) * (BOUNDS.maxTz - BOUNDS.minTz +
 
   const res = ok(await registry.invoke("render.enablePost", {}, base));
   assert(res.enabled === true, "render.enablePost did not report enabled");
+  assert(res.deferred === false, "live render.enablePost incorrectly reported deferred");
   assert(res.ao === true && res.bloom === true && res.grade === true, "default post stages not all wired");
   assert(res.depth === true && res.normal === true, "post pipeline missing the real depth+normal pre-pass nodes");
+  assert(res.godrays === false && res.dof === false && res.outline === false, "opt-in stages (godrays/dof/outline) must be OFF by default");
 
   // The live pipeline is stowed on world.post for the render loop to drive.
-  const pipe = world.post as { aoNode?: unknown; bloomNode?: unknown; depthNode?: unknown; normalNode?: unknown; render?: unknown } | undefined;
+  const pipe = world.post as { aoNode?: unknown; bloomNode?: unknown; depthNode?: unknown; normalNode?: unknown; render?: unknown; dispose?(): void } | undefined;
   assert(pipe !== undefined, "render.enablePost did not stow the pipeline on world.post");
   assert(pipe.aoNode != null && pipe.bloomNode != null, "world.post missing the GTAO/bloom nodes");
   assert(pipe.depthNode != null && pipe.normalNode != null, "world.post missing depth/normal pre-pass nodes");
   assert(typeof pipe.render === "function", "world.post has no render() driver");
+  let replacedDisposals = 0;
+  pipe.dispose = () => { replacedDisposals++; };
 
   // Falsifiable: disabling stages drops their nodes.
   const off = ok(await registry.invoke("render.enablePost", { ao: { enabled: false }, bloom: { enabled: false } }, base));
   assert(off.ao === false && off.bloom === false, "disabling AO/bloom did not drop the stages");
+  assert(replacedDisposals === 1, "replacing world.post did not dispose the prior pipeline exactly once");
+
+  // Opt-in stages wire when enabled (dof/outline are camera/scene-agnostic; godrays needs a
+  // shadow-casting sun so it is GPU-verified separately, not asserted here).
+  const fx = ok(await registry.invoke("render.enablePost", { dof: { enabled: true }, outline: { enabled: true } }, base));
+  assert(fx.dof === true && fx.outline === true, "enabling dof/outline did not wire the stages");
+}
+
+// Renderer-free authoring must preserve the command for recorder/export replay instead of
+// failing the whole export. It reports that materialization is deferred and allocates no pipeline.
+{
+  const registry = new SkillRegistry(new LiminaTracer("ses_p11_default_c_headless"));
+  registerCoreSkills(registry);
+  const { world } = makeCapturingWorld();
+  const base = { agentId: "agt_c_headless", sessionId: "ses_p11_default_c_headless", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
+  const res = ok(await registry.invoke("render.enablePost", { outline: { enabled: true } }, base));
+  assert(res.enabled === false && res.deferred === true, "headless render.enablePost did not defer materialization");
+  assert(world.post === undefined, "headless render.enablePost allocated a live pipeline");
+  const preset = res.preset as { outline?: { enabled?: boolean } };
+  assert(preset.outline?.enabled === true, "headless render.enablePost lost the resolved preset");
 }
 
 ops.op_log(

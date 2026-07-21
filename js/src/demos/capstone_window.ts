@@ -44,11 +44,13 @@ const capstone = await buildCapstone({ world, registry, core, base });
 // ── RENDER-ONLY: rigged character models (the sim drives positions; these just follow). ───────
 const pPos = capstone.playerController.position;
 const playerModel = await attachCharacterModel({
+  assetId: "robot.glb",
   world, registry, base, animationManager: core.animation.animationManager,
   position: [pPos[0], pPos[1] - capstone.playerController.groundOffset, pPos[2]],
 });
 const nPos = capstone.npcPos();
 const npcModel = await attachCharacterModel({
+  assetId: "robot.glb",
   world, registry, base, animationManager: core.animation.animationManager,
   position: [nPos[0], nPos[1], nPos[2]],
   // The keeper: a brassy tint + a touch shorter so the quest-giver doesn't render as a

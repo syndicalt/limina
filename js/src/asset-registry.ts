@@ -107,6 +107,23 @@ export class AssetRegistry {
     }
   }
 
+  /** Seed the cache with pre-fetched bytes so a later resolve() is an instant cache hit
+   *  instead of a blocking host read (op_read_asset is a SYNCHRONOUS XHR + per-byte decode
+   *  in the browser — six of those back-to-back freeze the viewport). Idempotent: an
+   *  already-cached or package-sourced id is left untouched. The content hash is computed
+   *  the SAME way resolve() would, so the content address is identical whether an asset was
+   *  seeded or read synchronously — determinism is unaffected. */
+  seed(assetId: string, bytes: Uint8Array): void {
+    if (this.cache.has(assetId) || this.packaged.has(assetId)) return;
+    this.cache.set(assetId, { assetId, bytes, hash: assetContentHash(bytes, this.ops) });
+  }
+
+  /** Whether `assetId` is already resolvable without a host read (cached or package-loaded). Lets a
+   *  caller skip an async pre-fetch when the bytes are already warm. */
+  has(assetId: string): boolean {
+    return this.cache.has(assetId) || this.packaged.has(assetId);
+  }
+
   /** Resolve an asset id -> bytes + content hash. A cache hit (or package-loaded
    *  entry) returns the same resolved asset; a miss reads the bytes from the host
    *  (op_read_asset), hashes them, caches, and returns. Same id -> same address. */

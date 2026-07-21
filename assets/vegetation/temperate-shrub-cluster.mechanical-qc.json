@@ -1,0 +1,166 @@
+{
+  "schema": "limina.asset-qc-evidence/1",
+  "id": "limina-temperate-shrub-cluster",
+  "model": {
+    "path": "vegetation/temperate-shrub-cluster-lod0.glb",
+    "sha256": "sha256:cd1d4c4fd9cbf0a4475624f190b6f3880d85a14706565f4eae647d1e90a61a3b",
+    "metrics": {
+      "boundsM": [
+        2.187071,
+        0.644454,
+        2.194997
+      ],
+      "vertexCount": 11810,
+      "triangleCount": 16574,
+      "meshCount": 2,
+      "primitiveCount": 2,
+      "materialCount": 1,
+      "textureSlots": [
+        "baseColor",
+        "metallicRoughness",
+        "normal"
+      ],
+      "textures": [
+        {
+          "slot": "baseColor",
+          "mimeType": "image/jpeg",
+          "width": 1024,
+          "height": 1024
+        },
+        {
+          "slot": "metallicRoughness",
+          "mimeType": "image/jpeg",
+          "width": 1024,
+          "height": 1024
+        },
+        {
+          "slot": "normal",
+          "mimeType": "image/jpeg",
+          "width": 1024,
+          "height": 1024
+        }
+      ]
+    }
+  },
+  "lods": [
+    {
+      "level": 1,
+      "path": "vegetation/temperate-shrub-cluster-lod1.glb",
+      "sha256": "sha256:84f4e1c612d432be5ddc1c218f8a56b5e2aa608a3cd5dead0d69045d23c081a9",
+      "distanceM": 18,
+      "metrics": {
+        "boundsM": [
+          2.187071,
+          0.644454,
+          2.194997
+        ],
+        "vertexCount": 6554,
+        "triangleCount": 7458,
+        "meshCount": 2,
+        "primitiveCount": 2,
+        "materialCount": 1,
+        "textureSlots": [
+          "baseColor",
+          "metallicRoughness",
+          "normal"
+        ],
+        "textures": [
+          {
+            "slot": "baseColor",
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 1024
+          },
+          {
+            "slot": "metallicRoughness",
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 1024
+          },
+          {
+            "slot": "normal",
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 1024
+          }
+        ]
+      }
+    },
+    {
+      "level": 2,
+      "path": "vegetation/temperate-shrub-cluster-lod2.glb",
+      "sha256": "sha256:8a08cc62b7150f85461dbc415fe3c04f1d7c5d6c72c752ce44588c05c2a34083",
+      "distanceM": 42,
+      "metrics": {
+        "boundsM": [
+          2.186702,
+          0.644454,
+          2.194628
+        ],
+        "vertexCount": 3648,
+        "triangleCount": 3298,
+        "meshCount": 2,
+        "primitiveCount": 2,
+        "materialCount": 1,
+        "textureSlots": [
+          "baseColor",
+          "metallicRoughness",
+          "normal"
+        ],
+        "textures": [
+          {
+            "slot": "baseColor",
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 1024
+          },
+          {
+            "slot": "metallicRoughness",
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 1024
+          },
+          {
+            "slot": "normal",
+            "mimeType": "image/jpeg",
+            "width": 1024,
+            "height": 1024
+          }
+        ]
+      }
+    }
+  ],
+  "contactSheet": {
+    "path": "qc/internal/temperate-groundcover-candidates.png",
+    "sha256": "sha256:07065c306780bc4a490abb38083218de7ee00bcbc33975927c52319e2eeeeba7"
+  },
+  "mechanicalFloor": {
+    "pass": true,
+    "score": 1,
+    "failures": [],
+    "measured": {
+      "readable": true,
+      "vertexCount": 11810,
+      "triangleCount": 16574,
+      "materialCount": 1,
+      "meshCount": 2,
+      "hasAlbedoMap": true,
+      "hasNormalMap": true,
+      "bboxDims": [
+        2.1870710849761963,
+        0.6444540895521641,
+        2.1949968814849856
+      ],
+      "materials": [
+        {
+          "colorHex": null,
+          "roughness01": 1,
+          "metalness01": 0,
+          "hasAlbedoTex": true,
+          "hasNormalTex": true
+        }
+      ]
+    }
+  },
+  "generator": "gltf-transform-cross-cluster-plus-meshoptimizer-LOD"
+}

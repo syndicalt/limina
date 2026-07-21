@@ -155,8 +155,8 @@ assert(replayCore.inventory.inventoryManager.countItem(actor, "potion") === 1, "
 
 // NO DOUBLE-RECORD sanity: pickup/drop/use are top-level skill commands, not nested ops.
 const tools = recorder.commands.filter((c): c is { kind: "skill"; tool: string } => c.kind === "skill").map((c) => c.tool);
-assert(tools.includes("interaction.query") && tools.includes("interaction.interact") && tools.includes("interaction.drop"),
-  "interaction skills were not recorded as top-level commands");
+assert(!tools.includes("interaction.query") && tools.includes("interaction.interact") && tools.includes("interaction.drop"),
+  "read-only query must stay out of the authoring log while interaction mutations are recorded");
 
 ops.op_log(
   `p12_interaction OK: closure-wired managers (core.interaction/inventory); REAL proximity query ` +

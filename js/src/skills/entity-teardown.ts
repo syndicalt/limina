@@ -17,14 +17,28 @@
 
 import { despawnRenderable } from "../ecs/world.ts";
 import type { EntityEntry } from "../engine.ts";
+import { disposeEntitySceneResources } from "../render/entity-scene-resources.ts";
 import type { WorldContext } from "./registry.ts";
 
 export function teardownEntity(world: WorldContext, entity: string): EntityEntry | undefined {
   const entry = world.entities.destroy(entity);
   if (entry === undefined) return undefined;
-  if (entry.mesh !== undefined) world.scene.remove(entry.mesh);
-  if (entry.bodyId !== undefined) world.ops.op_physics_remove_body(entry.bodyId);
-  despawnRenderable(world.ecs, entry.eid);
-  world.tags.delete(entry.eid);
+  const errors: unknown[] = [];
+  const attempt = (operation: () => void): void => {
+    try { operation(); } catch (error) { errors.push(error); }
+  };
+  // Runtime-only owners (compute kernels, direct scene mounts, retained callbacks) release first.
+  // Continue through ordinary mesh/physics/ECS cleanup even when one disposer fails.
+  if (entry.runtimeDispose !== undefined) attempt(entry.runtimeDispose);
+  if (entry.mesh !== undefined) {
+    attempt(() => world.scene.remove(entry.mesh!));
+    attempt(() => disposeEntitySceneResources(entry.mesh!));
+  }
+  if (entry.bodyId !== undefined) attempt(() => world.ops.op_physics_remove_body(entry.bodyId!));
+  attempt(() => despawnRenderable(world.ecs, entry.eid));
+  attempt(() => { world.tags.delete(entry.eid); });
+  if (errors.length > 0) {
+    throw new AggregateError(errors, `entity teardown failed for '${entity}' in ${errors.length} operation(s)`);
+  }
   return entry;
 }

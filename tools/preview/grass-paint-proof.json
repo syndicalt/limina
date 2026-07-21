@@ -1,0 +1,62 @@
+{
+  "_comment": "Paint-interaction proof: a FLAT brown slab (no generated relief, no vertex colors) gets a grass disc painted via terrain.paint — the paint channel alone must grow real instanced blades inside the disc and nothing outside it (the erase-adjacent dirt stays bare).",
+  "commands": [
+    {
+      "kind": "physics",
+      "op": "op_physics_create_world",
+      "args": [
+        -9.81
+      ]
+    },
+    {
+      "kind": "skill",
+      "tool": "terrain.create",
+      "input": {
+        "size": 80,
+        "resolution": 129,
+        "origin": [
+          0,
+          0,
+          0
+        ],
+        "color": 7295796
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "terrain.paint",
+      "input": {
+        "center": [
+          6,
+          0
+        ],
+        "radius": 10,
+        "strength": 1,
+        "material": "grass"
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "terrain.paint",
+      "input": {
+        "center": [
+          -14,
+          -8
+        ],
+        "radius": 6,
+        "strength": 0.5,
+        "material": "grass"
+      }
+    }
+  ],
+  "camera": {
+    "center": [
+      6,
+      0.5,
+      0
+    ],
+    "radius": 13,
+    "height": 2.4,
+    "autoSpin": 0
+  }
+}

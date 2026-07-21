@@ -1,0 +1,204 @@
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, relative, resolve, sep } from "node:path";
+import {
+  buildingCompositionManifestV2Hash,
+  validateBuildingCompositionManifestV2,
+} from "../../js/src/assets/building-composition-manifest-v2.mjs";
+import { validateBuildingCompositionReviewAuthority } from "../../js/src/render/building-composition-review-scene.ts";
+import { portableAssetContentHash } from "../../js/src/world/asset-content-hash.mjs";
+
+const ROOT = resolve(import.meta.dirname, "../.."),
+  sha = (bytes) => `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+  portable = (path) => {
+    const value = relative(ROOT, path).split(sep).join("/");
+    if (!value || value === ".." || value.startsWith("../"))
+      throw new Error(`C1 review path escapes repository: ${path}`);
+    return value;
+  };
+
+export async function buildCompositionReviewAuthority({
+  manifestPath,
+  functionalEvidencePath,
+  buildEvidencePath,
+  outputPath,
+  write = true,
+} = {}) {
+  if (!manifestPath || !functionalEvidencePath || !buildEvidencePath || !outputPath)
+    throw new Error("manifestPath, functionalEvidencePath, buildEvidencePath, and outputPath are required");
+  const manifestAbsolute = resolve(ROOT, manifestPath),
+    evidenceAbsolute = resolve(ROOT, functionalEvidencePath),
+    buildEvidenceAbsolute = resolve(ROOT, buildEvidencePath),
+    outputAbsolute = resolve(ROOT, outputPath),
+    [manifestBytes, evidenceBytes, buildEvidenceBytes] = await Promise.all([
+      readFile(manifestAbsolute),
+      readFile(evidenceAbsolute),
+      readFile(buildEvidenceAbsolute),
+    ]),
+    manifest = validateBuildingCompositionManifestV2(JSON.parse(manifestBytes)),
+    evidence = JSON.parse(evidenceBytes),
+    build = JSON.parse(buildEvidenceBytes),
+    canonicalHash = buildingCompositionManifestV2Hash(manifest),
+    blendAbsolute = resolve(ROOT, build.sourceBlend?.path ?? ""),
+    glbAbsolute = resolve(ROOT, build.asset?.path ?? ""),
+    [blendBytes, glbBytes] = await Promise.all([readFile(blendAbsolute), readFile(glbAbsolute)]);
+  if (
+    evidence.schema !== "limina.building-composition-functional-evidence/v1" ||
+    evidence.verdict !== "pass" ||
+    !Array.isArray(evidence.checks) ||
+    evidence.checks.length < 1 ||
+    evidence.checks.some(
+      (check) => check.passed !== true || !Array.isArray(check.findings) || check.findings.length !== 0,
+    ) ||
+    evidence.summary?.failed !== 0 ||
+    evidence.summary?.passed !== evidence.checks.length
+  )
+    throw new Error("C1 authority requires all-pass integrated functional evidence");
+  if (
+    evidence.inputs?.manifestId !== manifest.id ||
+    evidence.inputs?.manifestHash !== canonicalHash ||
+    evidence.inputs?.manifestSha256 !== sha(manifestBytes) ||
+    evidence.inputs?.shellArtifactId !== manifest.dependencies.shell.artifact.artifactId ||
+    evidence.inputs?.materialArtifactId !== manifest.dependencies.materialPalette.artifact.artifactId ||
+    evidence.inputs?.interiorArtifactId !== manifest.dependencies.interiorPlan.artifact.artifactId
+  )
+    throw new Error("C1 functional evidence input closure drifted");
+  if (
+    build.schema !== "limina.building-composition-build-evidence/v1" ||
+    build.id !== manifest.id ||
+    build.manifest?.path !== portable(manifestAbsolute) ||
+    build.manifest?.sha256 !== sha(manifestBytes) ||
+    build.manifest?.canonicalHash !== canonicalHash ||
+    build.sourceBlend?.path !== portable(blendAbsolute) ||
+    build.sourceBlend?.sha256 !== sha(blendBytes) ||
+    build.asset?.path !== portable(glbAbsolute) ||
+    build.asset?.sha256 !== sha(glbBytes) ||
+    build.status !== "cpu-authored-unreviewed" ||
+    build.rendered !== false ||
+    build.gpuUsed !== false
+  )
+    throw new Error("C1 authority requires an exact CPU-authored integrated source build");
+  const authority = validateBuildingCompositionReviewAuthority({
+    schema: "limina.building-composition-review-scene/v1",
+    approvalPolicy: {
+      renderer: "limina-production-native-engine",
+      blenderApprovalProhibited: true,
+      nonEngineApprovalProhibited: true,
+      humanDecisionRequired: true,
+      fireExcluded: true,
+    },
+    manifest: {
+      path: portable(manifestAbsolute),
+      sha256: sha(manifestBytes),
+      contentHash: portableAssetContentHash(manifestBytes),
+      id: manifest.id,
+      revision: manifest.revision,
+      canonicalHash,
+    },
+    functionalEvidence: {
+      path: portable(evidenceAbsolute),
+      sha256: sha(evidenceBytes),
+      contentHash: portableAssetContentHash(evidenceBytes),
+      schema: evidence.schema,
+      verdict: "pass",
+      inputs: evidence.inputs,
+      summary: evidence.summary,
+    },
+    integratedSource: {
+      evidence: {
+        path: portable(buildEvidenceAbsolute),
+        sha256: sha(buildEvidenceBytes),
+        contentHash: portableAssetContentHash(buildEvidenceBytes),
+      },
+      blend: {
+        path: portable(blendAbsolute),
+        sha256: sha(blendBytes),
+        contentHash: portableAssetContentHash(blendBytes),
+      },
+      glb: { path: portable(glbAbsolute), sha256: sha(glbBytes), contentHash: portableAssetContentHash(glbBytes) },
+    },
+    presentation: { minimumResolution: [1920, 1080], fixedTimeSeconds: 12, warmupFrames: 12 },
+    evidenceViews: [
+      {
+        id: "entry-circulation",
+        role: "entry threshold, door-sweep clearance, and unobstructed main circulation",
+        position: [-0.15, 1.6, -1.55],
+        target: [-0.72, 0.72, -3.58],
+        fovDeg: 64,
+        near: 0.03,
+        far: 100,
+      },
+      {
+        id: "dining-three-quarter",
+        role: "table and four-chair spacing, facing, occupancy, and material cohesion",
+        position: [-1.05, 1.58, -2.5],
+        target: [-3, 0.68, -0.8],
+        fovDeg: 58,
+        near: 0.03,
+        far: 100,
+      },
+      {
+        id: "hearth-seating",
+        role: "approved settle placement, two-person use, hearth clearance, and architectural relationship",
+        position: [-1.65, 1.65, 0.35],
+        target: [2.75, 0.82, 0.9],
+        fovDeg: 64,
+        near: 0.03,
+        far: 100,
+      },
+      {
+        id: "service-storage",
+        role: "service rack frontage, approach, floor support, and passage clearance",
+        position: [1.45, 1.52, -4.12],
+        target: [3.65, 0.9, -4.12],
+        fovDeg: 60,
+        near: 0.03,
+        far: 100,
+      },
+      {
+        id: "overall-room",
+        role: "whole-room furnishing hierarchy, circulation, scale, and absence of proxy or legacy furniture",
+        position: [-0.45, 2.3, -2.9],
+        target: [0, 0.82, 0.25],
+        fovDeg: 80,
+        near: 0.03,
+        far: 100,
+      },
+    ],
+  });
+  if (write) {
+    await mkdir(dirname(outputAbsolute), { recursive: true });
+    await writeFile(outputAbsolute, `${JSON.stringify(authority, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+  }
+  return Object.freeze({ authority, outputPath: outputAbsolute });
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const args = process.argv.slice(2),
+    at = (flag) => {
+      const index = args.indexOf(flag);
+      if (index < 0 || !args[index + 1])
+        throw new Error(
+          "usage: bun tools/architecture/build-composition-review-authority.mjs --manifest <v2.json> --functional-evidence <pass.json> --build-evidence <cpu-build.json> --out <json>",
+        );
+      return args[index + 1];
+    };
+  const result = await buildCompositionReviewAuthority({
+    manifestPath: at("--manifest"),
+    functionalEvidencePath: at("--functional-evidence"),
+    buildEvidencePath: at("--build-evidence"),
+    outputPath: at("--out"),
+  });
+  console.log(
+    JSON.stringify(
+      {
+        schema: result.authority.schema,
+        manifestId: result.authority.manifest.id,
+        views: result.authority.evidenceViews.map((view) => view.id),
+        output: portable(result.outputPath),
+      },
+      null,
+      2,
+    ),
+  );
+}

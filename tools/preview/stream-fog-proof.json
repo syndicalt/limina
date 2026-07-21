@@ -1,0 +1,9 @@
+{
+  "_comment": "Map Phase 3.4 visual proof: fog/distance treatment for a map-streamed world. SAME world as stream-proof.json/-b.json (world.setTerrainSource(map), no generateRegion — every visible tile is CLIENT-streamed around the live camera), camera low over the OPEN OCEAN (mirrors stream-proof-b.json's x=420 open-water point, pushed further out) looking across the streamed patch toward its edge. The world.streamFollow command carries NO valid regionId (this world never calls world.generateRegion) so the skill call itself is an isolated authoring failure — it is here ONLY so runLive's client-stream radius picker (browser-entry.ts) reads radius:8 (the max) off the raw command, widening the streamed patch as far as today's system allows. Expect: the sea floor fades toward the (sky-matched) fog colour as it nears the patch edge, dissolving into the background rather than cutting hard from terrain-colour to sky-colour.",
+  "commands": [
+    { "kind": "physics", "op": "op_physics_create_world", "args": [-9.81] },
+    { "kind": "skill", "tool": "world.setTerrainSource", "input": { "kind": "map", "mapAssetId": "maps/primary.worldmap.json" } },
+    { "kind": "skill", "tool": "world.streamFollow", "input": { "regionId": "no-such-region", "anchor": [900, -5, 50], "radius": 8 } }
+  ],
+  "camera": { "center": [900, -5, 50], "radius": 140, "height": 4, "autoSpin": 0, "far": 1500 }
+}

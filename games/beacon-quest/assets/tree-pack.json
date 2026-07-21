@@ -1,0 +1,11 @@
+{
+  "spruce": [
+    { "id": "pine.glb" }
+  ],
+  "pine": [
+    { "id": "pine.glb" }
+  ],
+  "birch": [
+    { "id": "broadleaf.glb" }
+  ]
+}

@@ -13,7 +13,19 @@ milliseconds, not survive to a render you have to spot.
 
 ## The substrate (build this BEFORE more geometry)
 
-Four pieces, in dependency order:
+Five pieces, in dependency order:
+
+### 0. Synthesize the building program *(design authority)*
+
+The agent translates the prompt into a coordinate-free semantic program: rooms and uses, adjacency,
+storeys, circulation, daylight, site relationship, roof intent, interaction requirements, and budgets.
+A deterministic typology rulebook enumerates and scores several valid architectural candidates. References
+are optional, targeted evidence for unfamiliar construction or style decisions; they are never the source
+of exact geometry and downloaded examples are never imported automatically.
+
+The selected `BuildingProgram` is the sole semantic authority upstream. A generated `ArchitectureSpec` is
+the sole geometric authority downstream. The synthesis manifest binds the transition without creating a
+third editable source of truth.
 
 ### 1. Declarative building/asset RECIPE + a tested assembler  *(author altitude)*
 Stop emitting boxes with inline trig. The agent emits a **recipe** — declarative parts:
@@ -41,19 +53,36 @@ ONE assembled building from canonical angles (3/4 hero + front + a turntable fra
 
 ### 4. The modeling LOOP  *(on top of 1-3 — mirrors `eyes/self_correct.ts`)*
 ```
-recipe ──► assemble ──► [STRUCTURAL GATE] ─fail→ fix recipe/assembler (no render, instant)
+prompt ──► BuildingProgram ──► bounded candidate synthesis
+                                      │
+                                      v
+selected recipe ─► assemble ─► [STRUCTURAL GATE] ─fail→ reject/repair program or rulebook
                               │ pass
                               ▼
                     headless render (canonical angles)
                               ▼
-              critique vs the card's reference image  (silhouette / proportions /
-              features present / material read → structured deltas)
+              critique vs locked measurable cues + visual floor
+              (silhouette / proportions / construction / junctions → structured deltas)
                               ▼
-                    refine recipe ──► (loop until it reads like the ref)
+                    refine program/rulebook ──► (loop until cues close)
                               ▼
-              card status: verified · recipe saved (deterministic, replayable)
+              engine evidence + exact HITL decision (deterministic, replayable)
 ```
 The structural gate runs EVERY iteration (cheap); the render+critique runs when structure is sound.
+
+### Regular and hero profiles
+
+The loop has two acceptance profiles over the same recipe/Blender/export/runtime foundation:
+
+- **Regular assets** converge against reusable archetypes, standardized budgets, canonical views, and
+  fleet-level QC. Optimize for throughput, modularity, reuse, and predictable residency.
+- **Hero assets** add an asset-specific visual thesis, narrative construction, site/approach contract,
+  bespoke interactions and states, custom silhouette-preserving LOD review, expanded engine views, and
+  mandatory exact-artifact human approval. Optimize for landmark identity and authored depth.
+
+The hero lane does not permit raw geometry, custom budgets, or visual ambition to bypass the structural
+gate. It specializes the brief and review authority while retaining the same compiler and release funnel.
+See [`hero-asset-pipeline.md`](./hero-asset-pipeline.md).
 
 ## What this reuses (little is new)
 
@@ -92,11 +121,10 @@ way).
   treatments, opening shapes) — which is an *extensible registry*, not a fixed list. Think HTML vs.
   CSS: the recipe is the structural grammar; art direction is the styling. A sci-fi outpost and a
   medieval cottage are *different vocabulary + materials in the same recipe format*. Two guard-rails
-  keep it from ever becoming a ceiling: (a) roof/wall/opening **types are a registry** new styles
-  extend; (b) a recipe part may carry **raw custom geometry** as an escape hatch, so anything the
-  vocabulary can't yet express is still buildable. The modeling LOOP is itself style-agnostic — it
-  converges toward whatever **reference** you give it; the reference defines the style, the recipe +
-  loop just hit it.
+  keep it from ever becoming a ceiling: roof/wall/opening **types are a registry** new styles extend.
+  Production buildings do not admit raw custom geometry as an escape hatch: a missing architectural
+  concept becomes a named compiler primitive/contract with invariants and tests. References inform
+  source-neutral measurable cues; they never replace program, compiler, engine, or HITL authority.
 - **Critique = me-in-the-loop** (view render-vs-reference each iteration). Works today; a vision model
   is a later drop-in, not a prerequisite.
 - **Proof scope = cottage first**, lock the machine, then generalize to longhall / watchtower.

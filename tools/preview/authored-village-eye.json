@@ -1,0 +1,175 @@
+{
+  "commands": [
+    {
+      "kind": "physics",
+      "op": "op_physics_create_world",
+      "args": [
+        -9.81
+      ]
+    },
+    {
+      "kind": "skill",
+      "tool": "terrain.create",
+      "input": {
+        "size": 120,
+        "resolution": 128,
+        "color": 5926970,
+        "generate": {
+          "seed": 6,
+          "amplitude": 16,
+          "seaCoverage": 0.2,
+          "erosion": {
+            "rain": 1.5,
+            "thermal": 6
+          }
+        }
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "world.addWater",
+      "input": {
+        "size": 400,
+        "color": 2841970
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "vegetation.scatter",
+      "input": {
+        "species": [
+          "spruce",
+          "pine",
+          "birch"
+        ],
+        "seed": 6,
+        "density": 30,
+        "elevationMin": 4,
+        "elevationMax": 13,
+        "slopeMax": 0.7,
+        "coverage": 0.62,
+        "cluster": 0.5,
+        "sizeRange": [
+          0.45,
+          0.8
+        ]
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "vegetation.grassField",
+      "input": {
+        "climate": "summer",
+        "seed": 6,
+        "spacing": 0.25,
+        "tileSize": 24,
+        "elevationMin": 4,
+        "elevationMax": 15,
+        "slopeMax": 0.6,
+        "sizeRange": [
+          0.75,
+          1.25
+        ]
+      }
+    },
+    {
+      "kind": "skill",
+      "tool": "village.build",
+      "input": {
+        "direction": {
+          "setting": "medieval",
+          "artStyle": "stylized-realism",
+          "palette": {
+            "stone": "#9b9890",
+            "timber": "#5c4632",
+            "plaster": "#e6ddc8",
+            "thatch": "#b39a5e",
+            "slate": "#474d54",
+            "terracotta": "#9c5a34",
+            "trim": "#6f675e"
+          },
+          "mood": "weathered, lived-in"
+        },
+        "steering": {
+          "buildings": [
+            {
+              "role": "keep",
+              "style": "nordic castle",
+              "assetId": "library/keep.glb",
+              "count": 1
+            },
+            {
+              "role": "church",
+              "style": "romanesque",
+              "assetId": "library/church.glb",
+              "count": 1
+            },
+            {
+              "role": "cottage",
+              "style": "wattle-and-daub",
+              "assetId": "library/cottage.glb",
+              "count": 6
+            },
+            {
+              "role": "barn",
+              "style": "timber",
+              "assetId": "library/barn.glb",
+              "count": 1
+            }
+          ],
+          "layout": {
+            "focal": "keep on the high knoll",
+            "density": "loose"
+          }
+        },
+        "seed": 6
+      }
+    }
+  ],
+  "renderBaseline": {
+    "exposure": 1.05,
+    "sun": {
+      "color": 16770744,
+      "intensity": 4.6,
+      "direction": [
+        -52,
+        34,
+        22
+      ]
+    },
+    "hemisphere": {
+      "skyColor": 12374271,
+      "groundColor": 4872752,
+      "intensity": 1.8
+    },
+    "ambientIntensity": 0.66,
+    "ambientColor": 7036501,
+    "sky": {
+      "top": 7314377,
+      "horizon": 15520674,
+      "bottom": 5916728
+    },
+    "environmentIntensity": 1.4,
+    "atmosphere": {
+      "enabled": true,
+      "color": 14732448,
+      "density": 0.0021
+    },
+    "ground": {
+      "enabled": false,
+      "size": 240
+    },
+    "camera": {
+      "far": 600
+    }
+  },
+  "camera": {
+    "center": [
+      0,
+      9,
+      0
+    ],
+    "radius": 72,
+    "height": 3
+  }
+}

@@ -31,6 +31,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from shim import (  # noqa: E402
     DEFAULT_NATIVE_M_PER_PX,
     Shim,
+    AUTH_HEADER,
+    bounded_int,
+    require_auth_header,
     tile_to_box,
     translate_terrain,
 )
@@ -150,6 +153,42 @@ def test_tile_to_box_mapping():
         ground = px * (native / scale)
         ground0 = ground0 or ground
         assert abs(ground - ground0) < 1e-6, f"ground metres drift at lod {lod}: {ground} != {ground0}"
+
+
+def test_request_bounds_reject_bignum_dos_inputs():
+    shim = make_shim()
+    try:
+        shim.handle_tile({"seed": 1234, "tx": 0, "tz": 0, "lod": 10**9, "tile": 8})
+        raise AssertionError("huge lod should have been rejected")
+    except ValueError as e:
+        assert "lod" in str(e) and "out of range" in str(e)
+
+    try:
+        shim.handle_tile({"seed": 1234, "tx": 0, "tz": 0, "lod": 0, "tile": 10**9})
+        raise AssertionError("huge tile should have been rejected")
+    except ValueError as e:
+        assert "tile" in str(e) and "out of range" in str(e)
+
+    try:
+        bounded_int({"tx": "not-int"}, "tx", -10, 10)
+        raise AssertionError("non-integer tx should have been rejected")
+    except ValueError as e:
+        assert "integer" in str(e)
+
+
+def test_shared_secret_header_gate():
+    require_auth_header({}, None)
+    require_auth_header({AUTH_HEADER: "s3cret"}, "s3cret")
+    try:
+        require_auth_header({}, "s3cret")
+        raise AssertionError("missing token should have been rejected")
+    except PermissionError:
+        pass
+    try:
+        require_auth_header({AUTH_HEADER: "wrong"}, "s3cret")
+        raise AssertionError("wrong token should have been rejected")
+    except PermissionError:
+        pass
 
 
 def test_envelope_byte_exact():

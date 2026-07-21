@@ -1,0 +1,8 @@
+{
+  "_comment": "Map Phase 3.3 visual proof (shot A): world.setTerrainSource(map) with NO generateRegion — every visible tile is CLIENT-streamed around the live camera (runLive view streaming). Camera over the primary island. Pair with stream-proof-b.json (same world, camera ~400 m east) to see the window follow the camera.",
+  "commands": [
+    { "kind": "physics", "op": "op_physics_create_world", "args": [-9.81] },
+    { "kind": "skill", "tool": "world.setTerrainSource", "input": { "kind": "map", "mapAssetId": "maps/primary.worldmap.json" } }
+  ],
+  "camera": { "center": [26, 2, -20], "radius": 34, "height": 26, "autoSpin": 0, "far": 700 }
+}

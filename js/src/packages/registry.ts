@@ -39,6 +39,7 @@ export interface InstalledPackage {
   manifest: PackageManifest;
   /** sha256 of the entry source — the package's content-addressed provenance. */
   contentHash: string;
+  /** Deterministic logical install stamp; never wall-clock-derived. */
   installedAt: string;
 }
 
@@ -106,7 +107,8 @@ export class PackageRegistry {
     const manifest = parsed.manifest;
     const ref = packageRef(manifest);
     const contentHash = "sha256:" + ops.op_sha256(manifest.entry);
-    this.installed.set(ref, { ref, manifest, contentHash, installedAt: new Date().toISOString() });
+    const installedAt = `content:${ref}:${contentHash}`;
+    this.installed.set(ref, { ref, manifest, contentHash, installedAt });
     this.tracer.emit({
       type: "package.installed",
       actorId: manifest.name,

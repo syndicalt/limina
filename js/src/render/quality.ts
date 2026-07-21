@@ -1,0 +1,232 @@
+export type RenderQualityTier = "performance" | "balanced" | "cinematic";
+
+export interface RenderPostQuality {
+  enabled: boolean;
+  aoSamples: number;
+  aoResolutionScale: number;
+  bloom: boolean;
+}
+
+export type WaterfallRenderExtras = "none" | "foam" | "foam-mist";
+export type WaterSceneOptics = "none" | "refraction" | "refraction-reflection";
+
+export interface WaterRenderQuality {
+  oceanSegments: number;
+  waveCount: number;
+  depthRasterSize: number;
+  depthTextureBudgetPixels: number;
+  mountsPerFrame: number;
+  maxResidentFragments: number;
+  waterfallExtras: WaterfallRenderExtras;
+  sceneOptics: WaterSceneOptics;
+}
+
+export interface RenderQualityProfile {
+  tier: RenderQualityTier;
+  resolutionScale: number;
+  maxPixelRatio: number;
+  pixelRatio: number;
+  shadowMapSize: number;
+  shadowHalfExtent: number;
+  post: Readonly<RenderPostQuality>;
+  water: Readonly<WaterRenderQuality>;
+  telemetryIntervalFrames: number;
+}
+
+export interface RenderQualityOverride {
+  resolutionScale?: number;
+  maxPixelRatio?: number;
+  shadowMapSize?: number;
+  shadowHalfExtent?: number;
+  post?: Partial<RenderPostQuality>;
+  water?: Partial<WaterRenderQuality>;
+  telemetryIntervalFrames?: number;
+}
+
+interface TierDefaults extends Omit<RenderQualityProfile, "tier" | "pixelRatio"> {}
+
+const QUALITY_TIERS = new Set<RenderQualityTier>(["performance", "balanced", "cinematic"]);
+const OVERRIDE_KEYS = new Set(["resolutionScale", "maxPixelRatio", "shadowMapSize", "shadowHalfExtent", "post", "water", "telemetryIntervalFrames"]);
+const POST_KEYS = new Set(["enabled", "aoSamples", "aoResolutionScale", "bloom"]);
+const WATER_KEYS = new Set(["oceanSegments", "waveCount", "depthRasterSize", "depthTextureBudgetPixels", "mountsPerFrame", "maxResidentFragments", "waterfallExtras", "sceneOptics"]);
+
+const DEFAULTS: Readonly<Record<RenderQualityTier, Readonly<TierDefaults>>> = Object.freeze({
+  performance: Object.freeze({
+    resolutionScale: 0.75,
+    maxPixelRatio: 1,
+    shadowMapSize: 1024,
+    shadowHalfExtent: 128,
+    post: Object.freeze({ enabled: false, aoSamples: 4, aoResolutionScale: 0.5, bloom: false }),
+    water: Object.freeze({ oceanSegments: 32, waveCount: 2, depthRasterSize: 64, depthTextureBudgetPixels: 1_048_576, mountsPerFrame: 1, maxResidentFragments: 128, waterfallExtras: "none", sceneOptics: "none" }),
+    telemetryIntervalFrames: 30,
+  }),
+  balanced: Object.freeze({
+    resolutionScale: 1,
+    maxPixelRatio: 1.5,
+    shadowMapSize: 2048,
+    shadowHalfExtent: 96,
+    post: Object.freeze({ enabled: true, aoSamples: 8, aoResolutionScale: 0.5, bloom: true }),
+    water: Object.freeze({ oceanSegments: 64, waveCount: 4, depthRasterSize: 128, depthTextureBudgetPixels: 4_194_304, mountsPerFrame: 2, maxResidentFragments: 256, waterfallExtras: "foam", sceneOptics: "refraction" }),
+    telemetryIntervalFrames: 30,
+  }),
+  cinematic: Object.freeze({
+    resolutionScale: 1.25,
+    maxPixelRatio: 2,
+    shadowMapSize: 4096,
+    shadowHalfExtent: 96,
+    post: Object.freeze({ enabled: true, aoSamples: 16, aoResolutionScale: 1, bloom: true }),
+    water: Object.freeze({ oceanSegments: 128, waveCount: 4, depthRasterSize: 256, depthTextureBudgetPixels: 16_777_216, mountsPerFrame: 4, maxResidentFragments: 512, waterfallExtras: "foam-mist", sceneOptics: "refraction-reflection" }),
+    telemetryIntervalFrames: 30,
+  }),
+});
+
+function plainObject(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || Array.isArray(value) || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) {
+    throw new TypeError(`${label} must be a plain object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function exactOptionalKeys(value: Record<string, unknown>, allowed: Set<string>, label: string): void {
+  if (Object.getOwnPropertySymbols(value).length > 0) throw new TypeError(`${label} has symbol fields`);
+  for (const key of Object.getOwnPropertyNames(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!allowed.has(key)) throw new TypeError(`${label}.${key} is unsupported`);
+    if (descriptor?.get !== undefined || descriptor?.set !== undefined || descriptor?.enumerable !== true) {
+      throw new TypeError(`${label}.${key} must be an enumerable data field`);
+    }
+  }
+}
+
+function finiteRange(value: unknown, minimum: number, maximum: number, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < minimum || value > maximum) {
+    throw new RangeError(`${label} must be finite and in [${minimum}, ${maximum}]`);
+  }
+  return value;
+}
+
+function integerRange(value: unknown, minimum: number, maximum: number, label: string): number {
+  const number = finiteRange(value, minimum, maximum, label);
+  if (!Number.isSafeInteger(number)) throw new RangeError(`${label} must be an integer`);
+  return number;
+}
+
+function boolean(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") throw new TypeError(`${label} must be boolean`);
+  return value;
+}
+
+function waterfallExtras(value: unknown): WaterfallRenderExtras {
+  if (value !== "none" && value !== "foam" && value !== "foam-mist") {
+    throw new TypeError("render quality water.waterfallExtras is unsupported");
+  }
+  return value;
+}
+
+function sceneOptics(value: unknown): WaterSceneOptics {
+  if (value !== "none" && value !== "refraction" && value !== "refraction-reflection") {
+    throw new TypeError("render quality water.sceneOptics is unsupported");
+  }
+  return value;
+}
+
+function powerOfTwo(value: unknown, minimum: number, maximum: number, label: string): number {
+  const number = integerRange(value, minimum, maximum, label);
+  if ((number & (number - 1)) !== 0) throw new RangeError(`${label} must be a power of two`);
+  return number;
+}
+
+export function isRenderQualityTier(value: unknown): value is RenderQualityTier {
+  return typeof value === "string" && QUALITY_TIERS.has(value as RenderQualityTier);
+}
+
+export function resolveRenderQuality(
+  tier: RenderQualityTier,
+  devicePixelRatio: number,
+  override?: RenderQualityOverride,
+): Readonly<RenderQualityProfile> {
+  if (!isRenderQualityTier(tier)) throw new TypeError("render quality tier is unsupported");
+  const dpr = finiteRange(devicePixelRatio, 0.25, 16, "devicePixelRatio");
+  const defaults = DEFAULTS[tier];
+  let source: Record<string, unknown> = {};
+  if (override !== undefined) {
+    source = plainObject(override, "render quality override");
+    exactOptionalKeys(source, OVERRIDE_KEYS, "render quality override");
+  }
+
+  const resolutionScale = source.resolutionScale === undefined
+    ? defaults.resolutionScale
+    : finiteRange(source.resolutionScale, 0.25, 2, "render quality resolutionScale");
+  const maxPixelRatio = source.maxPixelRatio === undefined
+    ? defaults.maxPixelRatio
+    : finiteRange(source.maxPixelRatio, 0.5, 4, "render quality maxPixelRatio");
+  const shadowMapSize = source.shadowMapSize === undefined
+    ? defaults.shadowMapSize
+    : powerOfTwo(source.shadowMapSize, 256, 8192, "render quality shadowMapSize");
+  const shadowHalfExtent = source.shadowHalfExtent === undefined
+    ? defaults.shadowHalfExtent
+    : finiteRange(source.shadowHalfExtent, 8, 2048, "render quality shadowHalfExtent");
+  const telemetryIntervalFrames = source.telemetryIntervalFrames === undefined
+    ? defaults.telemetryIntervalFrames
+    : integerRange(source.telemetryIntervalFrames, 1, 600, "render quality telemetryIntervalFrames");
+
+  let postSource: Record<string, unknown> = {};
+  if (source.post !== undefined) {
+    postSource = plainObject(source.post, "render quality post override");
+    exactOptionalKeys(postSource, POST_KEYS, "render quality post override");
+  }
+  const post = Object.freeze({
+    enabled: postSource.enabled === undefined ? defaults.post.enabled : boolean(postSource.enabled, "render quality post.enabled"),
+    aoSamples: postSource.aoSamples === undefined
+      ? defaults.post.aoSamples
+      : integerRange(postSource.aoSamples, 1, 32, "render quality post.aoSamples"),
+    aoResolutionScale: postSource.aoResolutionScale === undefined
+      ? defaults.post.aoResolutionScale
+      : finiteRange(postSource.aoResolutionScale, 0.25, 1, "render quality post.aoResolutionScale"),
+    bloom: postSource.bloom === undefined ? defaults.post.bloom : boolean(postSource.bloom, "render quality post.bloom"),
+  });
+  let waterSource: Record<string, unknown> = {};
+  if (source.water !== undefined) {
+    waterSource = plainObject(source.water, "render quality water override");
+    exactOptionalKeys(waterSource, WATER_KEYS, "render quality water override");
+  }
+  const water = Object.freeze({
+    oceanSegments: waterSource.oceanSegments === undefined
+      ? defaults.water.oceanSegments
+      : integerRange(waterSource.oceanSegments, 8, 256, "render quality water.oceanSegments"),
+    waveCount: waterSource.waveCount === undefined
+      ? defaults.water.waveCount
+      : integerRange(waterSource.waveCount, 0, 4, "render quality water.waveCount"),
+    depthRasterSize: waterSource.depthRasterSize === undefined
+      ? defaults.water.depthRasterSize
+      : powerOfTwo(waterSource.depthRasterSize, 32, 256, "render quality water.depthRasterSize"),
+    depthTextureBudgetPixels: waterSource.depthTextureBudgetPixels === undefined
+      ? defaults.water.depthTextureBudgetPixels
+      : powerOfTwo(waterSource.depthTextureBudgetPixels, 65_536, 67_108_864, "render quality water.depthTextureBudgetPixels"),
+    mountsPerFrame: waterSource.mountsPerFrame === undefined
+      ? defaults.water.mountsPerFrame
+      : integerRange(waterSource.mountsPerFrame, 1, 32, "render quality water.mountsPerFrame"),
+    maxResidentFragments: waterSource.maxResidentFragments === undefined
+      ? defaults.water.maxResidentFragments
+      : integerRange(waterSource.maxResidentFragments, 16, 4096, "render quality water.maxResidentFragments"),
+    waterfallExtras: waterSource.waterfallExtras === undefined
+      ? defaults.water.waterfallExtras
+      : waterfallExtras(waterSource.waterfallExtras),
+    sceneOptics: waterSource.sceneOptics === undefined
+      ? defaults.water.sceneOptics
+      : sceneOptics(waterSource.sceneOptics),
+  });
+  return Object.freeze({
+    tier,
+    resolutionScale,
+    maxPixelRatio,
+    pixelRatio: Math.min(dpr * resolutionScale, maxPixelRatio),
+    shadowMapSize,
+    shadowHalfExtent,
+    post,
+    water,
+    telemetryIntervalFrames,
+  });
+}
+
+export const DEFAULT_RENDER_QUALITY_PROFILES = DEFAULTS;

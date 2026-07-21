@@ -36,13 +36,70 @@ export interface LogVerifyResult {
 
 const VALID_KINDS = new Set(["seed", "physics", "skill", "meta"]);
 
-/** A stable, order-independent digest of a world's reconstructed entity state (count + each
- *  entity's id and rounded position). Replaying a bundle and digesting twice must yield the SAME
- *  string — that's the replay-equivalence the ship gate asserts before publishing a world. Rounded
- *  to 1e-4 so digest equality reflects determinism, not float-print noise. */
+/** True iff `commands` carry a UNIQUE, CONTIGUOUS 0..n-1 seq set (order-independent:
+ *  parseWorldLog sorts, but a duplicate, gap, or out-of-range seq still means a
+ *  command was lost, duplicated, or renumbered). The single contiguity rule reused
+ *  by both the ship-gate report (verifyWorldLog) and the replay guard
+ *  (assertReplayable), so the two never drift. */
+export function seqsAreContiguous(commands: readonly { seq: number }[]): boolean {
+  const n = commands.length;
+  const seen = new Uint8Array(n);
+  for (const c of commands) {
+    const seq = c.seq;
+    if (!Number.isInteger(seq) || seq < 0 || seq >= n || seen[seq] === 1) return false;
+    seen[seq] = 1;
+  }
+  return true;
+}
+
+/** Guard the REPLAY path: before replaying a command stream into a fresh engine,
+ *  assert it is well-formed -- its seqs form a unique contiguous 0..n-1 set (the
+ *  SAME rule verifyWorldLog gates on, reused via seqsAreContiguous), and the
+ *  deterministic seed is well-positioned: AT MOST ONE `seed` command, and when
+ *  present it MUST precede every randomness-consuming (physics/skill) command so
+ *  replay re-installs the PRNG BEFORE anything can draw from it. A seedless log is
+ *  valid (a session that drew no randomness never seeds), so seed absence is NOT
+ *  rejected. An EMPTY command stream is valid too -- it replays to an empty world.
+ *  Throws a clear Error on malformed input; well-formed recorder output always
+ *  passes. A pure, local structural check -- no network. */
+export function assertReplayable(commands: readonly WorldCommand[]): void {
+  if (commands.length === 0) return; // nothing to replay -> an empty world; not malformed
+  if (!seqsAreContiguous(commands)) {
+    throw new Error("world log: command seqs are not a unique contiguous 0..n-1 set (a command was duplicated, lost, or renumbered) -- refusing to replay a malformed log");
+  }
+  let seeds = 0;
+  let seedSeq = -1;
+  let firstRandomSeq = Infinity; // lowest seq of a randomness-consuming (physics/skill) command
+  for (const c of commands) {
+    if (c.kind === "seed") {
+      seeds++;
+      seedSeq = c.seq;
+    } else if (c.kind === "physics" || c.kind === "skill") {
+      if (c.seq < firstRandomSeq) firstRandomSeq = c.seq;
+    }
+  }
+  if (seeds > 1) {
+    throw new Error(`world log: ${seeds} seed commands present (expected at most one) -- refusing to replay an ambiguously-seeded log`);
+  }
+  if (seeds === 1 && seedSeq > firstRandomSeq) {
+    throw new Error("world log: a randomness-consuming command precedes the seed -- the PRNG must be installed before any command that could consume randomness; refusing to replay");
+  }
+}
+
+const digestF32 = new Float32Array(1);
+const digestU32 = new Uint32Array(digestF32.buffer);
+function float32BitsHex(value: number): string {
+  digestF32[0] = value;
+  return digestU32[0].toString(16).padStart(8, "0");
+}
+
+/** A stable, order-independent, bit-exact digest of reconstructed entity state.
+ * Positions are encoded as their Float32 bit patterns, matching the transform
+ * store and keyframe wire contract. Thus -0/+0 and adjacent finite f32 values
+ * cannot be hidden by decimal rounding. */
 export function worldStateDigest(world: WorldContext): string {
   const ents = querySpatialEntities(world, { sortBy: "entity" }).entities;
-  const rows = ents.map((e) => `${e.entity}:${e.position[0].toFixed(4)},${e.position[1].toFixed(4)},${e.position[2].toFixed(4)}`);
+  const rows = ents.map((e) => `${e.entity}:${float32BitsHex(e.position[0])},${float32BitsHex(e.position[1])},${float32BitsHex(e.position[2])}`);
   return `${ents.length}|${rows.join(";")}`;
 }
 
@@ -68,13 +125,9 @@ export function verifyWorldLog(jsonl: string): LogVerifyResult {
   const declared = typeof meta?.commands === "number" ? meta.commands : undefined;
   checks.countMatches = declared === undefined ? true : declared === commands.length;
 
-  // parseWorldLog returns commands SORTED by seq, so the seq SET must be exactly 0..n-1 — any
-  // duplicate, gap, or out-of-range seq means a command was lost, duplicated, or renumbered.
-  let contiguous = true;
-  for (let i = 0; i < commands.length; i++) {
-    if ((commands[i] as { seq: number }).seq !== i) { contiguous = false; break; }
-  }
-  checks.seqsContiguous = contiguous;
+  // The seq SET must be exactly 0..n-1 — any duplicate, gap, or out-of-range seq means a
+  // command was lost, duplicated, or renumbered (shared rule; see seqsAreContiguous).
+  checks.seqsContiguous = seqsAreContiguous(commands as { seq: number }[]);
 
   checks.kindsValid = commands.every((c) => VALID_KINDS.has((c as { kind: string }).kind));
 

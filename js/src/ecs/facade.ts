@@ -11,6 +11,7 @@
 // engine consumer, so they were removed rather than left as tested-but-unwired
 // dead code. The surviving surface is exactly what the engine uses today.
 
+import type { World } from "bitecs";
 import { Position, Rotation, Scale } from "./world.ts";
 
 /** Versioned write surface over the SoA transform components. The monotonic
@@ -18,6 +19,11 @@ import { Position, Rotation, Scale } from "./world.ts";
  *  grid lazily instead of every query. */
 export interface TransformStorage {
   readonly version: number;
+  /** Writes MUST also land in the module SoA (the sim-truth store every capture
+   *  and skill read path uses): a storage backed by something else (the sim
+   *  worker's SAB lanes) that skips the mirror leaves writers and readers on
+   *  different stores — the scene authoring adapter's after-state capture read
+   *  a stale SoA there and every commit replay diverged. */
   writePosition(eid: number, x: number, y: number, z: number): void;
   writeRotation(eid: number, x: number, y: number, z: number, w: number): void;
   writeScale(eid: number, x: number, y: number, z: number): void;
@@ -55,6 +61,6 @@ class SoaTransformStorage implements TransformStorage {
 
 /** `world` is accepted for call-site stability (the storage binds to the same
  *  bitECS world the caller owns); the SoA arrays are global, so it is not stored. */
-export function createTransformStorage(_world: unknown): TransformStorage {
+export function createTransformStorage(_world: World): TransformStorage {
   return new SoaTransformStorage();
 }

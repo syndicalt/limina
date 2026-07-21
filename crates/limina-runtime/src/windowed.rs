@@ -3,18 +3,20 @@
 //! Single thread owns the V8 isolate, the winit event pump, and surface present.
 //! Per frame the host: pumps winit (non-blocking) -> updates input -> runs the
 //! JS fixed-step callback N times at a fixed dt (accumulator) -> runs the JS
-//! frame (render) callback once -> drains the JS event loop (JS presents via
-//! `op_surface_present`). Physics/logic advance on wall-clock time, decoupled
-//! from render rate. `CloseRequested`/Escape exits and drains cleanly.
+//! frame (render) callback once -> advances one bounded JS event-loop turn ->
+//! yields to Tokio (JS presents via `op_surface_present`). Physics/logic advance
+//! on wall-clock time, decoupled from render rate. Setup and shutdown drain to
+//! quiescence; live frames never wait for unrelated host operations.
 
 use std::collections::HashSet;
 use std::rc::Rc;
+use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use deno_core::{resolve_path, v8, JsRuntime, PollEventLoopOptions, RuntimeOptions};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
+use winit::dpi::PhysicalSize;
 use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -27,6 +29,30 @@ use crate::module_loader::TypescriptModuleLoader;
 
 const FIXED_DT: f64 = 1.0 / 60.0;
 const MAX_STEPS_PER_FRAME: u32 = 5;
+// Some Vulkan present modes return immediately instead of pacing at vblank. A
+// small host-side ceiling prevents the manual pump loop from consuming a full
+// core in that mode while remaining above common high-refresh displays.
+const MIN_FRAME_INTERVAL: Duration = Duration::from_micros(4_167); // ~240 Hz
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct StepBudgetResult {
+    steps: u32,
+    dropped: f64,
+}
+
+fn apply_step_budget(accumulator: &mut f64, fixed_dt: f64, max_steps: u32) -> StepBudgetResult {
+    let mut steps = 0;
+    while *accumulator >= fixed_dt && steps < max_steps {
+        *accumulator -= fixed_dt;
+        steps += 1;
+    }
+    let mut dropped = 0.0;
+    if steps == max_steps && *accumulator > fixed_dt {
+        dropped = *accumulator - fixed_dt;
+        *accumulator = fixed_dt;
+    }
+    StepBudgetResult { steps, dropped }
+}
 
 #[derive(Default)]
 struct App {
@@ -35,6 +61,8 @@ struct App {
     keys: HashSet<KeyCode>,
     close: bool,
     fullscreen: bool,
+    width: u32,
+    height: u32,
     /// Mouse-look delta accumulated across winit events since the last frame's
     /// drain; only accumulated while the cursor is grabbed.
     look_dx: f32,
@@ -42,6 +70,10 @@ struct App {
     /// Cursor grabbed (pointer-locked + hidden) for free-fly look. Toggled by a
     /// left-click (grab) and Escape (release).
     grabbed: bool,
+    /// Window-creation failure captured in `resumed` (the winit handler cannot
+    /// return an error); drained by `run_windowed`, which surfaces it as the
+    /// startup error instead of a panic inside the event pump.
+    init_error: Option<String>,
 }
 
 impl App {
@@ -92,12 +124,17 @@ impl ApplicationHandler for App {
         if self.window.is_none() {
             let mut attrs = Window::default_attributes()
                 .with_title("limina")
-                .with_inner_size(LogicalSize::new(960.0, 640.0));
+                .with_inner_size(PhysicalSize::new(self.width, self.height));
             if self.fullscreen {
                 attrs = attrs.with_fullscreen(Some(Fullscreen::Borderless(None)));
             }
-            let window = event_loop.create_window(attrs).expect("create window");
-            self.window = Some(Rc::new(window));
+            match event_loop.create_window(attrs) {
+                Ok(window) => self.window = Some(Rc::new(window)),
+                Err(e) => {
+                    self.init_error = Some(format!("create window: {e}"));
+                    event_loop.exit();
+                }
+            }
         }
     }
 
@@ -111,11 +148,9 @@ impl ApplicationHandler for App {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
                 ..
-            } => {
+            } if !self.grabbed => {
                 // Click to capture the mouse for free-fly look (no-op if already grabbed).
-                if !self.grabbed {
-                    self.set_grab(true);
-                }
+                self.set_grab(true);
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
@@ -154,19 +189,55 @@ pub fn run_windowed(
     main_path: &str,
     max_frames: Option<u64>,
     fullscreen: bool,
+    width: u32,
+    height: u32,
 ) -> anyhow::Result<()> {
     let mut event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
         fullscreen,
+        width,
+        height,
         ..Default::default()
     };
 
     while app.window.is_none() {
-        event_loop.pump_app_events(Some(Duration::from_millis(16)), &mut app);
+        let status = event_loop.pump_app_events(Some(Duration::from_millis(16)), &mut app);
+        if let Some(err) = app.init_error.take() {
+            anyhow::bail!("windowed startup failed: {err}");
+        }
+        if matches!(status, PumpStatus::Exit(_)) || app.close {
+            anyhow::bail!("window closed before startup completed");
+        }
     }
-    let window = app.window.clone().unwrap();
-    let size = window.inner_size();
+    let window = match app.window.clone() {
+        Some(window) => window,
+        None => anyhow::bail!("windowed startup did not produce a window"),
+    };
+    // X11 can return a requested inner size as soon as create_window succeeds while the native
+    // surface is not presentable until the compositor's post-create ConfigureNotify is pumped.
+    // Setup modules such as the guarded fidelity capture render during module evaluation, before
+    // the normal host loop below gets a chance to drain that event. Settle one bounded initial
+    // configure boundary here and publish its compositor-confirmed physical size to WebGPU.
+    let mut configured_size = app.resized.take();
+    for _ in 0..2_000 {
+        let status = event_loop.pump_app_events(Some(Duration::from_millis(16)), &mut app);
+        if matches!(status, PumpStatus::Exit(_)) || app.close {
+            anyhow::bail!("window closed before its initial surface configuration completed");
+        }
+        if let Some(size) = app.resized.take() {
+            configured_size = Some(size);
+        }
+        if configured_size.is_some_and(|(configured_width, configured_height)| {
+            !fullscreen || (configured_width >= width && configured_height >= height)
+        }) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let (configured_width, configured_height) = configured_size
+        .ok_or_else(|| anyhow::anyhow!("window did not report an initial surface configuration"))?;
+    let size = PhysicalSize::new(configured_width.max(1), configured_height.max(1));
     let window_handle = window.window_handle()?.as_raw();
     let display_handle = window.display_handle()?.as_raw();
 
@@ -176,6 +247,16 @@ pub fn run_windowed(
     extensions.push(limina_sandbox::limina_sandbox::init());
     extensions.push(limina_ecs::limina_ecs::init());
     extensions.push(limina_audio::limina_audio::init());
+
+    // JsRuntime::new only registers the isolate in deno_core's global platform
+    // registry when an ambient tokio handle exists; without it, V8 background
+    // threads (async WebAssembly.compile completion) post foreground tasks into
+    // the void. Enter the tokio context BEFORE constructing the runtime.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let _tokio_context = rt.enter();
+
     let mut js_runtime = JsRuntime::new(RuntimeOptions {
         module_loader: Some(Rc::new(TypescriptModuleLoader::new())),
         extensions,
@@ -194,10 +275,6 @@ pub fn run_windowed(
 
     let main_module = resolve_path(main_path, &std::env::current_dir()?)?;
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-
     rt.block_on(async move {
         // Evaluate the setup module: device + surface + callback registration.
         let mod_id = js_runtime.load_main_es_module(&main_module).await?;
@@ -212,13 +289,14 @@ pub fn run_windowed(
         let mut steps: u64 = 0;
 
         loop {
+            let frame_started = Instant::now();
             let status = event_loop.pump_app_events(Some(Duration::ZERO), &mut app);
             if matches!(status, PumpStatus::Exit(_)) || app.close {
                 break;
             }
 
             if let Some((w, h)) = app.resized.take() {
-                invoke_callback(&mut js_runtime, Callback::Resize(w, h));
+                invoke_callback(&mut js_runtime, Callback::Resize(w, h))?;
             }
 
             // Refresh input axes for JS to read this frame.
@@ -236,23 +314,41 @@ pub fn run_windowed(
             let dt = (now - last).as_secs_f64().min(0.25);
             last = now;
             accumulator += dt;
-            let mut sub = 0;
-            while accumulator >= FIXED_DT && sub < MAX_STEPS_PER_FRAME {
-                invoke_callback(&mut js_runtime, Callback::Step(FIXED_DT));
-                accumulator -= FIXED_DT;
+            let budget = apply_step_budget(&mut accumulator, FIXED_DT, MAX_STEPS_PER_FRAME);
+            for _ in 0..budget.steps {
+                invoke_callback(&mut js_runtime, Callback::Step(FIXED_DT))?;
                 steps += 1;
-                sub += 1;
+            }
+            if budget.dropped > 0.0 {
+                eprintln!(
+                    "[limina] windowed loop dropped {:.3}ms of fixed-step debt after hitting {MAX_STEPS_PER_FRAME} steps/frame",
+                    budget.dropped * 1000.0,
+                );
             }
 
             // Render once with the leftover interpolation factor.
             let alpha = (accumulator / FIXED_DT) as f32;
-            invoke_callback(&mut js_runtime, Callback::Frame(alpha));
+            invoke_callback(&mut js_runtime, Callback::Frame(alpha))?;
 
+            // Advance host ops/promises without waiting for every pending operation to finish.
+            // Fully draining here serializes the real-time loop against GPU readbacks, streaming,
+            // and network I/O. The loop polls continuously, while setup and shutdown still drain.
             std::future::poll_fn(|cx| {
-                js_runtime.poll_event_loop(cx, PollEventLoopOptions::default())
+                Poll::Ready(match js_runtime.poll_event_loop(cx, PollEventLoopOptions::default()) {
+                    Poll::Ready(result) => result,
+                    Poll::Pending => Ok(()),
+                })
             })
-            .await
-            .ok();
+            .await?;
+            // `run_windowed` owns a current-thread Tokio runtime. The bounded Deno poll above is
+            // deliberately always ready, so yield explicitly to let Tokio drive GPU mappings,
+            // timers, sockets, and other host futures before the next frame starts.
+            tokio::task::yield_now().await;
+
+            let frame_elapsed = frame_started.elapsed();
+            if frame_elapsed < MIN_FRAME_INTERVAL {
+                std::thread::sleep(MIN_FRAME_INTERVAL - frame_elapsed);
+            }
 
             frames += 1;
             if max_frames.is_some_and(|max| frames >= max) {
@@ -263,8 +359,7 @@ pub fn run_windowed(
         // Clean exit: hide window, drain any in-flight async work, then drop.
         window.set_visible(false);
         std::future::poll_fn(|cx| js_runtime.poll_event_loop(cx, PollEventLoopOptions::default()))
-            .await
-            .ok();
+            .await?;
 
         let elapsed = start.elapsed().as_secs_f64();
         println!(
@@ -285,8 +380,8 @@ enum Callback {
 }
 
 /// Invoke a registered JS callback inside a `TryCatch` so a thrown error is
-/// surfaced (logged) rather than silently swallowed.
-fn invoke_callback(js_runtime: &mut JsRuntime, which: Callback) {
+/// returned as a fatal host error rather than silently swallowed.
+fn invoke_callback(js_runtime: &mut JsRuntime, which: Callback) -> anyhow::Result<()> {
     use limina_render::{FrameCallback, ResizeCallback, StepCallback};
 
     let cb = {
@@ -298,26 +393,68 @@ fn invoke_callback(js_runtime: &mut JsRuntime, which: Callback) {
             Callback::Resize(..) => op_state.try_borrow::<ResizeCallback>().map(|c| c.0.clone()),
         }
     };
-    let Some(cb) = cb else { return };
+    let Some(cb) = cb else { return Ok(()) };
 
     deno_core::scope!(scope, js_runtime);
     v8::tc_scope!(let tc, scope);
     let func = cb.open(tc);
     let recv: v8::Local<v8::Value> = v8::undefined(tc).into();
 
-    let args: Vec<v8::Local<v8::Value>> = match which {
-        Callback::Frame(alpha) => vec![v8::Number::new(tc, alpha as f64).into()],
-        Callback::Step(dt) => vec![v8::Number::new(tc, dt).into()],
-        Callback::Resize(w, h) => vec![
-            v8::Number::new(tc, w as f64).into(),
-            v8::Number::new(tc, h as f64).into(),
-        ],
+    let called = match which {
+        Callback::Frame(alpha) => {
+            let args = [v8::Number::new(tc, alpha as f64).into()];
+            func.call(tc, recv, &args)
+        }
+        Callback::Step(dt) => {
+            let args = [v8::Number::new(tc, dt).into()];
+            func.call(tc, recv, &args)
+        }
+        Callback::Resize(w, h) => {
+            let args = [
+                v8::Number::new(tc, w as f64).into(),
+                v8::Number::new(tc, h as f64).into(),
+            ];
+            func.call(tc, recv, &args)
+        }
     };
+    if called.is_none() {
+        let message = tc
+            .exception()
+            .map(|exception| exception.to_rust_string_lossy(tc))
+            .unwrap_or_else(|| {
+                "callback returned no value after an unknown V8 failure".to_string()
+            });
+        anyhow::bail!("windowed JavaScript callback failed: {message}");
+    }
+    Ok(())
+}
 
-    func.call(tc, recv, &args);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    if let Some(ex) = tc.exception() {
-        let msg = ex.to_rust_string_lossy(tc);
-        eprintln!("[limina] callback error: {msg}");
+    #[test]
+    fn step_budget_drops_excess_time_debt_after_stall() {
+        let mut accumulator = 0.25;
+        let applied = apply_step_budget(&mut accumulator, FIXED_DT, MAX_STEPS_PER_FRAME);
+        assert_eq!(applied.steps, MAX_STEPS_PER_FRAME);
+        assert!(
+            applied.dropped > 0.0,
+            "stall debt beyond the frame budget must be reported"
+        );
+        assert!(
+            accumulator <= FIXED_DT,
+            "leftover accumulator {} must not produce alpha > 1",
+            accumulator,
+        );
+    }
+
+    #[test]
+    fn step_budget_preserves_normal_remainder_without_dropping() {
+        let mut accumulator = FIXED_DT * 2.25;
+        let applied = apply_step_budget(&mut accumulator, FIXED_DT, MAX_STEPS_PER_FRAME);
+        assert_eq!(applied.steps, 2);
+        assert_eq!(applied.dropped, 0.0);
+        assert!((accumulator - FIXED_DT * 0.25).abs() < 1e-12);
     }
 }

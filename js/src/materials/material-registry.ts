@@ -1,5 +1,5 @@
 // Phase 2b — the IMPORTED texture-pack material registry. A named PBR material built from a
-// CC0 texture set (albedo + optional normal + roughness), registered under a NAME that
+// CC0 texture set (albedo + optional normal + roughness + ambient occlusion), registered under a NAME that
 // `scene.createEntity` / `three.setMaterial` accept exactly like a palette name — so an agent
 // can upgrade from procedural primitives to photoreal by importing a pack, with no code change.
 //
@@ -14,6 +14,8 @@
 
 import * as THREE from "../../build/three.bundle.mjs";
 import { triplanarMapLayer } from "./triplanar-noise.ts";
+import { parallaxOcclusionUv, sampleSurfaceTexture, type ParallaxOptions } from "./surface-sampling.ts";
+import { compilerContentHash } from "../world/compiler/canonical.mjs";
 
 // deno-lint-ignore no-explicit-any
 const T = (THREE as any).TSL;
@@ -24,6 +26,8 @@ export interface ImportedTextures {
   albedo: THREE.Texture | null;
   normal: THREE.Texture | null;
   roughness: THREE.Texture | null;
+  occlusion: THREE.Texture | null;
+  displacement: THREE.Texture | null;
 }
 
 /** How an imported material is projected + tuned. */
@@ -42,15 +46,26 @@ export interface ImportedMaterialSpec {
   metalness: number;
   /** Fallback roughness when no roughness map is supplied. */
   roughness: number;
+  /** AO contribution in [0,1]. */
+  occlusionStrength: number;
+  /** Shared two-translation stochastic sampling across every supplied map. */
+  antiTiling: boolean;
+  /** True bounded white-high POM. Undefined keeps the legacy graph untouched. */
+  parallax?: ParallaxOptions;
   /** Optional albedo tint (sRGB hex) multiplied over the map (UV mode: material.color). */
   color?: number;
 }
+
+/** Registry-owned decoded map type, named via ImportedTextures so disposal bookkeeping tracks the
+ * exact type the entries carry. */
+type OwnedTexture = NonNullable<ImportedTextures[keyof ImportedTextures]>;
 
 interface Entry {
   spec: ImportedMaterialSpec;
   textures: ImportedTextures;
   /** id → content hash for the pack's images (authored identity; pinned in the log). */
   hashes: Record<string, string>;
+  contentHash: string;
   build: () => THREE.MeshStandardNodeMaterial;
 }
 
@@ -80,10 +95,47 @@ export class MaterialRegistry {
     return { ...e.hashes };
   }
 
+  /** Canonical identity of the complete imported recipe (tuning plus every map content hash). */
+  contentHashOf(name: string): string {
+    const entry = this.map.get(name);
+    if (entry === undefined) throw new Error(`unknown imported material "${name}"`);
+    return entry.contentHash;
+  }
+
+  /** Read-only surface source for the shared biome material compiler. Textures remain registry-
+   * owned and must never be disposed by the consumer. */
+  surfaceOf(name: string): Readonly<{ spec: Readonly<ImportedMaterialSpec>; textures: Readonly<ImportedTextures>; hashes: Readonly<Record<string, string>>; contentHash: string }> {
+    const entry = this.map.get(name);
+    if (entry === undefined) throw new Error(`unknown imported material "${name}"`);
+    return Object.freeze({ spec: Object.freeze({ ...entry.spec }), textures: Object.freeze({ ...entry.textures }),
+      hashes: Object.freeze({ ...entry.hashes }), contentHash: entry.contentHash });
+  }
+
+  /** Entries may legitimately share decoded textures (one pack defined under several names), so a
+   * retiring entry's GPU resources are resolved against every surviving entry, never per-entry. */
+  private disposeRetiredTextures(retired: ImportedTextures, errors: unknown[]): void {
+    const survivors = new Set<OwnedTexture>();
+    for (const entry of this.map.values()) {
+      for (const texture of Object.values(entry.textures)) if (texture !== null) survivors.add(texture);
+    }
+    const disposed = new Set<OwnedTexture>();
+    for (const texture of Object.values(retired)) {
+      if (texture === null || survivors.has(texture) || disposed.has(texture)) continue;
+      disposed.add(texture);
+      try {
+        texture.dispose();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+  }
+
   /**
    * Register (or replace) an imported material recipe from already-DECODED textures. Builds the
    * per-material builder once (closing over the textures + spec); `build(name)` returns a fresh
-   * MeshStandardNodeMaterial each call so per-entity tweaks never alias.
+   * MeshStandardNodeMaterial each call so per-entity tweaks never alias. Replacing a name disposes
+   * the retired recipe's decoded textures unless another entry (including the replacement) still
+   * shares them — the registry owns their GPU lifetime (see surfaceOf).
    */
   define(name: string, spec: ImportedMaterialSpec, textures: ImportedTextures, hashes: Record<string, string>): void {
     const build = (): THREE.MeshStandardNodeMaterial => {
@@ -95,8 +147,9 @@ export class MaterialRegistry {
       if (spec.triplanar) {
         // Node-based triplanar projection of the imported maps (no UVs required).
         const layer = triplanarMapLayer(
-          textures.albedo, textures.normal, textures.roughness,
+          textures.albedo, textures.normal, textures.roughness, textures.occlusion, textures.displacement,
           spec.scale, spec.normalStrength, spec.sharpness,
+          { antiTiling: spec.antiTiling, parallax: spec.parallax },
         );
         if (layer.color !== undefined) {
           material.colorNode = spec.color !== undefined
@@ -105,15 +158,74 @@ export class MaterialRegistry {
         }
         if (layer.normal !== undefined) material.normalNode = T.transformNormalToView(layer.normal.normalize());
         if (layer.roughness !== undefined) material.roughnessNode = T.clamp(layer.roughness, 0, 1);
-      } else {
+        if (layer.occlusion !== undefined) {
+          material.aoNode = T.mix(T.float(1), T.clamp(layer.occlusion, 0, 1), T.float(spec.occlusionStrength));
+        }
+        if (spec.antiTiling || spec.parallax !== undefined) {
+          (material.userData as Record<string, unknown>).liminaSurfaceSampling = Object.freeze({
+            antiTiling: spec.antiTiling,
+            projection: "triplanar-upward-xz-pom",
+            parallax: spec.parallax === undefined ? null : Object.freeze({ ...spec.parallax, convention: "white-high", boundedLoop: true, explicitGradients: true }),
+            displacementTexture: textures.displacement,
+          });
+        }
+      } else if (!spec.antiTiling && spec.parallax === undefined) {
         // Classic UV-mapped slots — the proven glTF texture path (uses geometry UVs).
         if (textures.albedo !== null) material.map = textures.albedo;
         if (textures.normal !== null) material.normalMap = textures.normal;
         if (textures.roughness !== null) material.roughnessMap = textures.roughness;
+        if (textures.occlusion !== null) {
+          textures.occlusion.channel = 0;
+          material.aoMap = textures.occlusion;
+          material.aoMapIntensity = spec.occlusionStrength;
+        }
+      } else {
+        // Opt-in UV node path. All maps share the exact displaced/stochastic coordinate recipe;
+        // the legacy material slots above remain byte/graph-identical when both options are off.
+        const baseUv = T.uv();
+        const sampledUv = spec.parallax !== undefined && textures.displacement !== null
+          ? parallaxOcclusionUv(textures.displacement, baseUv, T.parallaxDirection, spec.parallax, spec.antiTiling)
+          : baseUv;
+        const sample = (texture: THREE.Texture) => sampleSurfaceTexture(texture, baseUv, sampledUv, spec.antiTiling);
+        if (textures.albedo !== null) {
+          const albedo = sample(textures.albedo).rgb;
+          material.colorNode = spec.color !== undefined ? albedo.mul(new THREE.Color(spec.color)) : albedo;
+        }
+        if (textures.normal !== null) {
+          material.normalNode = T.normalMap(sample(textures.normal).rgb, T.vec2(spec.normalStrength));
+        }
+        if (textures.roughness !== null) material.roughnessNode = T.clamp(sample(textures.roughness).r, 0, 1);
+        if (textures.occlusion !== null) {
+          material.aoNode = T.mix(T.float(1), T.clamp(sample(textures.occlusion).r, 0, 1), T.float(spec.occlusionStrength));
+        }
+        (material.userData as Record<string, unknown>).liminaSurfaceSampling = Object.freeze({
+          antiTiling: spec.antiTiling,
+          parallax: spec.parallax === undefined ? null : Object.freeze({ ...spec.parallax, convention: "white-high", boundedLoop: true, explicitGradients: true }),
+          displacedUv: sampledUv,
+          displacementTexture: textures.displacement,
+        });
       }
       return material;
     };
-    this.map.set(name, { spec, textures, hashes: { ...hashes }, build });
+    const pinnedHashes = { ...hashes };
+    const canonicalSpec = {
+      triplanar: spec.triplanar, scale: spec.scale, normalStrength: spec.normalStrength, sharpness: spec.sharpness,
+      metalness: spec.metalness, roughness: spec.roughness, occlusionStrength: spec.occlusionStrength,
+      antiTiling: spec.antiTiling,
+      ...(spec.parallax !== undefined ? { parallax: spec.parallax } : {}),
+      ...(spec.color !== undefined ? { color: spec.color } : {}),
+    };
+    // Hash before inserting so a canonicalization throw leaves the prior entry untouched.
+    const contentHash = compilerContentHash({ schema: "limina.imported-material-recipe/v1", name, spec: canonicalSpec, hashes: pinnedHashes });
+    const replaced = this.map.get(name);
+    this.map.set(name, { spec, textures, hashes: pinnedHashes, contentHash, build });
+    if (replaced !== undefined) {
+      const errors: unknown[] = [];
+      this.disposeRetiredTextures(replaced.textures, errors);
+      if (errors.length > 0) {
+        throw new AggregateError(errors, `imported material "${name}" replacement failed to dispose ${errors.length} retired texture(s)`);
+      }
+    }
   }
 
   /** Build a fresh material instance for a registered imported name (throws if unknown). */
@@ -121,5 +233,26 @@ export class MaterialRegistry {
     const e = this.map.get(name);
     if (e === undefined) throw new Error(`unknown imported material "${name}"`);
     return e.build();
+  }
+
+  /** Dispose every registry-owned decoded texture (each exactly once, however shared) and clear
+   * the registry. Session-teardown seam: materials built from these entries must already be torn
+   * down — built node graphs sample these textures. Entries are cleared before disposal so a
+   * throwing texture cannot be double-disposed by a retry. */
+  dispose(): void {
+    const owned = new Set<OwnedTexture>();
+    for (const entry of this.map.values()) {
+      for (const texture of Object.values(entry.textures)) if (texture !== null) owned.add(texture);
+    }
+    this.map.clear();
+    const errors: unknown[] = [];
+    for (const texture of owned) {
+      try {
+        texture.dispose();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length > 0) throw new AggregateError(errors, `imported-material registry disposal failed for ${errors.length} texture(s)`);
   }
 }

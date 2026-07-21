@@ -71,6 +71,17 @@ export const COTTAGE_WORKERS: readonly CottageWorkerSpec[] = [
   { provider: "decorator", bundle: ["scene.read", "scene.write"], task: "scatter palms + driftwood", maxToolCalls: 6 },
 ];
 
+/** The cottage coordinator may only delegate caps it actually holds. Keep the
+ *  global reviewer.coordinator profile observational, then grant this demo's
+ *  coordinator the exact union of its worker bundles at the scenario boundary. */
+export function cottageCoordinatorPermissions(): ReadonlySet<string> {
+  const grants = new Set(resolveProfile(COORDINATOR_PROFILE));
+  for (const worker of COTTAGE_WORKERS) {
+    for (const cap of worker.bundle) grants.add(cap);
+  }
+  return grants;
+}
+
 /** The three deterministic worker policies. Each is a ScriptedProvider so the whole
  *  build is reproducible + headless. A policy proposes its mutating edits on the
  *  first decision, then returns no tool calls so its bounded loop ends cleanly. */
@@ -211,6 +222,9 @@ export function registerCottageBuildSkill(registry: SkillRegistry, agents?: Agen
       })),
     }),
     handler: async (_input, ctx) => {
+      // Thread `ctx.chainId` so the WorldRecorder folds the nested delegate-worker
+      // invokes into THIS coordinator command (reproduced on replay), not records
+      // each as a separate top-level command (which would double-apply on replay).
       const base: InvokeBase = {
         agentId: ctx.agentId,
         sessionId: ctx.sessionId,
@@ -218,6 +232,8 @@ export function registerCottageBuildSkill(registry: SkillRegistry, agents?: Agen
         profile: COORDINATOR_PROFILE,
         tick: ctx.tick,
         world: ctx.world,
+        chainId: ctx.chainId,
+        chainToken: ctx.chainToken,
       };
       return await delegateCottageWorkers(registry, base, agents);
     },
@@ -272,7 +288,7 @@ export function setupCoordinatorCottage(sessionId = "ses_cottage"): CottageSetup
   const tracer = ctx.tracer;
   registerCottageBuildSkill(registry, agents);
 
-  const coordPerms = resolveProfile(COORDINATOR_PROFILE);
+  const coordPerms = cottageCoordinatorPermissions();
   const coordBase = (tick: number, causedBy?: string[]): InvokeBase => ({
     agentId: "agt_coord", sessionId, permissions: coordPerms, profile: COORDINATOR_PROFILE, tick, world, causedBy,
   });

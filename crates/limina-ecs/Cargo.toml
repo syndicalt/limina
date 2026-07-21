@@ -7,4 +7,5 @@ publish.workspace = true
 
 [dependencies]
 deno_core.workspace = true
+deno_error.workspace = true
 rayon = "1"

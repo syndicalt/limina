@@ -1,0 +1,7 @@
+{
+  "schema": "limina.asset-mechanical-evidence/1", "assetId": "polyhaven-boulder-01", "status": "candidate-mechanical-only",
+  "source": { "url": "https://polyhaven.com/a/boulder_01", "licenseSpdx": "CC0-1.0", "attribution": "boulder_01 by Poly Haven (CC0 1.0)" },
+  "models": [{ "level": 0, "path": "vegetation/boulder-01-lod0.glb", "sha256": "sha256:136c64c1aca6c03593d4c25d4ee08291a4360145326c885f1c3d0a5d852f1bbf", "boundsM": [1.272136, 1.00383, 1.830334], "vertexCount": 67042, "triangleCount": 66122, "meshCount": 1, "primitiveCount": 1, "materialCount": 1, "textureSlots": ["baseColor", "metallicRoughness", "normal"], "textureResolution": [1024, 1024] }],
+  "checks": { "glbReadable": true, "selfContained": true, "textureResolutionPreserved": true, "classMeshLimit": true, "classPrimitiveDrawLimit": true },
+  "lodChain": [], "lodStatus": "not-generated", "internalContactSheet": { "path": "qc/internal/polyhaven-ecosystem-candidates.png", "sha256": "sha256:3bf0695bf0a493f957e849d5468406f21ed7142ca57a527106bfd9573a337690" }, "humanVisualApproval": false, "releaseEligible": false
+}

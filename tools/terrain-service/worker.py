@@ -48,9 +48,32 @@ import time
 
 import numpy as np
 
+AUTH_HEADER = "X-Limina-Terrain-Token"
+
 
 def log(msg: str) -> None:
     print(f"[terrain-worker] {msg}", file=sys.stderr, flush=True)
+
+
+def is_loopback_host(host: str) -> bool:
+    return host in ("127.0.0.1", "localhost", "::1")
+
+
+def bounded_int(req: dict, key: str, lo: int, hi: int, default=None) -> int:
+    """Parse req[key] as an int and enforce [lo, hi]. Raises ValueError on a missing
+    required field / non-int / out-of-range value so the /tile handler can return a 4xx
+    instead of letting an unbounded tile/tx/tz drive a huge (tile*tile) allocation -> OOM."""
+    if key not in req:
+        if default is None:
+            raise ValueError(f"missing required field '{key}'")
+        return default
+    try:
+        v = int(req[key])
+    except (TypeError, ValueError):
+        raise ValueError(f"field '{key}' must be an integer (got {req[key]!r})")
+    if v < lo or v > hi:
+        raise ValueError(f"field '{key}' out of range [{lo}, {hi}] (got {v})")
+    return v
 
 
 class TileGenerator:
@@ -147,10 +170,18 @@ class TileGenerator:
         }
 
 
-def build_app(gen: TileGenerator):
+def build_app(gen: TileGenerator, auth_token: str | None = None):
     from flask import Flask, request, jsonify
 
     app = Flask(__name__)
+
+    @app.before_request
+    def require_auth():
+        if auth_token is None:
+            return None
+        if request.headers.get(AUTH_HEADER) != auth_token:
+            return jsonify({"error": "missing or invalid terrain service token"}), 401
+        return None
 
     @app.route("/health", methods=["GET", "POST"])
     def health():
@@ -158,13 +189,26 @@ def build_app(gen: TileGenerator):
 
     @app.route("/tile", methods=["POST"])
     def tile():
+        # Parse + BOUND the request first: reject junk / out-of-range coords with a 400 (client error)
+        # before they can drive an unbounded (tile*tile) allocation. Bounds are generous but sane.
         try:
             req = request.get_json(force=True, silent=False) or {}
-            seed = int(req["seed"]); tx = int(req["tx"]); tz = int(req["tz"])
-            t = int(req.get("tile", 256))
+            # Seed spans the full u32 domain (limina's canonical seed range; the
+            # recorder stores `seed >>> 0` and shim.py accepts full-range seeds).
+            # Seed is NOT an allocation driver (tile/tx/tz are) — this bound only
+            # rejects non-integers / negatives, not large valid worlds.
+            seed = bounded_int(req, "seed", 0, 2**32 - 1)
+            tx = bounded_int(req, "tx", -1_000_000, 1_000_000)
+            tz = bounded_int(req, "tz", -1_000_000, 1_000_000)
+            t = bounded_int(req, "tile", 1, 2048, default=256)
+            lod = bounded_int(req, "lod", 0, 32, default=0)
+        except Exception as e:  # malformed JSON or out-of-range coord -> client error, keep {error} envelope
+            log(f"ERROR: bad /tile request: {e}")
+            return jsonify({"error": str(e)}), 400
+        try:
             t0 = time.time()
             env = gen.generate(seed, tx, tz, t)
-            env["lod"] = int(req.get("lod", 0))
+            env["lod"] = lod
             log(f"tile (seed={seed} tx={tx} tz={tz}) in {(time.time() - t0) * 1000:.0f} ms")
             return jsonify(env)
         except Exception as e:  # the source surfaces {error} verbatim
@@ -181,7 +225,13 @@ def main():
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8917)
+    ap.add_argument("--auth-token", default=os.environ.get("LIMINA_TERRAIN_TOKEN"),
+                    help=f"shared secret required in {AUTH_HEADER}; required when binding outside loopback")
     args = ap.parse_args()
+
+    if not is_loopback_host(args.host) and not args.auth_token:
+        log(f"ERROR: refusing to bind {args.host} without --auth-token or LIMINA_TERRAIN_TOKEN")
+        sys.exit(2)
 
     if args.device == "cuda":
         import torch
@@ -191,7 +241,7 @@ def main():
     gen = TileGenerator(args.model, args.dtype, args.device)
     log(f"serving terrain tiles on http://{args.host}:{args.port}  "
         f"model={args.model} dtype={args.dtype} device={args.device}")
-    app = build_app(gen)
+    app = build_app(gen, args.auth_token)
     # threaded=False: one GPU, one model — serialize requests (the _lock also guards).
     app.run(host=args.host, port=args.port, threaded=False)
 

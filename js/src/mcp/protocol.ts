@@ -25,7 +25,10 @@ export type MCPErrorCode =
   | "invalid_input"
   | "forbidden"
   | "pending_approval"
+  | "contract_error"
   | "handler_error"
+  | "conflict"
+  | "resource_exhausted"
   | "capacity_exceeded";
 
 export interface MCPResponse {
@@ -76,8 +79,12 @@ export function mcpErrorToJsonRpc(code: MCPErrorCode): number {
       return -32001;
     case "pending_approval":
       return -32003;
+    case "conflict":
+      return -32009;
     case "capacity_exceeded":
+    case "resource_exhausted":
       return -32002;
+    case "contract_error":
     case "handler_error":
       return JSON_RPC_ERRORS.internalError;
   }

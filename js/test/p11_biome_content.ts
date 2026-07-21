@@ -24,8 +24,22 @@ import { terrainTypeHints, type RegionBounds } from "../src/terrain/terrain-type
 import {
   BIOME_CONTENT, BIOME_DESERT, biomeScatterConfigs, resolveLayer, resolveBeachConfig,
   surveyRegionRelief, scatterBiomeContent, defaultWaterLevel,
-  PINE_ASSET, BROADLEAF_ASSET, CACTUS_ASSET, BUSH_ASSET, GRASS_ASSET, ROCK_ASSET, PALM_ASSET,
+  EMPTY_BIOME_PACK, type BiomePack,
 } from "../src/terrain/biome-content.ts";
+
+// The engine ships NO biome pack (roles → assets is a PROJECT concern). This gate supplies a TEST
+// PACK binding each role to the SAME curated CC0 glb + embed radius the catalog hardcoded before
+// decoupling, so the resolved scatter is byte-identical to the pre-decoupling code. The graceful-
+// empty block below proves the inverse: with EMPTY_BIOME_PACK, unmapped roles scatter nothing.
+const TEST_PACK: BiomePack = {
+  conifer: { id: "pine.glb", embedRadius: 1.2 },
+  broadleaf: { id: "broadleaf.glb", embedRadius: 1.3 },
+  boulder: { id: "rock.glb", embedRadius: 0.5 },
+  bush: { id: "bush.glb" },
+  grass: { id: "grass.glb" },
+  cactus: { id: "cactus.glb" },
+  palm: { id: "palm.glb" },
+};
 import { scatterAssets, type AssetInstance, type ScatterConfig } from "../src/terrain/asset-scatter.ts";
 import { CLIMATE_BIOME, CLIMATE_CHANNELS, type TerrainTile } from "../src/terrain/types.ts";
 import { EntityTable, ops } from "../src/engine.ts";
@@ -88,7 +102,7 @@ const core = registerCoreSkills(registry);
 const world = makeHeadlessWorld();
 const base = { agentId: "agt_biome", sessionId: "ses_p11_biome", permissions: resolveProfile("builder.readWrite"), tick: 0, world };
 
-const NEW_ASSETS = [PINE_ASSET, BROADLEAF_ASSET, CACTUS_ASSET, BUSH_ASSET, GRASS_ASSET];
+const NEW_ASSETS = [TEST_PACK.conifer!.id, TEST_PACK.broadleaf!.id, TEST_PACK.cactus!.id, TEST_PACK.bush!.id, TEST_PACK.grass!.id];
 const placedHashes = new Map<string, string>();
 for (const id of NEW_ASSETS) {
   const r = ok(await registry.invoke("asset.place", { assetId: id, position: [0, 0, 0] }, base));
@@ -100,10 +114,10 @@ assert(new Set(placedHashes.values()).size === NEW_ASSETS.length, "two curated a
 
 // ── 2 + 3. MOUNTAINS: pine on lower slopes + rock higher; the tree line is falsifiable ─
 const mtn = regionTiles("mountains", BOUNDS);
-const mtnConfigs = biomeScatterConfigs("mountains", mtn.survey);
+const mtnConfigs = biomeScatterConfigs("mountains", TEST_PACK, mtn.survey);
 assert(mtnConfigs.length === BIOME_CONTENT.mountains.length, "mountains layer count mismatch");
 const pineCfg = mtnConfigs[0]; // layer 0 = pines, the elevation-gated one
-assert(pineCfg.assets.length === 1 && pineCfg.assets[0].id === PINE_ASSET, "mountains layer 0 is not the pine layer");
+assert(pineCfg.assets.length === 1 && pineCfg.assets[0].id === TEST_PACK.conifer!.id, "mountains layer 0 is not the pine layer");
 assert(pineCfg.elevationMax !== undefined, "mountains pine layer has no tree line (elevationMax unset)");
 const treeLine = pineCfg.elevationMax!;
 // Non-vacuous: the region genuinely rises ABOVE the tree line (bare peaks exist).
@@ -111,8 +125,8 @@ assert(mtn.survey.maxY > treeLine + 0.5, `tree line ${treeLine.toFixed(1)} is no
 
 const pines = scatterRegion(mtn.tiles, pineCfg);
 const rocks = scatterRegion(mtn.tiles, mtnConfigs[1]);
-assert(pines.length > 0 && pines.every((p) => p.assetId === PINE_ASSET), "mountains placed no pines");
-assert(rocks.length > 0 && rocks.every((p) => p.assetId === ROCK_ASSET), "mountains placed no boulders");
+assert(pines.length > 0 && pines.every((p) => p.assetId === TEST_PACK.conifer!.id), "mountains placed no pines");
+assert(rocks.length > 0 && rocks.every((p) => p.assetId === TEST_PACK.boulder!.id), "mountains placed no boulders");
 // The pine layer carries an embedRadius, which SINKS the recorded y into the slope — so a
 // pine's recorded y is NOT the surface y the tree-line gate compares against (a candidate
 // whose surface sits just above the line can sink to below it, and vice-versa near the line).
@@ -135,11 +149,11 @@ assert(sameInstances(pinesSeated, pinesSeatedLoose.filter((p) => p.y <= treeLine
 
 // ── 4. DESERT CACTI: biome-gated, falsifiably absent outside the desert biome ─────────
 const des = regionTiles("desert", BOUNDS);
-const desConfigs = biomeScatterConfigs("desert", des.survey);
+const desConfigs = biomeScatterConfigs("desert", TEST_PACK, des.survey);
 const cactusCfg = desConfigs[0];
-assert(cactusCfg.assets[0].id === CACTUS_ASSET && cactusCfg.biomes?.includes(BIOME_DESERT), "desert layer 0 is not the biome-gated cactus layer");
+assert(cactusCfg.assets[0].id === TEST_PACK.cactus!.id && cactusCfg.biomes?.includes(BIOME_DESERT), "desert layer 0 is not the biome-gated cactus layer");
 const desertCacti = scatterRegion(des.tiles, cactusCfg);
-assert(desertCacti.length > 0 && desertCacti.every((p) => p.assetId === CACTUS_ASSET), "desert placed no cacti");
+assert(desertCacti.length > 0 && desertCacti.every((p) => p.assetId === TEST_PACK.cactus!.id), "desert placed no cacti");
 // The SAME cactus config over a FOREST region (boreal/wet biome) → ZERO cacti.
 const forest = regionTiles("forest", BOUNDS);
 const cactiInForest = scatterRegion(forest.tiles, cactusCfg);
@@ -150,13 +164,13 @@ const cactiNoGate = scatterRegion(forest.tiles, { ...cactusCfg, biomes: undefine
 assert(cactiNoGate.length > 0, "removing the biome gate still placed nothing in the forest — the desert-only result was vacuous");
 
 // ── 2b. FOREST + PLAINS content is biome-appropriate ──────────────────────────────────
-const forestTrees = scatterRegion(forest.tiles, biomeScatterConfigs("forest", forest.survey)[0]);
-assert(countBy(forestTrees, BROADLEAF_ASSET) > 0 && countBy(forestTrees, PINE_ASSET) > 0, "forest did not place a broadleaf+pine mix");
-const forestBush = scatterRegion(forest.tiles, biomeScatterConfigs("forest", forest.survey)[1]);
-assert(forestBush.length > 0 && forestBush.every((p) => p.assetId === BUSH_ASSET), "forest placed no understorey bushes");
+const forestTrees = scatterRegion(forest.tiles, biomeScatterConfigs("forest", TEST_PACK, forest.survey)[0]);
+assert(countBy(forestTrees, TEST_PACK.broadleaf!.id) > 0 && countBy(forestTrees, TEST_PACK.conifer!.id) > 0, "forest did not place a broadleaf+pine mix");
+const forestBush = scatterRegion(forest.tiles, biomeScatterConfigs("forest", TEST_PACK, forest.survey)[1]);
+assert(forestBush.length > 0 && forestBush.every((p) => p.assetId === TEST_PACK.bush!.id), "forest placed no understorey bushes");
 const plains = regionTiles("plains", BOUNDS);
-const grass = scatterRegion(plains.tiles, biomeScatterConfigs("plains", plains.survey)[0]);
-assert(grass.length > 0 && grass.every((p) => p.assetId === GRASS_ASSET), "plains placed no grass");
+const grass = scatterRegion(plains.tiles, biomeScatterConfigs("plains", TEST_PACK, plains.survey)[0]);
+assert(grass.length > 0 && grass.every((p) => p.assetId === TEST_PACK.grass!.id), "plains placed no grass");
 
 // ── 5. ON-SURFACE (drop parity vs the heightfield collider) + DETERMINISTIC ────────────
 // The pine layer carries an embedRadius, which deliberately SINKS instances into a slope so
@@ -190,19 +204,40 @@ const skworld = makeHeadlessWorld();
 const skbase = { agentId: "agt_biome2", sessionId: "ses_p11_biome_skill", permissions: resolveProfile("builder.readWrite"), tick: 0, world: skworld };
 const gen = ok(await skreg.invoke("world.generateRegion", { seed: SEED, bounds: BOUNDS, lod: 0, type: "mountains" }, skbase));
 const regionId = gen.regionId as string;
-const content = await scatterBiomeContent({ registry: skreg, source: skcore.terrain.source, regionId, type: "mountains", bounds: BOUNDS, seed: SEED, base: skbase });
+const content = await scatterBiomeContent({ registry: skreg, source: skcore.terrain.source, regionId, type: "mountains", pack: TEST_PACK, bounds: BOUNDS, seed: SEED, base: skbase });
 assert(content.instances > 0 && content.layers.length === BIOME_CONTENT.mountains.length, "scatterBiomeContent placed nothing / wrong layer count");
 assert(content.layers.every((l) => l.mounted >= 1), "a biome-content layer mounted no InstancedMesh (render path inert)");
-assert(content.layers[0].assetHashes[PINE_ASSET] === skcore.assets.resolve(PINE_ASSET).hash, "scatterBiomeContent did not pin the pine hash");
+assert(content.mounted === content.layers.reduce((sum, layer) => sum + layer.mounted, 0),
+  "scatterBiomeContent whole-population mounted total does not equal its layer sum");
+assert(content.layers[0].assetHashes[TEST_PACK.conifer!.id] === skcore.assets.resolve(TEST_PACK.conifer!.id).hash, "scatterBiomeContent did not pin the pine hash");
 // The helper's resolved configs match the pure path (same survey → same gates).
 assert(content.configs[0].elevationMax !== undefined && Math.abs(content.configs[0].elevationMax! - treeLine) < 1e-9, "helper resolved a different tree line than the pure path");
 
-// ── 7. BEACH PARITY: the catalog reproduces beachScatterConfig bit-for-bit ─────────────
+// ── 6b. GRACEFUL DECOUPLING: an EMPTY pack scatters NOTHING (never throws) ─────────────
+// The engine names no content GLB — an absent/empty project pack must yield a valid, empty world,
+// not a broken one. Every forested layer's role is unmapped by EMPTY_BIOME_PACK, so:
+//   (a) biomeScatterConfigs drops all layers → []  (no asset.scatter is ever driven), and
+//   (b) scatterBiomeContent resolves cleanly with instances === 0 (no throw on the missing role).
+assert(biomeScatterConfigs("mountains", EMPTY_BIOME_PACK, mtn.survey).length === 0, "empty pack still produced mountain scatter configs (unmapped roles not dropped)");
+assert(biomeScatterConfigs("forest", EMPTY_BIOME_PACK, forest.survey).length === 0, "empty pack still produced forest scatter configs (unmapped roles not dropped)");
+let emptyThrew = false;
+let emptyContent: Awaited<ReturnType<typeof scatterBiomeContent>> | undefined;
+try {
+  emptyContent = await scatterBiomeContent({ registry: skreg, source: skcore.terrain.source, regionId, type: "mountains", pack: EMPTY_BIOME_PACK, bounds: BOUNDS, seed: SEED, base: skbase });
+} catch {
+  emptyThrew = true;
+}
+assert(!emptyThrew, "scatterBiomeContent THREW on an empty pack — an absent project pack must be graceful, not a broken world");
+assert(emptyContent !== undefined && emptyContent.instances === 0 && emptyContent.mounted === 0 && emptyContent.layers.length === 0, "empty pack scattered instances or mounted meshes (should produce nothing for unmapped roles)");
+
+// ── 7. BEACH PARITY: the catalog reproduces the beach recipe bit-for-bit under a pack ───
 const seaLevel = 3.19;
-const beach = resolveBeachConfig(seaLevel);
+const beach = resolveBeachConfig(seaLevel, TEST_PACK);
 const beachExpected: ScatterConfig = {
   seed: 21, density: 14, coverage: 0.05, cluster: 0.85, clusterFreq: 1 / 30,
-  assets: [{ id: PALM_ASSET, weight: 3 }, { id: ROCK_ASSET, weight: 2 }],
+  // palm carries no embed in TEST_PACK; boulder carries the pack's 0.5 (the embed moved from the
+  // hardcoded layer asset onto the role binding), so the resolved rock entry carries it here.
+  assets: [{ id: TEST_PACK.palm!.id, weight: 3 }, { id: TEST_PACK.boulder!.id, weight: 2, embedRadius: 0.5 }],
   slopeMax: 0.7, sizeRange: [1.1, 2.4], elevationMin: seaLevel,
 };
 // Deep canonicalization (sorted keys, recursive) so the comparison is byte-exact on every
@@ -219,10 +254,16 @@ assert(canon(beach) === canon(beachExpected),
 
 // Water types default a sensible sea level (low 40% floods); land types don't water-gate.
 const isl = regionTiles("islands", BOUNDS);
-assert(biomeScatterConfigs("islands", isl.survey)[0].elevationMin === defaultWaterLevel(isl.survey), "islands palm layer not water-gated to the default sea level");
-assert(biomeScatterConfigs("plains", plains.survey)[0].elevationMin === undefined, "plains layer should not be water-gated");
+assert(biomeScatterConfigs("islands", TEST_PACK, isl.survey)[0].elevationMin === defaultWaterLevel(isl.survey), "islands palm layer not water-gated to the default sea level");
+assert(biomeScatterConfigs("plains", TEST_PACK, plains.survey)[0].elevationMin === undefined, "plains layer should not be water-gated");
 // resolveLayer omits unset fields (so a no-gate layer stays a plain density scatter).
-assert(!("elevationMax" in resolveLayer({ seed: 1, assets: [{ id: GRASS_ASSET }] }, isl.survey)), "resolveLayer emitted an unset elevation gate");
+assert(!("elevationMax" in resolveLayer({ seed: 1, assets: [{ role: "grass" }] }, TEST_PACK, isl.survey)), "resolveLayer emitted an unset elevation gate");
+const lodConfig = resolveLayer(
+  { seed: 2, assets: [{ role: "conifer" }], cellSize: 32 },
+  { conifer: { id: "pine.glb", lods: [{ id: "pine-mid.glb", distance: 36, hysteresis: 0.15 }] } },
+  isl.survey,
+);
+assert(lodConfig.cellSize === 32 && lodConfig.assets[0]?.lods?.[0]?.id === "pine-mid.glb", "resolveLayer dropped population LOD metadata");
 
 ops.op_log(
   `p11_biome_content OK: 5 curated CC0 assets place as hashed gltf entities (pine/broadleaf/cactus/bush/grass, distinct hashes); ` +

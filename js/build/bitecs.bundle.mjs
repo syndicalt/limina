@@ -33,7 +33,7 @@ var K = (e, t) => {
   let n = pe(e, t), o = e.sparse[n];
   return o !== void 0 && o < e.aliveCount && e.dense[o] === t;
 };
-var u = Symbol.for("bitecs_internal");
+var u = /* @__PURE__ */ Symbol.for("bitecs_internal");
 var Ye = (e, t) => A(e || {}, u, { entityIndex: t || z(), entityMasks: [[]], entityComponents: /* @__PURE__ */ new Map(), bitflag: 1, componentMap: /* @__PURE__ */ new Map(), componentCount: 0, queries: /* @__PURE__ */ new Set(), queriesHashMap: /* @__PURE__ */ new Map(), notQueries: /* @__PURE__ */ new Set(), dirtyQueries: /* @__PURE__ */ new Set(), entitiesWithRelations: /* @__PURE__ */ new Set(), hierarchyData: /* @__PURE__ */ new Map(), hierarchyActiveRelations: /* @__PURE__ */ new Set(), hierarchyQueryCache: /* @__PURE__ */ new Map() });
 function Je(...e) {
   let t, n;
@@ -101,10 +101,10 @@ var P = () => {
     return s && typeof s == "object" ? { ...a, ...s } : a;
   }, {}) };
 };
-var k = Symbol.for("bitecs-relation");
-var T = Symbol.for("bitecs-pairTarget");
-var U = Symbol.for("bitecs-isPairComponent");
-var x = Symbol.for("bitecs-relationData");
+var k = /* @__PURE__ */ Symbol.for("bitecs-relation");
+var T = /* @__PURE__ */ Symbol.for("bitecs-pairTarget");
+var U = /* @__PURE__ */ Symbol.for("bitecs-isPairComponent");
+var x = /* @__PURE__ */ Symbol.for("bitecs-relationData");
 var Y = () => {
   let e = { pairsMap: /* @__PURE__ */ new Map(), initStore: void 0, exclusiveRelation: false, autoRemoveSubject: false, onTargetRemoved: void 0 }, t = (n) => {
     if (n === void 0) throw Error("Relation target is undefined");
@@ -148,13 +148,13 @@ function ot(...e) {
     return [t && ye(t), n && le, o && he, r && be(r)].filter(Boolean).reduce((i, s) => s(i), Y());
   } else return e.reduce((n, o) => o(n), Y());
 }
-var Re = Symbol.for("bitecs-wildcard");
+var Re = /* @__PURE__ */ Symbol.for("bitecs-wildcard");
 function rt() {
   let e = Y();
   return Object.defineProperty(e, Re, { value: true, enumerable: false, writable: false, configurable: false }), e;
 }
 function at() {
-  let e = Symbol.for("bitecs-global-wildcard");
+  let e = /* @__PURE__ */ Symbol.for("bitecs-global-wildcard");
   return globalThis[e] || (globalThis[e] = rt()), globalThis[e];
 }
 var y = at();
@@ -162,7 +162,7 @@ function st() {
   return Y();
 }
 function it() {
-  let e = Symbol.for("bitecs-global-isa");
+  let e = /* @__PURE__ */ Symbol.for("bitecs-global-isa");
   return globalThis[e] || (globalThis[e] = st()), globalThis[e];
 }
 var B = it();
@@ -317,8 +317,8 @@ function dt(e, t, n) {
 function mt(e, t) {
   return Z(e, t).maxDepth;
 }
-var v = Symbol.for("bitecs-opType");
-var D = Symbol.for("bitecs-opTerms");
+var v = /* @__PURE__ */ Symbol.for("bitecs-opType");
+var D = /* @__PURE__ */ Symbol.for("bitecs-opTerms");
 var se = (e) => (...t) => ({ [v]: e, [D]: t });
 var Ae = se("Or");
 var ke = se("And");
@@ -326,12 +326,12 @@ var He = se("Not");
 var yt = Ae;
 var lt = ke;
 var ht = He;
-var ae = Symbol.for("bitecs-hierarchyType");
-var $e = Symbol.for("bitecs-hierarchyRel");
-var qe = Symbol.for("bitecs-hierarchyDepth");
+var ae = /* @__PURE__ */ Symbol.for("bitecs-hierarchyType");
+var $e = /* @__PURE__ */ Symbol.for("bitecs-hierarchyRel");
+var qe = /* @__PURE__ */ Symbol.for("bitecs-hierarchyDepth");
 var je = (e, t) => ({ [ae]: "Hierarchy", [$e]: e, [qe]: t });
 var bt = je;
-var F = Symbol.for("bitecs-modifierType");
+var F = /* @__PURE__ */ Symbol.for("bitecs-modifierType");
 var Rt = { [F]: "buffer" };
 var Pe = { [F]: "nested" };
 var ie = Pe;

@@ -8,6 +8,7 @@ import {
   Position,
   renderSyncSystem,
   Rotation,
+  Scale,
   spawnRenderable,
 } from "../src/ecs/world.ts";
 
@@ -46,6 +47,26 @@ if (Math.abs(object.quaternion.y - h) > 1e-6 || Math.abs(object.quaternion.w - h
 Position.y[eid] = 999;
 if (object.position.y !== 42) {
   throw new Error(`object changed without renderSyncSystem: ${object.position.y}`);
+}
+
+const freeObject = new THREE.Object3D();
+const suppressedObject = new THREE.Object3D();
+const freeEid = spawnRenderable(world, freeObject, 0, 0, 0);
+const suppressedEid = spawnRenderable(world, suppressedObject, 0, 0, 0);
+Position.x[freeEid] = 10;
+Position.y[freeEid] = 11;
+Scale.x[freeEid] = 2;
+Position.x[suppressedEid] = 20;
+Position.y[suppressedEid] = 21;
+Scale.x[suppressedEid] = 3;
+suppressedObject.position.set(100, 101, 102);
+suppressedObject.scale.set(9, 9, 9);
+renderSyncSystem(world, new Set([suppressedEid]));
+if (freeObject.position.x !== 10 || freeObject.position.y !== 11 || freeObject.scale.x !== 2) {
+  throw new Error(`non-suppressed object did not sync: pos=${freeObject.position.x},${freeObject.position.y} scale=${freeObject.scale.x}`);
+}
+if (suppressedObject.position.x !== 100 || suppressedObject.position.y !== 101 || suppressedObject.scale.x !== 9) {
+  throw new Error(`suppressed object was overwritten: pos=${suppressedObject.position.x},${suppressedObject.position.y} scale=${suppressedObject.scale.x}`);
 }
 
 log(`P0.7 OK: render-sync drives the scene object from ECS SoA (eid ${eid})`);

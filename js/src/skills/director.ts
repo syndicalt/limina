@@ -141,6 +141,31 @@ export class DirectorManager {
       }
     }
   }
+
+  /** Deterministic capture of config + the tension state machine (snapshot participant, H2).
+   *  The machine is sim-affecting mid-run: its phase/tension decide future directives, so a
+   *  restore that dropped it would re-pace the world differently from the captured run. */
+  captureSnapshot(): DirectorManagerSnapshot {
+    return { cfg: { ...this.cfg }, running: this.running, phase: this.phase, tension: this.tension, phaseTicksLeft: this.phaseTicksLeft };
+  }
+
+  /** Wholesale replace config + state machine (participant restore). */
+  restoreSnapshot(snap: DirectorManagerSnapshot): void {
+    this.cfg = { ...snap.cfg };
+    this.running = snap.running;
+    this.phase = snap.phase;
+    this.tension = snap.tension;
+    this.phaseTicksLeft = snap.phaseTicksLeft;
+  }
+}
+
+/** The whole DirectorManager state as the snapshot participant carries it (H2). */
+export interface DirectorManagerSnapshot {
+  cfg: DirectorConfig;
+  running: boolean;
+  phase: DirectorPhase;
+  tension: number;
+  phaseTicksLeft: number;
 }
 
 const configInput = z.object({
@@ -206,6 +231,7 @@ export function registerDirectorSkills(registry: SkillRegistry): { directorManag
     description: "Read the director's current phase, tension, and ticks left in the phase. Pure read.",
     category: "agent",
     permissions: ["agent.read"],
+    effect: "read",
     input: z.object({}),
     output: z.object({
       running: z.boolean(),

@@ -1,0 +1,207 @@
+{
+  "schema": "limina.visual-design-contract/v1",
+  "id": "furniture/hearth-settle/v3",
+  "subjectKind": "furniture",
+  "intendedFunction": "A compact two-adult oak settle facing the main hall hearth, providing stable shared seating and a joined draught-screening back while fitting the exact approved I1 r3 placement, interaction, and floor-load closure.",
+  "prompt": "Author a cohesive, compact late-medieval oak hearth settle from an architectural seating section, not by scaling or trimming the oversized v2 asset. Ground the complete assembly at local Y zero inside the exact 1600 by 1300 by 700 mm I1 r3 envelope, with local negative Z as the canonical seated and approach-facing direction. Use four plumb grounded posts centered at X plus or minus 730 mm, a continuous 1280 to 1380 mm usable seat with a 460 mm top and 500 mm physical depth, a complete joined apron, side-rail, and low-stretcher frame, and two arms at 680 to 700 mm supported by dedicated front supports and the rear structure. Join a distinct upper back frame at a coherent four-degree rake, set four inset fielded oak panels within continuous rails and stiles, and finish it with a restrained simple crest. Use the leather settle reference only for compact joined massing, arm support, shared-seat function, and draught-screening behavior; do not copy its upholstery. Use exactly the approved oak-frame, oak-panel, and oak-endgrain material roles, with grain following each structural member and endgrain confined to real ends and restrained pegs. Omit a canopy, chest, false storage, loose cushions, and applied ornament that obscures construction. Every visible member must participate in an explicit joined load path, every interaction socket must bind the two real seat positions or the canonical front approach, and compound collision must follow the authored frame without becoming a whole-object box.",
+  "references": [
+    {
+      "id": "commons/oak-settle-17c",
+      "sourceUrl": "https://commons.wikimedia.org/wiki/File:Settle-seventeenth-century.jpg",
+      "creator": "Frederick S. Robinson",
+      "license": "Public domain in the United States; first published 1905",
+      "retrievedAt": "2026-07-15T03:19:22.538Z",
+      "localPath": "art-direction/reference-cache/commons/oak-settle-17c.jpg",
+      "sha256": "sha256:91a89c32a2bff28f9482a811f4a445b1ce67042a5dfc3a4e00a7758c040212a0",
+      "roles": ["silhouette", "construction", "joinery", "function"]
+    },
+    {
+      "id": "met/bench-chest-467989",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/467989",
+      "creator": "Unknown French maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-15T03:19:25.022Z",
+      "localPath": "art-direction/reference-cache/met/bench-chest-467989.jpg",
+      "sha256": "sha256:8c6fb76bc089c92cccf7171f8b3b75d5a2b5d27bf8e74856febfedecf87d74ee",
+      "roles": ["silhouette", "construction", "joinery", "material"]
+    },
+    {
+      "id": "met/high-backed-chair-471833",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/471833",
+      "creator": "Unknown French or South Netherlandish maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-15T03:19:26.612Z",
+      "localPath": "art-direction/reference-cache/met/high-backed-chair-471833.jpg",
+      "sha256": "sha256:28f8537c27fab21b858e1eed025012d622f0449e07a467492dc1856a722008de",
+      "roles": ["anti-cue", "silhouette"]
+    },
+    {
+      "id": "met/leather-settle-7390-primary",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/7390",
+      "creator": "Unknown Philadelphia maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-16T02:37:40.636Z",
+      "localPath": "art-direction/reference-cache/met/leather-settle-7390-primary.jpg",
+      "sha256": "sha256:a6f93292eefcc3cccde189e5a15d93dabf84aa4c5941d479ed819b8540808328",
+      "roles": ["silhouette", "construction", "function"]
+    },
+    {
+      "id": "met/leather-settle-7390-alternate",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/7390",
+      "creator": "Unknown Philadelphia maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-16T02:37:40.799Z",
+      "localPath": "art-direction/reference-cache/met/leather-settle-7390-alternate.jpg",
+      "sha256": "sha256:1f1c9a5b93aa2806625a33177e403f1fa8fdfad7cb67b66d4a63c58470174334",
+      "roles": ["construction", "joinery", "function"]
+    }
+  ],
+  "cues": [
+    {
+      "id": "locked-i1-r3-envelope-and-axis",
+      "statement": "The settle is authored at human scale inside the exact approved I1 r3 envelope, grounded at local Y zero, and faces local negative Z without post-export rotation, translation, or scaling fixes.",
+      "sourceIds": ["commons/oak-settle-17c", "met/leather-settle-7390-primary"],
+      "measurements": [
+        {"name": "overall-width", "unit": "m", "target": 1.6, "maximum": 1.6},
+        {"name": "overall-height", "unit": "m", "target": 1.3, "maximum": 1.3},
+        {"name": "overall-depth", "unit": "m", "target": 0.7, "maximum": 0.7},
+        {"name": "floor-contact-y", "unit": "m", "target": 0},
+        {"name": "canonical-forward-negative-z", "unit": "boolean", "target": 1}
+      ],
+      "verification": "compiler"
+    },
+    {
+      "id": "dimensioned-continuous-two-adult-seat",
+      "statement": "A single continuous seat supports two distinct adult occupancy positions without lateral seams, shelf proportions, or a third implied bay.",
+      "sourceIds": ["commons/oak-settle-17c", "met/leather-settle-7390-primary", "met/leather-settle-7390-alternate"],
+      "measurements": [
+        {"name": "occupancy", "unit": "count", "target": 2},
+        {"name": "seat-top-height", "unit": "m", "target": 0.46},
+        {"name": "physical-seat-depth", "unit": "m", "target": 0.5},
+        {"name": "usable-seat-width", "unit": "m", "minimum": 1.28, "target": 1.33, "maximum": 1.38},
+        {"name": "continuous-seat-planks", "unit": "count", "target": 1}
+      ],
+      "verification": "blender"
+    },
+    {
+      "id": "four-post-complete-load-frame",
+      "statement": "Four plumb grounded posts carry the seat through a complete apron and side-rail frame, while a complete low stretcher frame resists racking; no load-bearing member floats or terminates against empty space.",
+      "sourceIds": ["commons/oak-settle-17c", "met/bench-chest-467989", "met/leather-settle-7390-alternate"],
+      "measurements": [
+        {"name": "grounded-post-count", "unit": "count", "target": 4},
+        {"name": "post-center-absolute-x", "unit": "m", "target": 0.73},
+        {"name": "lower-post-rake", "unit": "deg", "maximum": 0.25},
+        {"name": "seat-rail-count", "unit": "count", "target": 4},
+        {"name": "low-stretcher-count", "unit": "count", "target": 4},
+        {"name": "unsupported-load-member-count", "unit": "count", "target": 0}
+      ],
+      "verification": "blender"
+    },
+    {
+      "id": "supported-arms",
+      "statement": "Both arms terminate into the rear structure and dedicated front supports rather than floating, cantilevering implausibly, or resting on decorative intersections.",
+      "sourceIds": ["commons/oak-settle-17c", "met/leather-settle-7390-primary", "met/leather-settle-7390-alternate"],
+      "measurements": [
+        {"name": "arm-count", "unit": "count", "target": 2},
+        {"name": "arm-top-height", "unit": "m", "minimum": 0.68, "target": 0.69, "maximum": 0.7},
+        {"name": "dedicated-front-arm-support-count", "unit": "count", "target": 2},
+        {"name": "disconnected-arm-joint-count", "unit": "count", "target": 0}
+      ],
+      "verification": "blender"
+    },
+    {
+      "id": "separate-coherent-upper-back",
+      "statement": "A separately joined upper back frame rakes away from the occupants on one coherent construction plane while all lower posts remain plumb.",
+      "sourceIds": ["commons/oak-settle-17c", "met/leather-settle-7390-primary"],
+      "measurements": [
+        {"name": "upper-back-rake", "unit": "deg", "minimum": 3.5, "target": 4, "maximum": 4.5},
+        {"name": "common-back-plane-residual", "unit": "m", "maximum": 0.002},
+        {"name": "separate-upper-back-frame", "unit": "boolean", "target": 1}
+      ],
+      "verification": "blender"
+    },
+    {
+      "id": "four-inset-fielded-panels-and-simple-crest",
+      "statement": "Four inset fielded oak panels sit within continuous joined rails and stiles beneath one restrained crest; panels cannot read as loose boards and the crest cannot become a canopy.",
+      "sourceIds": ["commons/oak-settle-17c", "met/bench-chest-467989"],
+      "measurements": [
+        {"name": "back-panel-count", "unit": "count", "target": 4},
+        {"name": "field-depth", "unit": "m", "minimum": 0.008, "maximum": 0.016},
+        {"name": "panel-gap", "unit": "m", "maximum": 0.025},
+        {"name": "crest-count", "unit": "count", "target": 1},
+        {"name": "canopy-count", "unit": "count", "target": 0}
+      ],
+      "verification": "blender"
+    },
+    {
+      "id": "visible-bounded-period-joinery",
+      "statement": "Rails enter the correct posts with visible shoulders and restrained drawbore pegs; mere overlap, deep penetration, and decorative false joints do not satisfy construction.",
+      "sourceIds": ["commons/oak-settle-17c", "met/bench-chest-467989", "met/leather-settle-7390-alternate"],
+      "measurements": [
+        {"name": "mortise-tenon-joint-count", "unit": "count", "minimum": 20},
+        {"name": "visible-peg-count", "unit": "count", "minimum": 8},
+        {"name": "joint-tolerance", "unit": "m", "maximum": 0.003},
+        {"name": "disconnected-joint-count", "unit": "count", "target": 0},
+        {"name": "implausible-member-penetration-count", "unit": "count", "target": 0}
+      ],
+      "verification": "blender"
+    },
+    {
+      "id": "restrained-three-role-oak",
+      "statement": "Exactly one subdued oak family uses only frame, panel, and endgrain roles; grain follows each member axis and the leather reference contributes no upholstery or extra material family.",
+      "sourceIds": ["commons/oak-settle-17c", "met/bench-chest-467989", "met/leather-settle-7390-primary"],
+      "measurements": [
+        {"name": "wood-material-family-count", "unit": "count", "target": 1},
+        {"name": "material-role-count", "unit": "count", "target": 3},
+        {"name": "misoriented-structural-grain-count", "unit": "count", "target": 0},
+        {"name": "upholstery-area-ratio", "unit": "ratio", "target": 0},
+        {"name": "edge-radius", "unit": "m", "minimum": 0.003, "maximum": 0.008}
+      ],
+      "verification": "engine"
+    },
+    {
+      "id": "exact-two-seat-function-and-compound-collision",
+      "statement": "Two occupancy sockets resolve above the real continuous seat, one approach socket resolves in front along local negative Z, the rated shared load remains stable on four feet, and compound collision follows the functional frame.",
+      "sourceIds": ["commons/oak-settle-17c", "met/leather-settle-7390-primary", "met/leather-settle-7390-alternate"],
+      "measurements": [
+        {"name": "occupancy-socket-count", "unit": "count", "target": 2},
+        {"name": "approach-socket-count", "unit": "count", "target": 1},
+        {"name": "rated-shared-load", "unit": "count", "minimum": 200},
+        {"name": "grounded-foot-count", "unit": "count", "target": 4},
+        {"name": "whole-object-aabb-count", "unit": "count", "target": 0},
+        {"name": "uncovered-functional-part-count", "unit": "count", "target": 0}
+      ],
+      "verification": "compiler"
+    },
+    {
+      "id": "compact-shared-seat-read",
+      "statement": "Front and three-quarter views must still read immediately as compact two-person seating, not as a single high-backed chair, a storage chest, or a cut-down fragment of the oversized settle.",
+      "sourceIds": ["met/high-backed-chair-471833", "met/leather-settle-7390-primary"],
+      "measurements": [
+        {"name": "visible-occupant-bays", "unit": "count", "target": 2},
+        {"name": "maximum-height-width-ratio", "unit": "ratio", "maximum": 0.813},
+        {"name": "storage-compartment-count", "unit": "count", "target": 0}
+      ],
+      "verification": "human"
+    }
+  ],
+  "avoid": [
+    "geometry outside the exact I1 r3 envelope",
+    "positive-Z front or post-export orientation correction",
+    "scaled or clipped v2 geometry",
+    "raked lower legs",
+    "floating or cantilevered arms",
+    "incomplete apron or stretcher frame",
+    "lateral occupant-bay seat seams",
+    "loose back panels",
+    "canopy or towering crest",
+    "chest or false storage volume",
+    "leather or upholstered surfaces",
+    "single-chair silhouette",
+    "plain intersecting boxes",
+    "identical grain phase on adjacent boards",
+    "whole-object AABB collision"
+  ],
+  "requiredViews": ["front", "right-side", "back", "three-quarter", "joinery-detail", "socket-overlay", "collision-overlay"],
+  "status": "draft"
+}

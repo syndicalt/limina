@@ -13,10 +13,10 @@
 
 import { z } from "../../build/zod.bundle.mjs";
 import { MAX_ENTITIES, Position, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
-import type { Transformable } from "../ecs/world.ts";
+import { inertTransform } from "./_util.ts";
 import { teardownEntity } from "./entity-teardown.ts";
 import { querySpatialEntities } from "../spatial/index.ts";
-import type { SkillDefinition, SkillRegistry, WorldContext } from "./registry.ts";
+import type { ExecutionContext, SkillDefinition, SkillRegistry, WorldContext } from "./registry.ts";
 import type { InventoryManager } from "./inventory.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
@@ -35,14 +35,17 @@ export interface InteractableDef {
 
 export class InteractionManager {
   private readonly interactables = new Map<string, InteractableDef>();
+  private readonly handlers = new Map<string, (actorEntity: string, ctx: ExecutionContext) => Record<string, unknown>>();
 
   register(def: InteractableDef): void {
     this.interactables.set(def.entity, def);
   }
 
   unregister(entity: string): boolean {
+    this.handlers.delete(entity);
     return this.interactables.delete(entity);
   }
+  registerHandler(entity: string, handler: (actorEntity: string, ctx: ExecutionContext) => Record<string, unknown>): void { this.handlers.set(entity, handler); }
 
   get(entity: string): InteractableDef | undefined {
     return this.interactables.get(entity);
@@ -54,21 +57,43 @@ export class InteractionManager {
   }
 
   /** DETERMINISTIC interact: `tick` is `ctx.tick` (NEVER Date.now()) so the stored +
-   *  returned `lastInteractTick` recomputes bit-identically on replay. */
-  interact(entity: string, actorEntity: string, tick: number): { ok: boolean; result?: Record<string, unknown> } {
+   *  returned `lastInteractTick` recomputes bit-identically on replay. ONE state
+   *  path: every interact stamps `def.state` (actor + sim tick) BEFORE any custom
+   *  handler runs — a handler augments the result, it never bypasses the stamp, so
+   *  handler-backed and plain interactables mutate state identically. */
+  interact(entity: string, actorEntity: string, tickOrCtx: number | ExecutionContext): { ok: boolean; result?: Record<string, unknown> } {
     const def = this.interactables.get(entity);
     if (def === undefined) return { ok: false };
     def.state.lastInteractedBy = actorEntity;
-    def.state.lastInteractTick = tick;
+    def.state.lastInteractTick = typeof tickOrCtx === "number" ? tickOrCtx : tickOrCtx.tick;
+    if (typeof tickOrCtx !== "number") {
+      const handler = this.handlers.get(entity);
+      if (handler !== undefined) {
+        const result = handler(actorEntity, tickOrCtx);
+        return { ok: result.ok !== false, result };
+      }
+    }
     return { ok: true, result: { type: def.type, prompt: def.prompt, ...def.state } };
   }
-}
 
-/** Inert transform binding for a dropped world item (the render mesh, if any, is
- *  attached by the host's render path; the ECS entity exists headless so the item is
- *  a first-class, snapshot/replay-comparable entity). Mirrors terrain.ts. */
-function inertTransform(): Transformable {
-  return { position: { set() {} }, quaternion: { set() {} }, scale: { set() {} } };
+  /** Deterministic capture of every registered interactable INCLUDING its mutable `state`
+   *  (door open, lastInteractTick, …), sorted by entity (snapshot participant, H2). The
+   *  `handlers` map is runtime closures and is NOT captured — handler wiring is derived
+   *  state the functional-building reconciler rebuilds from entity origins. */
+  captureSnapshot(): InteractableDef[] {
+    return [...this.interactables.values()]
+      .sort((a, b) => (a.entity < b.entity ? -1 : a.entity > b.entity ? 1 : 0))
+      .map((d) => ({ ...d, state: { ...d.state } }));
+  }
+
+  /** Wholesale replace the registered interactables (participant restore). Handlers are
+   *  cleared too: a closure for a dropped def must not survive, and live defs get their
+   *  handlers re-registered by the origin-driven reconciler on the next skill invoke. */
+  restoreSnapshot(defs: readonly InteractableDef[]): void {
+    this.interactables.clear();
+    this.handlers.clear();
+    for (const d of defs) this.interactables.set(d.entity, { ...d, state: { ...d.state } });
+  }
 }
 
 /** Resolve a live entity's world position from the ECS transform SoA. Undefined when
@@ -81,9 +106,9 @@ function entityPosition(world: WorldContext, entity: string): [number, number, n
 
 export function registerInteractionSkills(
   registry: SkillRegistry,
-  opts?: { inventoryManager?: InventoryManager },
+  opts?: { inventoryManager?: InventoryManager; interactionManager?: InteractionManager },
 ): { interactionManager: InteractionManager } {
-  const mgr = new InteractionManager();
+  const mgr = opts?.interactionManager ?? new InteractionManager();
   const inv = opts?.inventoryManager;
 
   // ---- interaction.register ------------------------------------------------
@@ -127,6 +152,7 @@ export function registerInteractionSkills(
     description: "Query interactable entities within range of a position (or the actor entity), sorted by distance. Uses the world spatial index over real entity transforms. Pure read — emits nothing.",
     category: "interaction",
     permissions: ["interaction.read"],
+    effect: "read",
     input: queryInput,
     output: z.object({ interactables: z.array(z.object({ entity: z.string(), prompt: z.string(), type: z.string(), distance: z.number() })) }),
     handler: (input, ctx) => {
@@ -165,9 +191,9 @@ export function registerInteractionSkills(
     category: "interaction",
     permissions: ["interaction.write"],
     input: interactInput,
-    output: z.object({ ok: z.boolean(), result: z.unknown().optional() }),
+    output: z.object({ ok: z.boolean(), result: z.record(z.string(), z.unknown()).optional() }),
     handler: (input, ctx) => {
-      const result = mgr.interact(input.entity, input.actorEntity ?? ctx.agentId, ctx.tick);
+      const result = mgr.interact(input.entity, input.actorEntity ?? ctx.agentId, ctx);
       ctx.emit("interaction.performed", { entity: input.entity, actor: input.actorEntity ?? ctx.agentId, data: input.data, ...input.meta });
       return result;
     },
@@ -221,7 +247,14 @@ export function registerInteractionSkills(
     output: z.object({ ok: z.boolean(), itemEntity: z.string().optional(), reason: z.string().optional() }),
     handler: (input, ctx) => {
       if (inv === undefined) return { ok: false, reason: "no inventory system on this world" };
-      const removed = inv.removeItem(input.actorEntity, input.itemId, input.slot, input.quantity);
+      // TRUE-INVERSE rollback prep: resolve the slot the removal will ACTUALLY
+      // take from (removeItem's own lowest-slot-first rule) BEFORE removing.
+      // Re-adding with the caller's possibly-omitted slot would auto-assign or
+      // stack elsewhere, leaving the inventory layout diverged from "the drop
+      // never happened" after a failed spawn.
+      const sourceSlot = input.slot
+        ?? inv.listItems(input.actorEntity).find((s) => s.itemId === input.itemId)?.slot;
+      const removed = inv.removeItem(input.actorEntity, input.itemId, sourceSlot, input.quantity);
       if (!removed) return { ok: false, reason: `actor "${input.actorEntity}" does not hold "${input.itemId}"` };
       // Spawn a REAL world item entity (the ECS path terrain/scene use): a renderable
       // bound to an inert transform at the drop position, registered in the entity table.
@@ -230,7 +263,13 @@ export function registerInteractionSkills(
       const eid = spawnRenderable(ctx.world.ecs, inertTransform(), x, y, z);
       if (eid >= MAX_ENTITIES) {
         despawnRenderable(ctx.world.ecs, eid);
-        return { ok: false };
+        // ROLLBACK: the item was already removed from inventory; a failed drop must
+        // leave the inventory intact, never destroy the item (same remove→rollback
+        // contract as InventoryManager.transferItem). Restore to the CAPTURED source
+        // slot — freed (or decremented) by the removal above, so the re-add cannot
+        // lack space and lands where the item actually was.
+        inv.addItem(input.actorEntity, { itemId: input.itemId, quantity: input.quantity, slot: sourceSlot });
+        return { ok: false, reason: "entity capacity exceeded (MAX_ENTITIES) — item returned to inventory" };
       }
       const itemEntity = ctx.world.entities.create({ eid });
       ctx.emit("interaction.dropped", { actorEntity: input.actorEntity, itemId: input.itemId, quantity: input.quantity, itemEntity, position: pos, ...input.meta });
@@ -254,7 +293,7 @@ export function registerInteractionSkills(
     category: "interaction",
     permissions: ["interaction.write"],
     input: useInput,
-    output: z.object({ ok: z.boolean(), result: z.unknown().optional(), reason: z.string().optional() }),
+    output: z.object({ ok: z.boolean(), result: z.record(z.string(), z.unknown()).optional(), reason: z.string().optional() }),
     handler: (input, ctx) => {
       if (inv === undefined) return { ok: false, reason: "no inventory system on this world" };
       const consumed = inv.removeItem(input.actorEntity, input.itemId, undefined, input.quantity);

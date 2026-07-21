@@ -23,14 +23,16 @@ use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::io::{Cursor, Write};
 use std::num::{NonZeroU16, NonZeroU32};
-use std::process::{Command, Stdio};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
+use std::sync::{Arc, Weak};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cpal::traits::{DeviceTrait, HostTrait};
 use deno_core::{extension, op2, OpState};
+use deno_error::JsErrorBox;
 use rodio::buffer::SamplesBuffer;
 use rodio::source::Source;
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, SpatialPlayer};
@@ -39,6 +41,30 @@ const SAMPLE_RATE: u32 = 44_100;
 /// Bus volumes: index 0 = master, 1 = sfx, 2 = ambience, 3 = voice.
 const N_BUSES: usize = 4;
 const BUS_VOICE: usize = 3;
+/// Bounded command-channel capacity. A stalled audio thread applies backpressure:
+/// once this many commands are queued, further sends are DROPPED (not blocked, not
+/// queued), so a stall can never grow memory without bound. Sized to comfortably
+/// absorb a frame's worth of listener/emitter/volume updates plus a few one-shots.
+const AUDIO_CMD_CAPACITY: usize = 256;
+const MAX_SFX_SECONDS: f32 = 60.0;
+const MAX_PCM_SAMPLES: usize = SAMPLE_RATE as usize * 2 * 120;
+/// Max concurrently-retained voices on the audio thread. One-shots self-reap when
+/// they finish, but looping voices never empty, so this caps how many can accumulate
+/// before the oldest is evicted — bounding audio-thread memory (see the reap loop).
+const MAX_ACTIVE_SOUNDS: usize = 256;
+const MAX_TTS_TEXT_BYTES: usize = 1_000;
+const MAX_TTS_WORKERS: usize = 4;
+const MAX_TTS_DECODED_SAMPLES: usize = SAMPLE_RATE as usize * 2 * 30;
+const MAX_GAIN: f32 = 4.0;
+const AUDIO_SHUTDOWN_POLL: Duration = Duration::from_millis(25);
+/// Drop waits briefly for an ordinary audio thread to acknowledge shutdown, then
+/// detaches rather than letting a wedged backend freeze engine teardown.
+const AUDIO_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
+/// Maximum time the V8 thread waits for host audio discovery. A backend call
+/// can wedge below cpal; after this bound the engine degrades to Null and
+/// detaches the pre-signalled discovery thread instead of blocking on join.
+const AUDIO_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+const TTS_PROCESS_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Commands sent from the JS-thread ops (and TTS workers) to the audio thread.
 enum AudioCmd {
@@ -85,7 +111,8 @@ enum AudioCmd {
         data: Vec<f32>,
         channels: NonZeroU16,
         rate: NonZeroU32,
-        #[allow(dead_code)] // reserved for a future positional voice; the voice is currently non-spatial (full presence over music)
+        // reserved for a future positional voice; the voice is currently non-spatial (full presence over music)
+        #[allow(dead_code)]
         emitter: [f32; 3],
         bus: usize,
         volume: f32,
@@ -110,13 +137,26 @@ enum AudioCmd {
         bus: usize,
         volume: f32,
     },
+    /// Clean-shutdown signal: the audio thread returns, dropping the sink (so the OS
+    /// output closes) and acknowledging bounded teardown. Sent from `AudioHandle`'s
+    /// `Drop`; delivery is best-effort (dropped if the channel is full), with the
+    /// independent shutdown flag as the guaranteed receive-loop escape.
+    Shutdown,
 }
 
 /// Host-owned audio handle, stored in `OpState`. `tx` is `None` only for the
 /// `Null` backend (forced or no device), so sends no-op; ids still advance so
-/// JS-side handle bookkeeping is identical across backends (deterministic).
+/// JS-side handle bookkeeping is identical across backends (deterministic). The
+/// sender is `Arc`-wrapped: the audio thread holds only a `Weak` for the TTS-back
+/// path, so dropping this (the sole strong sender) lets the receive loop end.
 struct AudioHandle {
-    tx: Option<Sender<AudioCmd>>,
+    tx: Option<Arc<SyncSender<AudioCmd>>>,
+    join: Option<thread::JoinHandle<()>>,
+    done: Option<Receiver<()>>,
+    shutdown: Option<Arc<AtomicBool>>,
+    /// Count of commands dropped due to a full channel (backpressure); used only to
+    /// throttle the warning log. Not world state (never affects determinism).
+    dropped: AtomicU64,
     next_id: u32,
 }
 
@@ -128,7 +168,63 @@ impl AudioHandle {
     }
     fn send(&self, cmd: AudioCmd) {
         if let Some(tx) = self.tx.as_ref() {
-            let _ = tx.send(cmd);
+            match tx.try_send(cmd) {
+                Ok(()) => {}
+                // Full = the audio thread is behind; DROP rather than block the V8
+                // thread or grow memory. Throttle the warning so a stall can't flood.
+                Err(TrySendError::Full(_)) => {
+                    let n = self.dropped.fetch_add(1, Ordering::Relaxed);
+                    if n.is_multiple_of(256) {
+                        eprintln!(
+                            "[audio] command channel full; dropping commands (audio thread stalled?) [{}]",
+                            n + 1
+                        );
+                    }
+                }
+                // Disconnected = the audio thread has exited; nothing to do.
+                Err(TrySendError::Disconnected(_)) => {}
+            }
+        }
+    }
+}
+
+fn finish_audio_thread(
+    join: thread::JoinHandle<()>,
+    done: Receiver<()>,
+    timeout: Duration,
+) -> bool {
+    if matches!(done.recv_timeout(timeout), Err(RecvTimeoutError::Timeout)) {
+        // Dropping a JoinHandle detaches it. Its independent shutdown flag is
+        // owned by the worker and was set before this helper is called.
+        drop(join);
+        false
+    } else {
+        let _ = join.join();
+        true
+    }
+}
+
+impl Drop for AudioHandle {
+    /// Clean shutdown: signal the audio thread to return, drop our (sole strong)
+    /// sender so the receive loop can still end if that signal was dropped (channel
+    /// full), then wait only a bounded interval for acknowledgement. A backend
+    /// wedged below rodio/cpal is detached rather than freezing engine teardown.
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            shutdown.store(true, Ordering::Release);
+        }
+        if let Some(tx) = self.tx.take() {
+            let _ = tx.try_send(AudioCmd::Shutdown);
+            drop(tx);
+        }
+        if let Some(join) = self.join.take() {
+            let exited = self
+                .done
+                .take()
+                .is_some_and(|done| finish_audio_thread(join, done, AUDIO_SHUTDOWN_TIMEOUT));
+            if !exited {
+                eprintln!("[audio] shutdown acknowledgement timed out; detaching audio thread");
+            }
         }
     }
 }
@@ -181,9 +277,10 @@ fn rate() -> NonZeroU32 {
 }
 
 /// Synthesize a mono sine with a short attack/decay envelope (click-free).
-fn synth_sine(freq: f32, secs: f32) -> Vec<f32> {
+fn synth_sine(freq: f32, secs: f32) -> Result<Vec<f32>, String> {
+    validate_sfx_params(freq, secs, 1.0)?;
     let sr = SAMPLE_RATE as f32;
-    let n = (secs.max(0.0) * sr) as usize;
+    let n = (secs * sr) as usize;
     let mut v = Vec::with_capacity(n);
     for i in 0..n {
         let t = i as f32 / sr;
@@ -191,7 +288,92 @@ fn synth_sine(freq: f32, secs: f32) -> Vec<f32> {
         let release = ((secs - t) / 0.05).clamp(0.0, 1.0);
         v.push((2.0 * PI * freq * t).sin() * 0.25 * attack.min(release));
     }
-    v
+    Ok(v)
+}
+
+fn validate_gain(volume: f32) -> Result<(), String> {
+    if !volume.is_finite() || !(0.0..=MAX_GAIN).contains(&volume) {
+        return Err(format!("audio volume must be finite and in 0..={MAX_GAIN}"));
+    }
+    Ok(())
+}
+
+fn validate_bus(bus: u32) -> Result<(), String> {
+    if bus as usize >= N_BUSES {
+        return Err(format!(
+            "audio bus {bus} is out of range 0..{}",
+            N_BUSES - 1
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sfx_params(freq: f32, secs: f32, volume: f32) -> Result<(), String> {
+    if !freq.is_finite() || !(20.0..=20_000.0).contains(&freq) {
+        return Err("audio frequency must be finite and in 20..=20000 Hz".into());
+    }
+    if !secs.is_finite() || !(0.0..=MAX_SFX_SECONDS).contains(&secs) {
+        return Err(format!(
+            "audio duration must be finite and in 0..={MAX_SFX_SECONDS} seconds"
+        ));
+    }
+    validate_gain(volume)
+}
+
+fn validate_position(pos: [f32; 3]) -> Result<(), String> {
+    if pos.iter().all(|v| v.is_finite()) {
+        Ok(())
+    } else {
+        Err("audio position values must be finite".into())
+    }
+}
+
+fn validate_pcm_params(
+    len: usize,
+    sample_rate: u32,
+    channels: u32,
+    volume: f32,
+) -> Result<(), String> {
+    if len > MAX_PCM_SAMPLES {
+        return Err(format!(
+            "audio buffer exceeds sample cap ({len}>{MAX_PCM_SAMPLES})"
+        ));
+    }
+    if !(1..=192_000).contains(&sample_rate) {
+        return Err("audio sample rate must be in 1..=192000 Hz".into());
+    }
+    if !(1..=8).contains(&channels) {
+        return Err("audio channels must be in 1..=8".into());
+    }
+    validate_gain(volume)
+}
+
+fn validate_tts_text(text: &str) -> Result<(), String> {
+    if text.len() > MAX_TTS_TEXT_BYTES {
+        return Err(format!(
+            "audio TTS text exceeds byte cap ({}>{MAX_TTS_TEXT_BYTES})",
+            text.len()
+        ));
+    }
+    Ok(())
+}
+
+fn validate_decoded_tts(
+    len: usize,
+    sample_rate: u32,
+    channels: NonZeroU16,
+    volume: f32,
+) -> Result<(), String> {
+    if len > MAX_TTS_DECODED_SAMPLES {
+        return Err(format!(
+            "audio TTS decoded sample count exceeds cap ({len}>{MAX_TTS_DECODED_SAMPLES})"
+        ));
+    }
+    validate_pcm_params(len, sample_rate, channels.get() as u32, volume)
+}
+
+fn audio_arg_error(msg: String) -> JsErrorBox {
+    JsErrorBox::generic(msg)
 }
 
 /// Synthesize a soft 2 s chord pad. Frequencies (110/165/220 Hz) complete whole
@@ -218,7 +400,30 @@ fn synth_pad() -> Vec<f32> {
 /// local TTS binary (espeak-ng / Piper), so synthesis stays out-of-process and
 /// off the JS frame loop. `Send + Sync` so a worker thread can own a clone.
 trait VoiceProvider: Send + Sync {
-    fn synth(&self, text: &str, pitch: u8) -> Result<Vec<u8>, String>;
+    fn synth(&self, text: &str, pitch: u8, cancelled: &AtomicBool) -> Result<Vec<u8>, String>;
+}
+
+fn wait_child(
+    child: &mut Child,
+    timeout: Duration,
+    cancelled: &AtomicBool,
+) -> Result<ExitStatus, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            return Ok(status);
+        }
+        if cancelled.load(Ordering::Acquire) || Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(if cancelled.load(Ordering::Acquire) {
+                "TTS cancelled".to_string()
+            } else {
+                format!("TTS process timed out after {}s", timeout.as_secs())
+            });
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// Unique temp WAV path (pid + nanos) so concurrent syntheses never collide.
@@ -230,29 +435,51 @@ fn tts_tmp_path() -> std::path::PathBuf {
     std::env::temp_dir().join(format!("limina_tts_{}_{}.wav", std::process::id(), nanos))
 }
 
+/// RAII guard that removes the temp WAV on drop, so a synth that fails on ANY path
+/// (non-zero exit, read error, …) never leaks the file.
+struct TmpWav {
+    path: std::path::PathBuf,
+}
+impl Drop for TmpWav {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 /// espeak-ng: instant formant TTS (`espeak-ng -w <file> <text>`). The dependable
 /// zero-install fallback voice.
 struct EspeakProvider;
+
+fn espeak_command(output: &std::path::Path, text: &str, pitch: u8) -> Command {
+    let mut cmd = Command::new("espeak-ng");
+    cmd.arg("-w").arg(output);
+    if pitch > 0 {
+        // Higher pitch + a slightly slower rate -> a cuter, sing-song voice.
+        cmd.arg("-p").arg(pitch.min(99).to_string());
+        cmd.arg("-s").arg("150");
+    }
+    // GNU getopt permutes options by default. The terminator is a security
+    // boundary: agent-controlled speech beginning with -w/-f remains text.
+    cmd.arg("--").arg(text);
+    cmd
+}
+
 impl VoiceProvider for EspeakProvider {
-    fn synth(&self, text: &str, pitch: u8) -> Result<Vec<u8>, String> {
-        let tmp = tts_tmp_path();
-        let mut cmd = Command::new("espeak-ng");
-        cmd.arg("-w").arg(&tmp);
-        if pitch > 0 {
-            // Higher pitch + a slightly slower rate -> a cuter, sing-song voice.
-            cmd.arg("-p").arg(pitch.min(99).to_string());
-            cmd.arg("-s").arg("150");
-        }
-        let status = cmd
-            .arg(text)
-            .status()
+    fn synth(&self, text: &str, pitch: u8, cancelled: &AtomicBool) -> Result<Vec<u8>, String> {
+        let tmp = TmpWav {
+            path: tts_tmp_path(),
+        };
+        let mut child = espeak_command(&tmp.path, text, pitch)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
             .map_err(|e| format!("espeak-ng spawn: {e}"))?;
+        let status = wait_child(&mut child, TTS_PROCESS_TIMEOUT, cancelled)?;
         if !status.success() {
             return Err("espeak-ng exited non-zero".into());
         }
-        let bytes = std::fs::read(&tmp).map_err(|e| e.to_string())?;
-        let _ = std::fs::remove_file(&tmp);
-        Ok(bytes)
+        // `tmp` drops on return (any path), removing the file.
+        std::fs::read(&tmp.path).map_err(|e| e.to_string())
     }
 }
 
@@ -262,11 +489,13 @@ struct PiperProvider {
     model: String,
 }
 impl VoiceProvider for PiperProvider {
-    fn synth(&self, text: &str, _pitch: u8) -> Result<Vec<u8>, String> {
-        let tmp = tts_tmp_path();
+    fn synth(&self, text: &str, _pitch: u8, cancelled: &AtomicBool) -> Result<Vec<u8>, String> {
+        let tmp = TmpWav {
+            path: tts_tmp_path(),
+        };
         let mut child = Command::new("piper")
             .args(["--model", &self.model, "--output_file"])
-            .arg(&tmp)
+            .arg(&tmp.path)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .spawn()
@@ -277,12 +506,11 @@ impl VoiceProvider for PiperProvider {
             .ok_or("piper stdin unavailable")?
             .write_all(text.as_bytes())
             .map_err(|e| e.to_string())?;
-        if !child.wait().map_err(|e| e.to_string())?.success() {
+        if !wait_child(&mut child, TTS_PROCESS_TIMEOUT, cancelled)?.success() {
             return Err("piper exited non-zero".into());
         }
-        let bytes = std::fs::read(&tmp).map_err(|e| e.to_string())?;
-        let _ = std::fs::remove_file(&tmp);
-        Ok(bytes)
+        // `tmp` drops on return (any path), removing the file.
+        std::fs::read(&tmp.path).map_err(|e| e.to_string())
     }
 }
 
@@ -300,12 +528,18 @@ fn select_voice() -> Option<Arc<dyn VoiceProvider>> {
             model: "en_US-amy-medium.onnx".to_string(),
         })),
         _ => {
-            let have_espeak = Command::new("espeak-ng")
+            let mut probe = match Command::new("espeak-ng")
                 .arg("--version")
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .status()
-                .map(|s| s.success())
+                .spawn()
+            {
+                Ok(child) => child,
+                Err(_) => return None,
+            };
+            let cancelled = AtomicBool::new(false);
+            let have_espeak = wait_child(&mut probe, Duration::from_secs(2), &cancelled)
+                .map(|status| status.success())
                 .unwrap_or(false);
             if have_espeak {
                 eprintln!("[audio] voice: espeak-ng (auto)");
@@ -324,8 +558,28 @@ fn decode_wav(bytes: Vec<u8>) -> Result<(Vec<f32>, NonZeroU16, NonZeroU32), Stri
     let decoder = Decoder::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
     let channels = decoder.channels();
     let sample_rate = decoder.sample_rate();
-    let data: Vec<f32> = decoder.collect();
+    let mut data = Vec::new();
+    for sample in decoder {
+        if data.len() >= MAX_TTS_DECODED_SAMPLES {
+            return Err(format!(
+                "audio TTS decoded sample count exceeds cap (>{MAX_TTS_DECODED_SAMPLES})"
+            ));
+        }
+        if !sample.is_finite() {
+            return Err("audio TTS decoded samples must be finite".into());
+        }
+        data.push(sample);
+    }
+    validate_decoded_tts(data.len(), sample_rate.get(), channels, 1.0)?;
     Ok((data, channels, sample_rate))
+}
+
+struct TtsWorkerSlot(Arc<AtomicUsize>);
+
+impl Drop for TtsWorkerSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 /// Open the OS audio output, PREFERRING the PipeWire/Pulse-routed virtual device
@@ -370,21 +624,30 @@ fn open_output() -> Result<MixerDeviceSink, String> {
 // ---- audio thread ----------------------------------------------------------
 
 /// The dedicated audio thread: owns the live sink + mixer + sound registry +
-/// current listener ears, services commands until the channel closes. `back` is
-/// a sender clone TTS workers use to deliver decoded audio; `voice` is the
+/// current listener ears, services commands until the channel closes (or a
+/// `Shutdown` is received). `back` is a WEAK sender the thread upgrades per-`Speak`
+/// to hand a live sender to a TTS worker; holding it weakly (not a self-clone) is
+/// what lets the receive loop end once the JS-side sender drops. `voice` is the
 /// selected provider (None = no voice).
 fn run_audio(
     dev: MixerDeviceSink,
     rx: Receiver<AudioCmd>,
-    back: Sender<AudioCmd>,
+    back: Weak<SyncSender<AudioCmd>>,
     voice: Option<Arc<dyn VoiceProvider>>,
+    shutdown: Arc<AtomicBool>,
 ) {
     let mixer = dev.mixer();
     let mut sounds: HashMap<u32, Sound> = HashMap::new();
     let mut vols = [1.0f32; N_BUSES];
     let mut left_ear = [-0.1f32, 0.0, 0.0];
     let mut right_ear = [0.1f32, 0.0, 0.0];
-    for cmd in rx {
+    let tts_inflight = Arc::new(AtomicUsize::new(0));
+    while !shutdown.load(Ordering::Acquire) {
+        let cmd = match rx.recv_timeout(AUDIO_SHUTDOWN_POLL) {
+            Ok(cmd) => cmd,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => return,
+        };
         match cmd {
             AudioCmd::PlaySfx {
                 id,
@@ -393,9 +656,16 @@ fn run_audio(
                 bus,
                 volume,
             } => {
+                let data = match synth_sine(freq, secs) {
+                    Ok(data) => data,
+                    Err(e) => {
+                        eprintln!("[audio] dropped invalid sfx command: {e}");
+                        continue;
+                    }
+                };
                 let player = Player::connect_new(mixer);
                 player.set_volume(effective(&vols, bus, volume));
-                player.append(SamplesBuffer::new(ch1(), rate(), synth_sine(freq, secs)));
+                player.append(SamplesBuffer::new(ch1(), rate(), data));
                 player.play();
                 sounds.insert(
                     id,
@@ -457,9 +727,16 @@ fn run_audio(
                 bus,
                 volume,
             } => {
+                let data = match synth_sine(freq, secs) {
+                    Ok(data) => data,
+                    Err(e) => {
+                        eprintln!("[audio] dropped invalid spatial command: {e}");
+                        continue;
+                    }
+                };
                 let sp = SpatialPlayer::connect_new(mixer, emitter, left_ear, right_ear);
                 sp.set_volume(effective(&vols, bus, volume));
-                sp.append(SamplesBuffer::new(ch1(), rate(), synth_sine(freq, secs)));
+                sp.append(SamplesBuffer::new(ch1(), rate(), data));
                 sp.play();
                 sounds.insert(
                     id,
@@ -478,15 +755,31 @@ fn run_audio(
                 pitch,
             } => {
                 // Fire-and-forget: synth on a throwaway worker; deliver decoded
-                // audio back over the channel. Nothing blocks here or in JS.
-                if let Some(provider) = voice.clone() {
-                    let back = back.clone();
-                    thread::Builder::new()
+                // audio back over the channel. Nothing blocks here or in JS. We
+                // upgrade the WEAK sender per line, so a live worker keeps the channel
+                // alive only for its own (bounded) lifetime — never the audio thread.
+                if let (Some(provider), Some(back)) = (voice.clone(), back.upgrade()) {
+                    if tts_inflight.load(Ordering::Acquire) >= MAX_TTS_WORKERS {
+                        eprintln!(
+                            "[audio] tts queue full; dropping line (>{MAX_TTS_WORKERS} workers)"
+                        );
+                        continue;
+                    }
+                    tts_inflight.fetch_add(1, Ordering::AcqRel);
+                    let tts_inflight_done = Arc::clone(&tts_inflight);
+                    let worker_shutdown = Arc::clone(&shutdown);
+                    if thread::Builder::new()
                         .name("limina-tts".into())
-                        .spawn(
-                            move || match provider.synth(&text, pitch).and_then(decode_wav) {
+                        .spawn(move || {
+                            let _slot = TtsWorkerSlot(tts_inflight_done);
+                            match provider
+                                .synth(&text, pitch, &worker_shutdown)
+                                .and_then(decode_wav)
+                            {
                                 Ok((data, channels, rate)) => {
-                                    let _ = back.send(AudioCmd::PlayDecoded {
+                                    // Backpressure applies here too: a full channel
+                                    // drops the decoded line rather than queueing it.
+                                    let _ = back.try_send(AudioCmd::PlayDecoded {
                                         id,
                                         data,
                                         channels,
@@ -497,9 +790,12 @@ fn run_audio(
                                     });
                                 }
                                 Err(e) => eprintln!("[audio] tts failed: {e}"),
-                            },
-                        )
-                        .ok();
+                            }
+                        })
+                        .is_err()
+                    {
+                        tts_inflight.fetch_sub(1, Ordering::AcqRel);
+                    }
                 }
             }
             AudioCmd::PlayDecoded {
@@ -515,6 +811,14 @@ fn run_audio(
                 // clearly): play it on the voice bus at full presence, not distance-
                 // attenuated under rodio's 1/d² (which buries it under music at
                 // typical camera distances).
+                if let Err(e) = validate_decoded_tts(data.len(), rate.get(), channels, volume) {
+                    eprintln!("[audio] dropped invalid decoded TTS command: {e}");
+                    continue;
+                }
+                if data.iter().any(|sample| !sample.is_finite()) {
+                    eprintln!("[audio] dropped invalid decoded TTS command: non-finite sample");
+                    continue;
+                }
                 let player = Player::connect_new(mixer);
                 player.set_volume(effective(&vols, bus, volume));
                 player.append(SamplesBuffer::new(channels, rate, data));
@@ -571,37 +875,132 @@ fn run_audio(
                     }
                 }
             }
+            // Clean shutdown: return so the sink/sounds drop and the thread joins.
+            AudioCmd::Shutdown => return,
         }
         // Reap finished one-shots (looping ambience never empties).
         sounds.retain(|_, s| !s.empty());
+        // Bound retained voices. One-shots self-reap above, but a LOOPING voice
+        // (repeat_infinite) never empties, so a stream of looping plays with fresh
+        // monotonic ids would grow this map — and each buffer it holds (up to
+        // MAX_PCM_SAMPLES ≈ 42 MB) — without bound. Evict the OLDEST (lowest id ≈
+        // earliest played) down to the cap: bounded memory at the cost of silencing
+        // the stalest loop, which a well-behaved caller never reaches.
+        while sounds.len() > MAX_ACTIVE_SOUNDS {
+            let Some(oldest) = sounds.keys().copied().min() else { break };
+            if let Some(s) = sounds.remove(&oldest) {
+                s.stop();
+            }
+        }
     }
 }
 
-/// Spawn the audio thread, opening the default output on it. Returns the command
-/// sender plus whether a live device was acquired. On no device the thread keeps
-/// draining commands (no-op), so the returned sender is always valid.
-fn spawn_audio() -> (Sender<AudioCmd>, bool) {
-    let (tx, rx) = mpsc::channel::<AudioCmd>();
-    let back = tx.clone();
+/// Spawn the audio thread, opening the default output on it. `Some` carries a
+/// live device; `None` is an honest Null fallback after prompt failure or the
+/// bounded discovery deadline. The channel is bounded so a stalled live thread
+/// applies backpressure instead of growing memory.
+type LiveAudioThread = (
+    Arc<SyncSender<AudioCmd>>,
+    Arc<AtomicBool>,
+    thread::JoinHandle<()>,
+    Receiver<()>,
+);
+
+fn await_audio_startup(
+    ready_rx: Receiver<bool>,
+    timeout: Duration,
+    tx: Arc<SyncSender<AudioCmd>>,
+    shutdown: Arc<AtomicBool>,
+    handle: thread::JoinHandle<()>,
+    done_rx: Receiver<()>,
+) -> Option<LiveAudioThread> {
+    match ready_rx.recv_timeout(timeout) {
+        Ok(true) => Some((tx, shutdown, handle, done_rx)),
+        Ok(false) | Err(RecvTimeoutError::Disconnected) => {
+            // Prompt failure enters a null-drain loop that polls this independent
+            // flag, so this join is bounded by AUDIO_SHUTDOWN_POLL.
+            shutdown.store(true, Ordering::Release);
+            drop(tx);
+            let _ = handle.join();
+            None
+        }
+        Err(RecvTimeoutError::Timeout) => {
+            // open_output may be wedged inside a host API. Retaining this handle
+            // would only move the hang to Drop/re-init. Detach after closing its
+            // channel and pre-signalling shutdown; if discovery returns later,
+            // the worker exits without entering its service loop.
+            shutdown.store(true, Ordering::Release);
+            drop(tx);
+            drop(handle);
+            None
+        }
+    }
+}
+
+fn spawn_audio() -> std::io::Result<Option<LiveAudioThread>> {
+    let (raw_tx, rx) = mpsc::sync_channel::<AudioCmd>(AUDIO_CMD_CAPACITY);
+    // The audio thread holds only a `Weak` (for the TTS-back path), so dropping
+    // this strong sender is what lets the receive loop terminate.
+    let tx = Arc::new(raw_tx);
+    let back = Arc::downgrade(&tx);
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let thread_shutdown = Arc::clone(&shutdown);
     let (ready_tx, ready_rx) = mpsc::channel::<bool>();
-    thread::Builder::new()
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let handle = thread::Builder::new()
         .name("limina-audio".into())
-        .spawn(move || match open_output() {
-            Ok(mut dev) => {
-                dev.log_on_drop(false);
-                let _ = ready_tx.send(true);
-                let voice = select_voice();
-                run_audio(dev, rx, back, voice);
+        .spawn(move || {
+            match open_output() {
+                Ok(mut dev) => {
+                    dev.log_on_drop(false);
+                    let _ = ready_tx.send(true);
+                    // A timed-out initializer pre-signals shutdown while this
+                    // thread is still inside open_output. Do not probe TTS or
+                    // enter the service loop after that late return.
+                    if !thread_shutdown.load(Ordering::Acquire) {
+                        let voice = select_voice();
+                        run_audio(dev, rx, back, voice, thread_shutdown);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[audio] no output device ({e}); running null");
+                    let _ = ready_tx.send(false);
+                    while !thread_shutdown.load(Ordering::Acquire) {
+                        match rx.recv_timeout(AUDIO_SHUTDOWN_POLL) {
+                            Ok(_) | Err(RecvTimeoutError::Timeout) => {}
+                            Err(RecvTimeoutError::Disconnected) => break,
+                        }
+                    }
+                }
             }
-            Err(e) => {
-                eprintln!("[audio] no output device ({e}); running null");
-                let _ = ready_tx.send(false);
-                for _ in rx {} // drain so sends stay no-op and never error
-            }
-        })
-        .expect("spawn limina-audio thread");
-    let live = ready_rx.recv().unwrap_or(false);
-    (tx, live)
+            let _ = done_tx.send(());
+        })?;
+    let live = await_audio_startup(
+        ready_rx,
+        AUDIO_STARTUP_TIMEOUT,
+        tx,
+        shutdown,
+        handle,
+        done_rx,
+    );
+    if live.is_none() {
+        eprintln!(
+            "[audio] output unavailable after at most {}ms; running null",
+            AUDIO_STARTUP_TIMEOUT.as_millis()
+        );
+    }
+    Ok(live)
+}
+
+fn null_audio_handle() -> AudioHandle {
+    AudioHandle {
+        tx: None,
+        join: None,
+        done: None,
+        shutdown: None,
+        dropped: AtomicU64::new(0),
+        next_id: 0,
+    }
 }
 
 // ---- ops -------------------------------------------------------------------
@@ -610,34 +1009,64 @@ fn spawn_audio() -> (Sender<AudioCmd>, bool) {
 /// no device opened). Returns 1 if a live device is playing, 0 for Null.
 #[op2(fast)]
 pub fn op_audio_init(state: &mut OpState) -> u32 {
+    audio_init_impl(state)
+}
+
+fn audio_init_impl(state: &mut OpState) -> u32 {
+    // Idempotence preserves live sounds and prevents repeated calls from
+    // accumulating discovery threads on a hostile or wedged host backend.
+    if let Some(existing) = state.try_borrow::<AudioHandle>() {
+        return u32::from(existing.tx.is_some());
+    }
     let forced_null = std::env::var("LIMINA_AUDIO")
         .map(|v| v.eq_ignore_ascii_case("null"))
         .unwrap_or(false);
     if forced_null {
-        state.put(AudioHandle {
-            tx: None,
-            next_id: 0,
-        });
-        println!("[audio] backend: null (LIMINA_AUDIO=null)");
+        state.put(null_audio_handle());
+        // stderr: stdout is the JSON-RPC transport under --mcp-stdio.
+        eprintln!("[audio] backend: null (LIMINA_AUDIO=null)");
         return 0;
     }
-    let (tx, live) = spawn_audio();
+    // Thread-spawn failure degrades to the null backend (like a missing output
+    // device); audio must never take the engine down.
+    let (tx, shutdown, join, done) = match spawn_audio() {
+        Ok(Some(parts)) => parts,
+        Ok(None) => {
+            state.put(null_audio_handle());
+            return 0;
+        }
+        Err(e) => {
+            eprintln!("[audio] failed to spawn audio thread ({e}); running null");
+            state.put(null_audio_handle());
+            return 0;
+        }
+    };
     state.put(AudioHandle {
         tx: Some(tx),
+        join: Some(join),
+        done: Some(done),
+        shutdown: Some(shutdown),
+        dropped: AtomicU64::new(0),
         next_id: 0,
     });
-    println!(
-        "[audio] backend: {}",
-        if live { "live" } else { "null (no device)" }
-    );
-    u32::from(live)
+    // stderr: stdout is the JSON-RPC transport under --mcp-stdio.
+    eprintln!("[audio] backend: live");
+    1
 }
 
 /// Play a one-shot synthesized SFX blip on `bus` at `volume`. Returns its handle.
 #[op2(fast)]
-pub fn op_audio_play(state: &mut OpState, freq: f32, secs: f32, bus: u32, volume: f32) -> u32 {
+pub fn op_audio_play(
+    state: &mut OpState,
+    freq: f32,
+    secs: f32,
+    bus: u32,
+    volume: f32,
+) -> Result<u32, JsErrorBox> {
+    validate_bus(bus).map_err(audio_arg_error)?;
+    validate_sfx_params(freq, secs, volume).map_err(audio_arg_error)?;
     let Some(h) = state.try_borrow_mut::<AudioHandle>() else {
-        return 0;
+        return Ok(0);
     };
     let id = h.alloc();
     h.send(AudioCmd::PlaySfx {
@@ -647,14 +1076,16 @@ pub fn op_audio_play(state: &mut OpState, freq: f32, secs: f32, bus: u32, volume
         bus: bus as usize,
         volume,
     });
-    id
+    Ok(id)
 }
 
 /// Start a looping synthesized ambience bed on `bus` at `volume`. Returns its handle.
 #[op2(fast)]
-pub fn op_audio_ambient(state: &mut OpState, bus: u32, volume: f32) -> u32 {
+pub fn op_audio_ambient(state: &mut OpState, bus: u32, volume: f32) -> Result<u32, JsErrorBox> {
+    validate_bus(bus).map_err(audio_arg_error)?;
+    validate_gain(volume).map_err(audio_arg_error)?;
     let Some(h) = state.try_borrow_mut::<AudioHandle>() else {
-        return 0;
+        return Ok(0);
     };
     let id = h.alloc();
     h.send(AudioCmd::PlayAmbience {
@@ -662,7 +1093,7 @@ pub fn op_audio_ambient(state: &mut OpState, bus: u32, volume: f32) -> u32 {
         bus: bus as usize,
         volume,
     });
-    id
+    Ok(id)
 }
 
 /// Play a one-shot positional SFX blip emitted at world `(ex,ey,ez)`. Returns its handle.
@@ -677,9 +1108,12 @@ pub fn op_audio_play_spatial(
     ez: f32,
     bus: u32,
     volume: f32,
-) -> u32 {
+) -> Result<u32, JsErrorBox> {
+    validate_bus(bus).map_err(audio_arg_error)?;
+    validate_sfx_params(freq, secs, volume).map_err(audio_arg_error)?;
+    validate_position([ex, ey, ez]).map_err(audio_arg_error)?;
     let Some(h) = state.try_borrow_mut::<AudioHandle>() else {
-        return 0;
+        return Ok(0);
     };
     let id = h.alloc();
     h.send(AudioCmd::PlaySpatial {
@@ -690,7 +1124,7 @@ pub fn op_audio_play_spatial(
         bus: bus as usize,
         volume,
     });
-    id
+    Ok(id)
 }
 
 /// Speak a line at world `(ex,ey,ez)` on the voice bus — FIRE-AND-FORGET. Returns
@@ -705,9 +1139,12 @@ pub fn op_audio_speak(
     ez: f32,
     volume: f32,
     pitch: u32,
-) -> u32 {
+) -> Result<u32, JsErrorBox> {
+    validate_tts_text(&text).map_err(audio_arg_error)?;
+    validate_position([ex, ey, ez]).map_err(audio_arg_error)?;
+    validate_gain(volume).map_err(audio_arg_error)?;
     let Some(h) = state.try_borrow_mut::<AudioHandle>() else {
-        return 0;
+        return Ok(0);
     };
     let id = h.alloc();
     h.send(AudioCmd::Speak {
@@ -717,7 +1154,7 @@ pub fn op_audio_speak(
         volume,
         pitch: pitch.min(99) as u8,
     });
-    id
+    Ok(id)
 }
 
 /// Play an arbitrary in-memory PCM buffer (mono/stereo f32) on `bus`, optionally
@@ -732,9 +1169,14 @@ pub fn op_audio_play_buffer(
     bus: u32,
     volume: f32,
     looping: bool,
-) -> u32 {
+) -> Result<u32, JsErrorBox> {
+    validate_bus(bus).map_err(audio_arg_error)?;
+    validate_pcm_params(data.len(), sample_rate, channels, volume).map_err(audio_arg_error)?;
+    if data.iter().any(|sample| !sample.is_finite()) {
+        return Err(JsErrorBox::generic("audio buffer samples must be finite"));
+    }
     let Some(h) = state.try_borrow_mut::<AudioHandle>() else {
-        return 0;
+        return Ok(0);
     };
     let id = h.alloc();
     h.send(AudioCmd::PlayBuffer {
@@ -746,15 +1188,23 @@ pub fn op_audio_play_buffer(
         volume,
         looping,
     });
-    id
+    Ok(id)
 }
 
 /// Move a positional sound's emitter (e.g. follow an entity each frame).
 #[op2(fast)]
-pub fn op_audio_set_emitter(state: &mut OpState, id: u32, x: f32, y: f32, z: f32) {
+pub fn op_audio_set_emitter(
+    state: &mut OpState,
+    id: u32,
+    x: f32,
+    y: f32,
+    z: f32,
+) -> Result<(), JsErrorBox> {
+    validate_position([x, y, z]).map_err(audio_arg_error)?;
     if let Some(h) = state.try_borrow::<AudioHandle>() {
         h.send(AudioCmd::SetEmitter { id, pos: [x, y, z] });
     }
+    Ok(())
 }
 
 /// Set the listener's two ear positions (JS derives them from the camera each frame).
@@ -767,21 +1217,26 @@ pub fn op_audio_set_listener(
     rx: f32,
     ry: f32,
     rz: f32,
-) {
+) -> Result<(), JsErrorBox> {
+    validate_position([lx, ly, lz]).map_err(audio_arg_error)?;
+    validate_position([rx, ry, rz]).map_err(audio_arg_error)?;
     if let Some(h) = state.try_borrow::<AudioHandle>() {
         h.send(AudioCmd::SetListener {
             left: [lx, ly, lz],
             right: [rx, ry, rz],
         });
     }
+    Ok(())
 }
 
 /// Set one sound's base volume (used by the JS max-distance cutoff + general gain).
 #[op2(fast)]
-pub fn op_audio_set_volume(state: &mut OpState, id: u32, volume: f32) {
+pub fn op_audio_set_volume(state: &mut OpState, id: u32, volume: f32) -> Result<(), JsErrorBox> {
+    validate_gain(volume).map_err(audio_arg_error)?;
     if let Some(h) = state.try_borrow::<AudioHandle>() {
         h.send(AudioCmd::SetVolume { id, volume });
     }
+    Ok(())
 }
 
 /// Stop one sound by handle.
@@ -802,13 +1257,20 @@ pub fn op_audio_stop_all(state: &mut OpState) {
 
 /// Set a bus volume (0=master, 1=sfx, 2=ambience, 3=voice); re-gains live sounds.
 #[op2(fast)]
-pub fn op_audio_set_bus_volume(state: &mut OpState, bus: u32, volume: f32) {
+pub fn op_audio_set_bus_volume(
+    state: &mut OpState,
+    bus: u32,
+    volume: f32,
+) -> Result<(), JsErrorBox> {
+    validate_bus(bus).map_err(audio_arg_error)?;
+    validate_gain(volume).map_err(audio_arg_error)?;
     if let Some(h) = state.try_borrow::<AudioHandle>() {
         h.send(AudioCmd::SetBusVolume {
             bus: bus as usize,
             volume,
         });
     }
+    Ok(())
 }
 
 extension!(
@@ -828,3 +1290,236 @@ extension!(
         op_audio_set_bus_volume,
     ],
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn espeak_text_is_after_an_option_terminator() {
+        let hostile = "-w /home/user/.bashrc";
+        let cmd = espeak_command(std::path::Path::new("/tmp/output.wav"), hostile, 42);
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args.last().map(String::as_str), Some(hostile));
+        assert_eq!(
+            args.get(args.len() - 2).map(String::as_str),
+            Some("--"),
+            "agent text must be separated from GNU getopt parsing: {args:?}"
+        );
+    }
+
+    #[test]
+    fn startup_timeout_degrades_without_joining_the_wedged_worker() {
+        let (raw_tx, rx) = mpsc::sync_channel::<AudioCmd>(1);
+        let tx = Arc::new(raw_tx);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker_shutdown = Arc::clone(&shutdown);
+        let (ready_tx, ready_rx) = mpsc::channel::<bool>();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        let (finished_tx, finished_rx) = mpsc::channel::<()>();
+        let handle = thread::spawn(move || {
+            // Model a backend discovery call that outlives the engine's wait.
+            thread::sleep(Duration::from_millis(250));
+            let _ = ready_tx.send(true);
+            assert!(worker_shutdown.load(Ordering::Acquire));
+            assert!(matches!(
+                rx.try_recv(),
+                Err(mpsc::TryRecvError::Disconnected)
+            ));
+            let _ = done_tx.send(());
+            let _ = finished_tx.send(());
+        });
+
+        let started = Instant::now();
+        let live = await_audio_startup(
+            ready_rx,
+            Duration::from_millis(10),
+            tx,
+            shutdown,
+            handle,
+            done_rx,
+        );
+        assert!(live.is_none());
+        assert!(
+            started.elapsed() < Duration::from_millis(150),
+            "timeout path joined the still-running discovery thread"
+        );
+        finished_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("detached discovery thread observed shutdown and exited");
+    }
+
+    #[test]
+    fn shutdown_ack_timeout_detaches_instead_of_joining() {
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        let (finished_tx, finished_rx) = mpsc::channel::<()>();
+        let join = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(250));
+            let _ = done_tx.send(());
+            let _ = finished_tx.send(());
+        });
+
+        let started = Instant::now();
+        assert!(!finish_audio_thread(
+            join,
+            done_rx,
+            Duration::from_millis(10)
+        ));
+        assert!(
+            started.elapsed() < Duration::from_millis(150),
+            "shutdown acknowledgement timeout joined the wedged worker"
+        );
+        finished_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("detached teardown fixture exited");
+    }
+
+    #[test]
+    fn audio_init_is_idempotent_for_an_existing_backend() {
+        let mut state = OpState::new(None);
+        let mut handle = null_audio_handle();
+        handle.next_id = 17;
+        state.put(handle);
+        assert_eq!(audio_init_impl(&mut state), 0);
+        assert_eq!(state.borrow::<AudioHandle>().next_id, 17);
+    }
+
+    /// A full bounded channel must DROP further sends (not block the V8 thread, not
+    /// grow memory), and draining must release the backpressure.
+    #[test]
+    fn bounded_channel_drops_when_full_without_blocking() {
+        let (tx, rx) = mpsc::sync_channel::<AudioCmd>(2);
+        let h = AudioHandle {
+            tx: Some(Arc::new(tx)),
+            join: None,
+            done: None,
+            shutdown: None,
+            dropped: AtomicU64::new(0),
+            next_id: 0,
+        };
+        // Fill the capacity (2) — these buffer successfully.
+        h.send(AudioCmd::StopAll);
+        h.send(AudioCmd::StopAll);
+        // Now full: further sends must be dropped (returns immediately, no block)
+        // and bump the dropped counter — never queued.
+        h.send(AudioCmd::StopAll);
+        h.send(AudioCmd::StopAll);
+        assert_eq!(h.dropped.load(Ordering::Relaxed), 2);
+        // Drain one; a subsequent send succeeds again (backpressure released).
+        assert!(matches!(rx.try_recv(), Ok(AudioCmd::StopAll)));
+        h.send(AudioCmd::StopAll);
+        assert_eq!(h.dropped.load(Ordering::Relaxed), 2);
+    }
+
+    /// The receive loop (`for cmd in rx`) must terminate once every sender drops.
+    /// The audio thread holds only a `Weak` for the TTS-back path, so it never keeps
+    /// the loop alive; a transient worker (an upgraded sender) does, but only until
+    /// it finishes.
+    #[test]
+    fn receive_loop_terminates_when_senders_drop() {
+        let (tx, rx) = mpsc::sync_channel::<AudioCmd>(AUDIO_CMD_CAPACITY);
+        let tx = Arc::new(tx);
+        let back = Arc::downgrade(&tx); // what the audio thread holds
+                                        // A consumer mirroring run_audio's `for cmd in rx { .. }` loop.
+        let consumer = thread::spawn(move || {
+            let mut n = 0usize;
+            for _cmd in rx {
+                n += 1;
+            }
+            n
+        });
+        // A transient TTS worker upgrades the weak sender and delivers one line.
+        let worker_tx = back.upgrade().expect("sender alive");
+        worker_tx.try_send(AudioCmd::StopAll).expect("buffered");
+        // JS-side drops its (strong) sender: the loop must NOT end yet, because the
+        // worker still holds a live clone.
+        drop(tx);
+        assert!(back.upgrade().is_some());
+        // Worker finishes: the last sender drops, so the weak can no longer upgrade
+        // and the receive loop terminates.
+        drop(worker_tx);
+        assert!(back.upgrade().is_none());
+        assert_eq!(consumer.join().expect("consumer joined"), 1);
+    }
+
+    #[test]
+    fn independent_shutdown_does_not_wait_for_retained_sender() {
+        let (raw_tx, rx) = mpsc::sync_channel::<AudioCmd>(1);
+        let tx = Arc::new(raw_tx);
+        tx.try_send(AudioCmd::StopAll).expect("fill channel");
+        let retained_worker_sender = Arc::clone(&tx);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let thread_shutdown = Arc::clone(&shutdown);
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+        let join = thread::spawn(move || {
+            while !thread_shutdown.load(Ordering::Acquire) {
+                match rx.recv_timeout(AUDIO_SHUTDOWN_POLL) {
+                    Ok(_) | Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            }
+            let _ = done_tx.send(());
+        });
+        let started = Instant::now();
+        drop(AudioHandle {
+            tx: Some(tx),
+            join: Some(join),
+            done: Some(done_rx),
+            shutdown: Some(shutdown),
+            dropped: AtomicU64::new(0),
+            next_id: 0,
+        });
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(retained_worker_sender);
+    }
+
+    #[test]
+    fn cancelled_child_is_killed_promptly() {
+        let mut child = Command::new("sh")
+            .args(["-c", "sleep 5"])
+            .spawn()
+            .expect("spawn cancellation fixture");
+        let cancelled = AtomicBool::new(true);
+        let started = Instant::now();
+        assert!(wait_child(&mut child, Duration::from_secs(5), &cancelled).is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn synth_sine_rejects_nonfinite_and_huge_inputs() {
+        assert!(synth_sine(440.0, 0.25).is_ok());
+        assert!(synth_sine(f32::NAN, 0.25).is_err());
+        assert!(synth_sine(440.0, f32::INFINITY).is_err());
+        assert!(synth_sine(440.0, MAX_SFX_SECONDS + 0.001).is_err());
+    }
+
+    #[test]
+    fn native_audio_param_guards_bound_buffers_and_coordinates() {
+        assert!(validate_sfx_params(440.0, MAX_SFX_SECONDS, 1.0).is_ok());
+        assert!(validate_sfx_params(440.0, -0.1, 1.0).is_err());
+        assert!(validate_sfx_params(5.0, 1.0, 1.0).is_err());
+        assert!(validate_position([0.0, 1.0, 2.0]).is_ok());
+        assert!(validate_position([0.0, f32::NAN, 2.0]).is_err());
+        assert!(validate_pcm_params(MAX_PCM_SAMPLES, SAMPLE_RATE, 2, 1.0).is_ok());
+        assert!(validate_pcm_params(MAX_PCM_SAMPLES + 1, SAMPLE_RATE, 2, 1.0).is_err());
+        assert!(validate_pcm_params(128, 0, 2, 1.0).is_err());
+        assert!(validate_pcm_params(128, SAMPLE_RATE, 0, 1.0).is_err());
+    }
+
+    #[test]
+    fn native_audio_tts_guards_bound_text_and_decoded_audio() {
+        assert!(validate_tts_text(&"x".repeat(MAX_TTS_TEXT_BYTES)).is_ok());
+        assert!(validate_tts_text(&"x".repeat(MAX_TTS_TEXT_BYTES + 1)).is_err());
+
+        let channels = NonZeroU16::new(2).unwrap();
+        assert!(validate_decoded_tts(MAX_TTS_DECODED_SAMPLES, SAMPLE_RATE, channels, 1.0).is_ok());
+        assert!(
+            validate_decoded_tts(MAX_TTS_DECODED_SAMPLES + 1, SAMPLE_RATE, channels, 1.0).is_err()
+        );
+        assert!(validate_decoded_tts(128, 192_001, channels, 1.0).is_err());
+        assert!(validate_decoded_tts(128, SAMPLE_RATE, channels, MAX_GAIN + 0.1).is_err());
+    }
+}

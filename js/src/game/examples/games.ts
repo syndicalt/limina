@@ -10,6 +10,8 @@ import { RELIC_SPRINT } from "./relic_sprint.gds.ts";
 import { buildRelicSprintGame } from "./relic_sprint_game.ts";
 import { EASTERN_WATCH } from "./eastern_watch.gds.ts";
 import { buildEasternWatchGame } from "./eastern_watch_game.ts";
+import { BEACON_RUN } from "./beacon_run.gds.ts";
+import { buildBeaconRunGame } from "./beacon_run_game.ts";
 
 export interface RegisteredGame {
   gds: GameDesignSpec;
@@ -26,6 +28,10 @@ export const GAMES: Record<string, RegisteredGame> = {
   "eastern-watch": {
     gds: EASTERN_WATCH,
     build: (ctx) => buildEasternWatchGame(ctx), // capstone-backed; no broken variant
+  },
+  "beacon-run": {
+    gds: BEACON_RUN,
+    build: (ctx, opts) => buildBeaconRunGame(ctx, opts),
   },
 };
 

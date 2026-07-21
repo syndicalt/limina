@@ -13,7 +13,7 @@
 > `skills/system.ts`), the authoritative WebSocket server + `state/subscribe` per-tick deltas
 > (`net/server.ts`), the bounded multi-turn seam (`agents/systems.ts:296` `runBoundedMultiTurn`), the
 > policy engine, and the registry before/after hooks.
-> **Status:** not started.
+> **Status:** COMPLETE — see the Status & outcomes section below and `plans/ROADMAP.md`.
 
 ## What's actually new vs reused
 

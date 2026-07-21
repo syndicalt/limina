@@ -19,6 +19,8 @@
 // throws. No `Deno.*`, no host ops: this is pure three.js, so it is portable.
 
 import * as THREE from "../build/three.bundle.mjs";
+import type { RenderQualityProfile } from "./render/quality.ts";
+import type { HdrEnvironmentLease } from "./render/environment-hdri.ts";
 
 // ---- Preset --------------------------------------------------------------
 
@@ -81,6 +83,9 @@ export interface RenderBaselinePreset {
   hemisphere: { skyColor: number; groundColor: number; intensity: number };
   /** A faint omnidirectional ambient floor so deep shadows never crush to black. */
   ambientIntensity: number;
+  /** Tint of that ambient floor (sRGB hex). Default 0xffffff (neutral) — a cool hex
+   *  (e.g. 0x556072) gives shadows a cool cast for a golden-hour key/cool-fill split. */
+  ambientColor: number;
   /** Procedural sky gradient — drives both the background and the IBL source. */
   sky: SkyGradient;
   /** Build `scene.environment` (IBL). PMREM when a renderer is present, else a
@@ -88,8 +93,14 @@ export interface RenderBaselinePreset {
   environment: boolean;
   /** Linear scale on the environment's contribution to lighting. */
   environmentIntensity: number;
+  /** Yaw, pitch, and roll of the PBR environment in radians. */
+  environmentRotation: [number, number, number];
   /** Paint the sky gradient as `scene.background` (replaces the dark void). */
   background: boolean;
+  /** Linear scale on the visible sky background. */
+  backgroundIntensity: number;
+  /** Yaw, pitch, and roll of the visible sky in radians. */
+  backgroundRotation: [number, number, number];
   /** Distance/height haze + aerial perspective so terrain fades into the horizon. */
   atmosphere: AtmospherePreset;
   /** Default ground plane so bodies are grounded and catch the sun's shadow. */
@@ -109,10 +120,14 @@ export const DEFAULT_RENDER_BASELINE: RenderBaselinePreset = {
   sun: { color: 0xfff4e6, intensity: 3.0, direction: [5, 9, 6] },
   hemisphere: { skyColor: 0x9bb8ff, groundColor: 0x6b5a44, intensity: 0.9 },
   ambientIntensity: 0.15,
+  ambientColor: 0xffffff,
   sky: { top: 0x4a7fc4, horizon: 0xcdd9e6, bottom: 0x2a2620 },
   environment: true,
   environmentIntensity: 1.0,
+  environmentRotation: [0, 0, 0],
   background: true,
+  backgroundIntensity: 1.0,
+  backgroundRotation: [0, 0, 0],
   // GENTLE default haze: a uniform exponential distance fog tinted to the horizon
   // band (color:null ⇒ sky.horizon = 0xcdd9e6). Subtle density so near geometry stays
   // crisp and a comparison/row demo isn't washed out, while distant geometry softly
@@ -148,12 +163,16 @@ export const TROPICAL_BEACH_BASELINE: RenderBaselinePreset = {
   // Tropical sky tint from above, warm dry-sand bounce from below.
   hemisphere: { skyColor: 0x9fd0ff, groundColor: 0xc9a878, intensity: 0.85 },
   ambientIntensity: 0.16,
+  ambientColor: 0xffffff,
   // Deep tropical zenith → warm hazy horizon glow → warm sand bounce. The warm horizon
   // band is what the low-roughness water reflects as a "sunset on the sea" sheen.
   sky: { top: 0x2f7fd6, horizon: 0xffe7c4, bottom: 0x70573f },
   environment: true,
   environmentIntensity: 1.15,
+  environmentRotation: [0, 0, 0],
   background: true,
+  backgroundIntensity: 1.0,
+  backgroundRotation: [0, 0, 0],
   // WARM beach haze: matched to the warm hazy horizon band (color:null ⇒ sky.horizon =
   // 0xffe7c4) so the distant sea + headland melt into the same golden horizon the water
   // reflects — a touch lighter density than the default since the open sea reads best with
@@ -177,7 +196,18 @@ export type RenderBaselineOverride = DeepPartial<RenderBaselinePreset>;
 // shape — the full Engine, the browser playback target, or a test stub.
 
 interface BaselineTarget {
-  scene: { add(o: unknown): void; background?: unknown; environment?: unknown; environmentIntensity?: number; fog?: unknown; fogNode?: unknown };
+  scene: {
+    add(o: unknown): void;
+    remove?(o: unknown): void;
+    background?: unknown;
+    backgroundIntensity?: number;
+    backgroundRotation?: { set(x: number, y: number, z: number): void; clone?(): unknown; copy?(value: unknown): void };
+    environment?: unknown;
+    environmentIntensity?: number;
+    environmentRotation?: { set(x: number, y: number, z: number): void; clone?(): unknown; copy?(value: unknown): void };
+    fog?: unknown;
+    fogNode?: unknown;
+  };
   camera?: {
     position?: { set(x: number, y: number, z: number): void };
     lookAt?(x: number, y: number, z: number): void;
@@ -201,15 +231,28 @@ export interface AppliedRenderBaseline {
   hemisphere?: unknown;
   ambient?: unknown;
   ground?: unknown;
-  environmentMode: "pmrem" | "gradient" | "none";
+  environmentMode: "hdri" | "pmrem" | "gradient" | "none";
   /** WHICH haze model was installed: "exp" (FogExp2 distance fog → scene.fog),
    *  "height" (node height-falloff fog → scene.fogNode), or "none" (disabled). */
   atmosphereMode: "exp" | "height" | "none";
   /** The fog object that was installed (FogExp2) or the fog node (height mode). */
   fog?: unknown;
+  /** Move the directional-shadow frustum with the active camera/orbit focus. */
+  updateShadowFocus(focus: readonly [number, number, number]): void;
+  /** Apply execution-quality shadow limits without changing the authored look. */
+  setQuality(profile: Pick<RenderQualityProfile, "shadowMapSize" | "shadowHalfExtent">): void;
+  /** Release every baseline-owned scene and GPU resource. Idempotent. */
+  dispose(): void;
 }
 
 // ---- Helpers -------------------------------------------------------------
+
+function mergeVec3(
+  base: [number, number, number],
+  over?: [number?, number?, number?],
+): [number, number, number] {
+  return [over?.[0] ?? base[0], over?.[1] ?? base[1], over?.[2] ?? base[2]];
+}
 
 function mergePreset(base: RenderBaselinePreset, over?: RenderBaselineOverride): RenderBaselinePreset {
   if (over === undefined) return { ...base };
@@ -218,20 +261,29 @@ function mergePreset(base: RenderBaselinePreset, over?: RenderBaselineOverride):
     toneMapping: over.toneMapping ?? base.toneMapping,
     exposure: over.exposure ?? base.exposure,
     shadows: over.shadows ?? base.shadows,
-    sun: { ...base.sun, ...over.sun },
+    sun: { ...base.sun, ...over.sun, direction: mergeVec3(base.sun.direction, over.sun?.direction) },
     hemisphere: { ...base.hemisphere, ...over.hemisphere },
     ambientIntensity: over.ambientIntensity ?? base.ambientIntensity,
+    ambientColor: over.ambientColor ?? base.ambientColor,
     sky: { ...base.sky, ...over.sky },
     environment: over.environment ?? base.environment,
     environmentIntensity: over.environmentIntensity ?? base.environmentIntensity,
+    environmentRotation: mergeVec3(base.environmentRotation, over.environmentRotation),
     background: over.background ?? base.background,
+    backgroundIntensity: over.backgroundIntensity ?? base.backgroundIntensity,
+    backgroundRotation: mergeVec3(base.backgroundRotation, over.backgroundRotation),
     atmosphere: {
       ...base.atmosphere,
       ...over.atmosphere,
       height: { ...base.atmosphere.height, ...over.atmosphere?.height },
     },
     ground: { ...base.ground, ...over.ground },
-    camera: { ...base.camera, ...over.camera },
+    camera: {
+      ...base.camera,
+      ...over.camera,
+      position: mergeVec3(base.camera.position, over.camera?.position),
+      target: mergeVec3(base.camera.target, over.camera?.target),
+    },
   };
 }
 
@@ -248,6 +300,18 @@ function buildSkyEquirect(sky: SkyGradient): unknown {
   const width = 16;
   const height = 128;
   const data = new Uint8Array(width * height * 4);
+  writeSkyGradient(data, width, height, sky);
+  const tex = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function writeSkyGradient(data: Uint8Array, width: number, height: number, sky: SkyGradient): void {
   const top = [(sky.top >> 16) & 0xff, (sky.top >> 8) & 0xff, sky.top & 0xff];
   const hor = [(sky.horizon >> 16) & 0xff, (sky.horizon >> 8) & 0xff, sky.horizon & 0xff];
   const bot = [(sky.bottom >> 16) & 0xff, (sky.bottom >> 8) & 0xff, sky.bottom & 0xff];
@@ -266,14 +330,35 @@ function buildSkyEquirect(sky: SkyGradient): unknown {
       data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 255;
     }
   }
-  const tex = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
-  tex.mapping = THREE.EquirectangularReflectionMapping;
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.minFilter = THREE.LinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  tex.generateMipmaps = false;
-  tex.needsUpdate = true;
-  return tex;
+}
+
+export interface RenderBaselineBackground {
+  readonly texture: unknown;
+  update(sky: SkyGradient): void;
+  dispose(): void;
+}
+
+/** One mutable equirectangular background per renderer host avoids unbounded
+ * Three.js conversion targets when Edit worlds are repeatedly replaced. */
+export function createRenderBaselineBackground(): RenderBaselineBackground {
+  const width = 16;
+  const height = 128;
+  const texture = buildSkyEquirect(DEFAULT_RENDER_BASELINE.sky) as THREE.DataTexture;
+  texture.userData.liminaLifetime = "host";
+  let disposed = false;
+  return {
+    texture,
+    update(sky): void {
+      if (disposed) throw new Error("render baseline background is disposed");
+      writeSkyGradient(texture.image.data as Uint8Array, width, height, sky);
+      texture.needsUpdate = true;
+    },
+    dispose(): void {
+      if (disposed) return;
+      disposed = true;
+      texture.dispose();
+    },
+  };
 }
 
 function rendererIsUsable(r: BaselineTarget["renderer"]): boolean {
@@ -289,11 +374,33 @@ function rendererIsUsable(r: BaselineTarget["renderer"]): boolean {
 export function applyRenderBaseline(
   target: BaselineTarget,
   override?: RenderBaselineOverride,
+  sharedBackground?: RenderBaselineBackground,
+  hdrEnvironment?: HdrEnvironmentLease,
 ): AppliedRenderBaseline {
   const preset = mergePreset(DEFAULT_RENDER_BASELINE, override);
-  if (!preset.enabled) return { preset, environmentMode: "none", atmosphereMode: "none" };
+  if (!preset.enabled) {
+    hdrEnvironment?.release();
+    return {
+      preset,
+      environmentMode: "none",
+      atmosphereMode: "none",
+      updateShadowFocus(): void {},
+      setQuality(): void {},
+      dispose(): void {},
+    };
+  }
 
   const { scene, renderer, camera } = target;
+  const previousScene = {
+    background: scene.background,
+    backgroundIntensity: scene.backgroundIntensity,
+    backgroundRotation: scene.backgroundRotation?.clone?.(),
+    environment: scene.environment,
+    environmentIntensity: scene.environmentIntensity,
+    environmentRotation: scene.environmentRotation?.clone?.(),
+    fog: scene.fog,
+    fogNode: scene.fogNode,
+  };
 
   // 1. Renderer: ACES tonemapping + exposure + soft shadows (overridable).
   if (renderer !== undefined) {
@@ -311,18 +418,22 @@ export function applyRenderBaseline(
   const [sx, sy, sz] = preset.sun.direction;
   const sun = new THREE.DirectionalLight(preset.sun.color, preset.sun.intensity);
   sun.position.set(sx, sy, sz);
+  const sunDistance = Math.max(1, sun.position.length());
+  const sunDirection = sun.position.clone().normalize();
+  let shadowHalfExtent = Math.max(10, preset.ground.size * 0.35);
+  let shadowMapSize = 2048;
   if (preset.shadows) {
     sun.castShadow = true;
     // A tight ortho frustum around the default ground keeps shadow texels dense.
     const cam = sun.shadow.camera as { left: number; right: number; top: number; bottom: number; near: number; far: number };
-    const half = Math.max(10, preset.ground.size * 0.35);
-    cam.left = -half; cam.right = half; cam.top = half; cam.bottom = -half;
+    cam.left = -shadowHalfExtent; cam.right = shadowHalfExtent; cam.top = shadowHalfExtent; cam.bottom = -shadowHalfExtent;
     cam.near = 0.5; cam.far = 200;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.mapSize.set(shadowMapSize, shadowMapSize);
     sun.shadow.bias = -0.0005;
     sun.shadow.normalBias = 0.02;
   }
   scene.add(sun);
+  scene.add(sun.target);
 
   const hemi = new THREE.HemisphereLight(
     preset.hemisphere.skyColor,
@@ -333,39 +444,59 @@ export function applyRenderBaseline(
 
   let ambient: unknown;
   if (preset.ambientIntensity > 0) {
-    ambient = new THREE.AmbientLight(0xffffff, preset.ambientIntensity);
+    ambient = new THREE.AmbientLight(preset.ambientColor, preset.ambientIntensity);
     scene.add(ambient);
   }
 
   // 3. Sky gradient → background + IBL environment.
   const skyTex = buildSkyEquirect(preset.sky);
+  let backgroundTex: unknown;
   if (preset.background && "background" in scene) {
-    scene.background = skyTex;
+    if (hdrEnvironment !== undefined) {
+      backgroundTex = hdrEnvironment.background;
+    } else if (sharedBackground !== undefined) {
+      sharedBackground.update(preset.sky);
+      backgroundTex = sharedBackground.texture;
+    } else {
+      backgroundTex = skyTex;
+    }
+    scene.background = backgroundTex;
+    if ("backgroundIntensity" in scene) scene.backgroundIntensity = preset.backgroundIntensity;
+    scene.backgroundRotation?.set(...preset.backgroundRotation);
   }
 
   let environmentMode: AppliedRenderBaseline["environmentMode"] = "none";
+  let environmentTexture: unknown;
+  let pmremTarget: { texture?: unknown; dispose?(): void } | undefined;
   if (preset.environment) {
-    let envTexture: unknown = skyTex; // fallback: the gradient itself
-    if (rendererIsUsable(renderer)) {
+    let envTexture: unknown = hdrEnvironment?.environment ?? skyTex; // fallback: the gradient itself
+    if (hdrEnvironment !== undefined) {
+      environmentMode = "hdri";
+    } else if (rendererIsUsable(renderer)) {
       // PMREM needs a live renderer/GPU. Try it; on ANY failure fall back to
       // the cheap gradient (never ship a broken environment, never throw).
+      let pmrem: { fromEquirectangular(texture: unknown): unknown; dispose(): void } | undefined;
       try {
-        const pmrem = new THREE.PMREMGenerator(renderer);
-        const rt = pmrem.fromEquirectangular(skyTex as never);
-        envTexture = (rt as { texture: unknown }).texture;
-        pmrem.dispose();
+        pmrem = new THREE.PMREMGenerator(renderer as never);
+        const rt = pmrem.fromEquirectangular(skyTex) as { texture: unknown; dispose?(): void };
+        pmremTarget = rt;
+        envTexture = rt.texture;
         environmentMode = "pmrem";
       } catch {
         envTexture = skyTex;
         environmentMode = "gradient";
+      } finally {
+        pmrem?.dispose();
       }
     } else {
       environmentMode = "gradient";
     }
+    environmentTexture = envTexture;
     scene.environment = envTexture;
     if ("environmentIntensity" in scene) {
       scene.environmentIntensity = preset.environmentIntensity;
     }
+    scene.environmentRotation?.set(...preset.environmentRotation);
   }
 
   // 3b. ATMOSPHERE — distance/height haze so terrain dissolves into the horizon.
@@ -426,5 +557,107 @@ export function applyRenderBaseline(
     camera.lookAt?.(tx, ty, tz);
   }
 
-  return { preset, sun, hemisphere: hemi, ambient, ground, environmentMode, atmosphereMode, fog };
+  const shadowRight = new THREE.Vector3();
+  const shadowUp = new THREE.Vector3();
+  const shadowFocus = new THREE.Vector3();
+  const worldUp = new THREE.Vector3(0, 1, 0);
+  shadowRight.crossVectors(worldUp, sunDirection);
+  if (shadowRight.lengthSq() < 1e-10) shadowRight.set(1, 0, 0);
+  else shadowRight.normalize();
+  shadowUp.crossVectors(sunDirection, shadowRight).normalize();
+
+  const updateShadowFocus = (focus: readonly [number, number, number]): void => {
+    if (!preset.shadows) return;
+    if (focus.length !== 3 || focus.some((value) => !Number.isFinite(value))) {
+      throw new TypeError("shadow focus must contain three finite world coordinates");
+    }
+    shadowFocus.set(focus[0], focus[1], focus[2]);
+    const texel = (2 * shadowHalfExtent) / shadowMapSize;
+    const right = Math.round(shadowFocus.dot(shadowRight) / texel) * texel;
+    const up = Math.round(shadowFocus.dot(shadowUp) / texel) * texel;
+    const depth = shadowFocus.dot(sunDirection);
+    shadowFocus.copy(shadowRight).multiplyScalar(right)
+      .addScaledVector(shadowUp, up)
+      .addScaledVector(sunDirection, depth);
+    sun.target.position.copy(shadowFocus);
+    sun.position.copy(shadowFocus).addScaledVector(sunDirection, sunDistance);
+    sun.target.updateMatrixWorld();
+    sun.updateMatrixWorld();
+  };
+
+  const setQuality = (profile: Pick<RenderQualityProfile, "shadowMapSize" | "shadowHalfExtent">): void => {
+    if (!preset.shadows) return;
+    const nextMapSize = profile?.shadowMapSize;
+    const nextHalfExtent = profile?.shadowHalfExtent;
+    if (!Number.isSafeInteger(nextMapSize) || nextMapSize < 256 || nextMapSize > 8192 || (nextMapSize & (nextMapSize - 1)) !== 0) {
+      throw new RangeError("shadowMapSize must be a power-of-two integer in [256, 8192]");
+    }
+    if (typeof nextHalfExtent !== "number" || !Number.isFinite(nextHalfExtent) || nextHalfExtent < 8 || nextHalfExtent > 2048) {
+      throw new RangeError("shadowHalfExtent must be finite and in [8, 2048]");
+    }
+    const mapChanged = shadowMapSize !== nextMapSize;
+    shadowMapSize = nextMapSize;
+    shadowHalfExtent = nextHalfExtent;
+    const shadowCamera = sun.shadow.camera as { left: number; right: number; top: number; bottom: number; updateProjectionMatrix?(): void };
+    shadowCamera.left = -shadowHalfExtent;
+    shadowCamera.right = shadowHalfExtent;
+    shadowCamera.top = shadowHalfExtent;
+    shadowCamera.bottom = -shadowHalfExtent;
+    shadowCamera.updateProjectionMatrix?.();
+    sun.shadow.mapSize.set(shadowMapSize, shadowMapSize);
+    if (mapChanged && sun.shadow.map !== null) {
+      try { sun.shadow.map?.dispose(); }
+      finally { sun.shadow.map = null; }
+    }
+  };
+
+  let disposed = false;
+  const dispose = (): void => {
+    if (disposed) return;
+    disposed = true;
+    const cleanup = (label: string, operation: () => void): void => {
+      try { operation(); }
+      catch (error) { console.warn(`render baseline ${label} cleanup failed`, error); }
+    };
+    if (ground !== undefined) cleanup("ground scene", () => scene.remove?.(ground));
+    if (ambient !== undefined) cleanup("ambient scene", () => scene.remove?.(ambient));
+    cleanup("hemisphere scene", () => scene.remove?.(hemi));
+    cleanup("sun target scene", () => scene.remove?.(sun.target));
+    cleanup("sun scene", () => scene.remove?.(sun));
+    const ownedGround = ground as { geometry?: { dispose?(): void }; material?: { dispose?(): void } } | undefined;
+    cleanup("ground geometry", () => ownedGround?.geometry?.dispose?.());
+    cleanup("ground material", () => ownedGround?.material?.dispose?.());
+    cleanup("sun", () => sun.dispose());
+    cleanup("environment", () => pmremTarget?.dispose?.());
+    cleanup("sky", () => (skyTex as { dispose?(): void }).dispose?.());
+    cleanup("HDR lease", () => hdrEnvironment?.release());
+    if (scene.background === backgroundTex) scene.background = previousScene.background;
+    if (scene.background === previousScene.background) {
+      if ("backgroundIntensity" in scene) scene.backgroundIntensity = previousScene.backgroundIntensity;
+      if (previousScene.backgroundRotation !== undefined) scene.backgroundRotation?.copy?.(previousScene.backgroundRotation);
+    }
+    if (preset.environment && scene.environment === environmentTexture) {
+      scene.environment = previousScene.environment;
+      if ("environmentIntensity" in scene) scene.environmentIntensity = previousScene.environmentIntensity;
+      if (previousScene.environmentRotation !== undefined) scene.environmentRotation?.copy?.(previousScene.environmentRotation);
+    }
+    if (atmosphereMode === "height" && scene.fogNode === fog) scene.fogNode = previousScene.fogNode;
+    if (atmosphereMode === "height" && scene.fog === null) scene.fog = previousScene.fog;
+    if (atmosphereMode === "exp" && scene.fog === fog) scene.fog = previousScene.fog;
+    if (atmosphereMode === "exp" && scene.fogNode === null) scene.fogNode = previousScene.fogNode;
+  };
+
+  return {
+    preset,
+    sun,
+    hemisphere: hemi,
+    ambient,
+    ground,
+    environmentMode,
+    atmosphereMode,
+    fog,
+    updateShadowFocus,
+    setQuality,
+    dispose,
+  };
 }

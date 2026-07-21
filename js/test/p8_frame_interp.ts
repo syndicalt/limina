@@ -8,6 +8,8 @@ import {
   type TransformSnapshot,
   type TransformStore,
 } from "../src/browser/frame-interpolator.ts";
+import { SnapshotRing } from "../src/browser/live-runtime.ts";
+import { SharedTransformStorage } from "../src/browser/sab-transforms.ts";
 
 declare const Deno: { core: { ops: { op_log(msg: string): void } } };
 const log = Deno.core.ops.op_log;
@@ -221,4 +223,42 @@ const h = Math.SQRT1_2; // sin/cos(45deg) — 90deg-about-Y quat is (0,h,0,h)
   assert(near(out.Position.x[0], 4), `buffer s1->s2 mid ${out.Position.x[0]}`);
 }
 
-log("p8_frame_interp OK: position lerp + shortest-path nlerp (unit, no-NaN) — exact endpoints, clamp, spawn/despawn, deterministic, double-buffered");
+// ---- SnapshotRing structural add: new eids join freeze/interpolate set --------
+{
+  const live = new SharedTransformStorage();
+  const scaleSrc = new SharedTransformStorage();
+  const render = new SharedTransformStorage();
+  live.writePosition(2, 10, 20, 30);
+  live.writeRotation(2, 0, 0, 0, 1);
+  scaleSrc.writeScale(2, 3, 4, 5);
+
+  const ring = new SnapshotRing([1], scaleSrc);
+  ring.addEids([2, 2, 1]);
+  assert(ring.presentSet.has(1) && ring.presentSet.has(2), "SnapshotRing.addEids must retain old eids and add the new eid");
+
+  const fi = new FrameInterpolator(render);
+  fi.push(ring.freeze(live));
+  fi.interpolate(0.5, ring.presentSet);
+  assert(Object.is(render.Position.x[2], 10) && Object.is(render.Position.y[2], 20) && Object.is(render.Position.z[2], 30),
+    `SnapshotRing.addEids did not freeze new eid position (${render.Position.x[2]},${render.Position.y[2]},${render.Position.z[2]})`);
+  assert(Object.is(render.Scale.x[2], 3) && Object.is(render.Scale.y[2], 4) && Object.is(render.Scale.z[2], 5),
+    `SnapshotRing.addEids did not copy authored scale (${render.Scale.x[2]},${render.Scale.y[2]},${render.Scale.z[2]})`);
+
+  // A writer stalled midway through a multi-entity publication must never leak
+  // that partial set. Bounded retry returns the previous coherent snapshot.
+  live.beginPublication();
+  live.writePosition(2, 99, 98, 97);
+  const retained = ring.freeze(live, 3);
+  assert(!ring.lastFreezeWasConsistent, "SnapshotRing accepted an odd transform publication");
+  fi.push(retained);
+  fi.interpolate(1, ring.presentSet);
+  assert(Object.is(render.Position.x[2], 10) && Object.is(render.Position.y[2], 20) && Object.is(render.Position.z[2], 30),
+    "SnapshotRing did not preserve its last-good transform after bounded retry");
+  live.endPublication();
+  fi.push(ring.freeze(live));
+  fi.interpolate(1, ring.presentSet);
+  assert(ring.lastFreezeWasConsistent && Object.is(render.Position.x[2], 99),
+    "SnapshotRing did not accept the completed publication");
+}
+
+log("p8_frame_interp OK: position lerp + shortest-path nlerp (unit, no-NaN) — exact endpoints, clamp, spawn/despawn, deterministic, double-buffered; SnapshotRing accepts structural eids");

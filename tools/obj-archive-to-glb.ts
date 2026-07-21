@@ -79,9 +79,23 @@ function resolveRoles(arc: ParsedArchive): void {
   }
 }
 
+// Cap on TOTAL uncompressed archive size — a zip-bomb guard so a small hostile archive can't inflate to
+// gigabytes in memory. Best-effort: the cap is checked against each entry's declared uncompressed size
+// (fflate's filter runs BEFORE decompression), which is sufficient for well-formed archives.
+const MAX_UNZIP_BYTES = 512 * 1024 * 1024;
+
 /** Unzip the archive in-memory and resolve the OBJ + MTL + PBR-PNG roles. */
 function parseArchive(zipBytes: Uint8Array): ParsedArchive {
-  const files = unzipSync(zipBytes) as Record<string, Uint8Array>;
+  let totalUncompressed = 0;
+  const files = unzipSync(zipBytes, {
+    filter: (f) => {
+      totalUncompressed += f.originalSize;
+      if (totalUncompressed > MAX_UNZIP_BYTES) {
+        throw new Error(`objArchiveToGlb: archive too large uncompressed (> ${MAX_UNZIP_BYTES} bytes) — refusing (zip-bomb guard).`);
+      }
+      return true;
+    },
+  }) as Record<string, Uint8Array>;
   let objName: string | undefined;
   let mtlName: string | undefined;
   for (const k of Object.keys(files)) {
@@ -181,10 +195,19 @@ export async function objArchiveToGlb(zipBytes: Uint8Array): Promise<Uint8Array>
   // obj2gltf reads texture files referenced by the MTL off disk, so stage the archive in a temp dir.
   const dir = mkdtempSync(join(tmpdir(), "limina-objglb-"));
   try {
+    // Flatten any in-zip subdirs to basenames so the MTL's relative refs resolve in one dir. Two files
+    // that collapse to the SAME basename (different subdirs) would silently overwrite each other — warn
+    // so a wrong-texture outcome isn't invisible (last-wins is kept to preserve the MTL's flat refs).
+    const stagedBy = new Map<string, string>();
     for (const [name, bytes] of Object.entries(arc.files)) {
-      // Flatten any in-zip subdirs to basenames so the MTL's relative refs resolve in one dir.
       const base = name.split("/").pop()!;
-      if (base) writeFileSync(join(dir, base), bytes);
+      if (!base) continue;
+      const prior = stagedBy.get(base.toLowerCase());
+      if (prior !== undefined && prior !== name) {
+        console.error(`obj-archive-to-glb: WARNING basename collision "${base}" — "${name}" overwrites "${prior}" (last-wins; textures may be wrong).`);
+      }
+      stagedBy.set(base.toLowerCase(), name);
+      writeFileSync(join(dir, base), bytes);
     }
     const objPath = join(dir, arc.objName.split("/").pop()!);
 

@@ -1,0 +1,58 @@
+{
+  "schema": "limina.visual-reference-board/v1",
+  "id": "furniture/hearth-settle/v1",
+  "subjectKind": "furniture",
+  "acquisitionManifest": "art-direction/furniture/hearth-settle-reference-acquisition.json",
+  "sources": [
+    {
+      "id": "commons/oak-settle-17c",
+      "sourceUrl": "https://commons.wikimedia.org/wiki/File:Settle-seventeenth-century.jpg",
+      "imageUrl": "https://upload.wikimedia.org/wikipedia/commons/1/10/Settle-seventeenth-century.jpg",
+      "creator": "Frederick S. Robinson",
+      "license": "Public domain in the United States; first published 1905",
+      "retrievedAt": "2026-07-15T03:19:22.538Z",
+      "localPath": "art-direction/reference-cache/commons/oak-settle-17c.jpg",
+      "sha256": "sha256:91a89c32a2bff28f9482a811f4a445b1ce67042a5dfc3a4e00a7758c040212a0",
+      "bytes": 172827,
+      "roles": [
+        "silhouette",
+        "construction",
+        "joinery",
+        "function"
+      ]
+    },
+    {
+      "id": "met/bench-chest-467989",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/467989",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/md/original/LC-41_190_277.jpg",
+      "creator": "Unknown French maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-15T03:19:25.022Z",
+      "localPath": "art-direction/reference-cache/met/bench-chest-467989.jpg",
+      "sha256": "sha256:8c6fb76bc089c92cccf7171f8b3b75d5a2b5d27bf8e74856febfedecf87d74ee",
+      "bytes": 1300057,
+      "roles": [
+        "silhouette",
+        "construction",
+        "joinery",
+        "material"
+      ]
+    },
+    {
+      "id": "met/high-backed-chair-471833",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/471833",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/cl/original/cdi57-144-1.jpg",
+      "creator": "Unknown French or South Netherlandish maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-15T03:19:26.612Z",
+      "localPath": "art-direction/reference-cache/met/high-backed-chair-471833.jpg",
+      "sha256": "sha256:28f8537c27fab21b858e1eed025012d622f0449e07a467492dc1856a722008de",
+      "bytes": 2461866,
+      "roles": [
+        "silhouette",
+        "construction",
+        "joinery"
+      ]
+    }
+  ]
+}

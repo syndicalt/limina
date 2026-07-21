@@ -140,6 +140,7 @@ ops.op_physics_step(); // build the broad-phase BVH so the first move_character 
 // kinematic body above is unchanged; this is RENDER-ONLY (mesh + AnimationMixer), foot-
 // placed each frame from the controller and crossfading idle/walk/run from input.
 const model = await attachCharacterModel({
+  assetId: "robot.glb",
   world, registry, base, animationManager: core.animation.animationManager,
   position: [spawnX, controller.position[1] - controller.groundOffset, spawnZ],
 });

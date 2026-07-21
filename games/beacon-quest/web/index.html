@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Beacon Quest</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b0d12; overflow: hidden; font-family: system-ui, sans-serif; }
+    #limina-canvas { width: 100vw; height: 100vh; display: block; }
+  </style>
+</head>
+<body>
+  <!-- The custom entry replays + renders the exported quest world with a hero camera. -->
+  <canvas id="limina-canvas" data-world="public/worlds/beacon"></canvas>
+  <div id="status" style="position:fixed;left:8px;bottom:6px;font:12px system-ui;color:#9fb0c0;opacity:.7">starting…</div>
+  <script type="module" src="public/main.js"></script>
+</body>
+</html>

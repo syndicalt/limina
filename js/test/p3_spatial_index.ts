@@ -1,7 +1,7 @@
 // Phase 3 spatial index foundation: indexed scene/perception queries must match
 // brute-force semantics while visiting fewer candidate entities in sparse worlds.
 
-import { ops } from "../src/engine.ts";
+import { installOps, ops, type EngineOps } from "../src/engine.ts";
 import { AgentRegistry } from "../src/agents/agent.ts";
 import { perceptionSystem } from "../src/agents/systems.ts";
 import { createHeadlessContext } from "../src/game/context.ts";
@@ -83,6 +83,17 @@ agents.add({
   sessionId: "ses_p3_spatial",
   llm: { provider: "scripted", model: "", systemPrompt: "observe" },
 });
+// An unsupported host still exposes a callable placeholder to satisfy EngineOps.
+// Capability admission must bypass it wholesale and use the JS oracle; accepting
+// its zero-filled output would silently report a world with no nearby entities.
+const nativeOps = ops;
+let unsupportedBatchCalls = 0;
+const unsupportedOps = Object.create(nativeOps) as EngineOps;
+unsupportedOps.op_ecs_spatial_query_batch = (...args): void => {
+  unsupportedBatchCalls++;
+  nativeOps.op_ecs_spatial_query_batch(...args);
+};
+installOps(unsupportedOps, { ecsSpatialQueryBatch: false });
 perceptionSystem(agents, world, tracer, 1);
 const perception = agents.get("agt_spatial")?.perception;
 assert(perception !== undefined, "perception was not populated");
@@ -96,6 +107,14 @@ assert(
   perception.nearby.map((row) => row.id).join(",") === expectedPerception.map((row) => row.entity).join(","),
   "perception indexed query differs from brute-force distance order",
 );
+assert(expectedPerception.length > 0, "perception fallback fixture has no nearby entities");
+assert(unsupportedBatchCalls === 0, "unsupported host's spatial-batch placeholder was invoked");
+installOps(unsupportedOps, { ecsSpatialQueryBatch: true });
+perceptionSystem(agents, world, tracer, 2);
+assert(unsupportedBatchCalls === 1, "declared native spatial-batch capability did not activate the batch path");
+assert(agents.get("agt_spatial")?.perception?.nearby.map((row) => row.id).join(",") === expectedPerception.map((row) => row.entity).join(","),
+  "declared spatial-batch path diverged from the fallback oracle");
+installOps(nativeOps, { ecsSpatialQueryBatch: true });
 
 const moved = created[120];
 ok(await registry.invoke("three.setTransform", { entity: moved, position: [near[0] + 1, near[1], near[2]] }, builder));

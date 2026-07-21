@@ -354,6 +354,47 @@ export class GameStateManager {
     this.state.state = "running";
     this.state.endedAtTick = undefined;
   }
+
+  /** Deterministic capture of the whole game state (snapshot participant, H2): every Map
+   *  flattened to name-sorted entries, timers/conditions with their full mutable state. */
+  captureSnapshot(): GameStateManagerSnapshot {
+    const byName = <T>(entries: IterableIterator<[string, T]>): [string, T][] =>
+      [...entries].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    return {
+      variables: byName(this.state.variables.entries()).map(([name, value]) => ({ name, value })),
+      flags: byName(this.state.flags.entries()).map(([name, value]) => ({ name, value })),
+      counters: byName(this.state.counters.entries()).map(([name, value]) => ({ name, value })),
+      timers: byName(this.state.timers.entries()).map(([name, t]) => ({ name, ...t })),
+      conditions: byName(this.state.conditions.entries()).map(([name, c]) => ({ name, expression: c.expression, lastValue: c.lastValue, onTrue: c.onTrue })),
+      state: this.state.state,
+      endedAtTick: this.state.endedAtTick,
+    };
+  }
+
+  /** Wholesale replace the game state with a captured snapshot (participant restore). */
+  restoreSnapshot(snap: GameStateManagerSnapshot): void {
+    this.reset();
+    for (const v of snap.variables) this.state.variables.set(v.name, v.value);
+    for (const f of snap.flags) this.state.flags.set(f.name, f.value);
+    for (const c of snap.counters) this.state.counters.set(c.name, c.value);
+    for (const t of snap.timers) {
+      this.state.timers.set(t.name, { remaining: t.remaining, duration: t.duration, paused: t.paused, direction: t.direction, onComplete: t.onComplete, done: t.done });
+    }
+    for (const c of snap.conditions) this.state.conditions.set(c.name, { expression: c.expression, lastValue: c.lastValue, onTrue: c.onTrue });
+    this.state.state = snap.state;
+    this.state.endedAtTick = snap.endedAtTick;
+  }
+}
+
+/** The whole GameStateManager state as the snapshot participant carries it (H2). */
+export interface GameStateManagerSnapshot {
+  variables: { name: string; value: string | number | boolean | Record<string, unknown> }[];
+  flags: { name: string; value: boolean }[];
+  counters: { name: string; value: number }[];
+  timers: ({ name: string } & TimerState)[];
+  conditions: { name: string; expression: string; lastValue: boolean; onTrue?: string }[];
+  state: GameState["state"];
+  endedAtTick?: number;
 }
 
 // ───────────────────────────────────────── SKILLS ─────────────────────────────────────────

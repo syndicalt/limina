@@ -7,5 +7,6 @@ publish = false
 
 [dependencies]
 deno_core.workspace = true
+deno_error.workspace = true
 cpal = "0.17"
 rodio.workspace = true

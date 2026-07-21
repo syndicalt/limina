@@ -1,0 +1,89 @@
+{
+  "schema": "limina.visual-fidelity-candidate-review/v1",
+  "artifact": {
+    "assetId": "qc/internal/temperate-river-leading-line-aaa-grass-v13.png",
+    "sha256": "460423dd45d50a961bda82e978a0a4fb42da07f9ce955e3a0f465ae040f2e797",
+    "byteLength": 2262121,
+    "cameraRoute": "river-leading-line"
+  },
+  "publication": {
+    "manifestHash": "sha256:3728ab6b8a12009e0911ebb55673c18468d5266ab852655f168e66be23e1baaa",
+    "contentClosureHash": "sha256:f0fe936cff9bcad5a50627efce951bc85408887deb5346717eafabec03c0b6c4",
+    "contentStatus": "candidate"
+  },
+  "capture": {
+    "backend": "force-webgl-hardware",
+    "adapterVendor": "Google Inc. (Intel)",
+    "adapterRenderer": "ANGLE (Intel, Mesa Intel(R) Iris(R) Xe Graphics (ADL GT2), OpenGL 4.6)",
+    "nvidiaXidObserved": false
+  },
+  "performanceHardening": {
+    "status": "non-release-browser-evidence",
+    "baseline": {
+      "totalMs": 402072.4,
+      "resourceFetchAndDecodeMs": 7279,
+      "populationMountMs": 390715.4
+    },
+    "optimized": {
+      "totalMs": 45989.9,
+      "resourceFetchAndDecodeMs": 965.8,
+      "populationMountMs": 40942.2,
+      "trialArtifactSha256": "8ccd815d5f5d613e6aa90b33545e88778b387e6c685928467af3048a2e097249",
+      "trialArtifactByteLength": 2258866
+    },
+    "result": {
+      "endToEndSpeedup": 8.7426,
+      "totalReductionPercent": 88.56,
+      "populationMountReductionPercent": 89.52,
+      "sceneIdentity": {
+        "manifestHash": "sha256:3728ab6b8a12009e0911ebb55673c18468d5266ab852655f168e66be23e1baaa",
+        "camera": [14.5, 6.137264251708989, 75.1],
+        "placements": 10865,
+        "canopy": 255,
+        "grassTiles": 59,
+        "grassBlades": 886649
+      },
+      "nvidiaXidObserved": false
+    },
+    "releaseNote": "This proves browser-path construction hardening on Intel hardware. It does not satisfy native-backend or target-hardware release evidence."
+  },
+  "evidence": {
+    "schema": "limina.visual-fidelity-floor/v1",
+    "referenceSetId": "project-gorgon-floor-20260711",
+    "lane": "nature",
+    "captureClass": "production-engine",
+    "nativeBackend": false,
+    "fixedCameraRoute": true,
+    "facets": {
+      "pbrTerrain": true,
+      "terrainMacroDetail": true,
+      "waterDepthAndShore": true,
+      "vegetationDensityAndVariety": true,
+      "atmosphereAndSky": true,
+      "lightingAndShadows": true,
+      "assetProvenance": true,
+      "visualRegression": false,
+      "lifecycle": false,
+      "targetHardwarePerformance": false
+    },
+    "humanReview": {
+      "approved": true,
+      "reviewer": "project-owner"
+    }
+  },
+  "decision": {
+    "status": "human-approved-candidate",
+    "ownerStatement": "That literally looks a billion times better than where we started. Everything looks amazing, even the skybox.",
+    "releasePassed": false,
+    "releaseBlockers": [
+      "native production renderer capture is not yet recorded",
+      "fixed-camera visual regression evidence is not yet recorded",
+      "repeated lifecycle evidence is not yet recorded",
+      "target-hardware startup, hitch, frame-time, and memory evidence is not yet recorded"
+    ],
+    "deferredPolish": [
+      "flow-driven foam maps",
+      "localized river turbulence and eddies"
+    ]
+  }
+}

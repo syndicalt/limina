@@ -10,29 +10,32 @@
 // Prereq: static server on :5173; siege_scene.json present. Run: node editor/test/archetype_render.test.cjs
 
 const fs = require("fs");
-const PWC = fs.readFileSync("/tmp/claude-1000/-home-cheapseatsecon-Projects-Personal-limina/ec66f3aa-28e5-4be6-af39-c803b3c96622/scratchpad/pwc_path.txt", "utf8").trim();
-const CHROME = process.env.CHROME_BIN || `${process.env.HOME}/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome`;
+const { chromeExecutable, loadChromium, requireChromeBinary, skip } = require("./browser-env.cjs");
+const { artifactPath } = require("./artifacts.cjs");
+const CHROME = chromeExecutable();
+const EDITOR_BASE_URL = process.env.EDITOR_BASE_URL || "http://localhost:5173";
 function fail(m) { console.error("FAIL: " + m); process.exit(1); }
 
 (async () => {
-  let chromium;
-  try { ({ chromium } = require(PWC)); } catch { console.log("SKIP: playwright-core not loadable"); process.exit(2); }
-  if (!fs.existsSync(CHROME)) { console.log("SKIP: chromium not found"); process.exit(2); }
+  const loaded = loadChromium();
+  if (!loaded.chromium) skip(loaded.error);
+  const chromium = loaded.chromium;
+  requireChromeBinary(CHROME);
   // Render every archetype scene dump present (siege keep, quest village, …).
   const scenes = [
-    { name: "siege", path: "editor/test/siege_scene.json", shot: "editor/test/archetype_siege.png" },
-    { name: "quest", path: "editor/test/quest_scene.json", shot: "editor/test/archetype_quest.png" },
+    { name: "siege", path: "editor/test/siege_scene.json", shot: artifactPath("archetype_siege.png") },
+    { name: "quest", path: "editor/test/quest_scene.json", shot: artifactPath("archetype_quest.png") },
   ].filter((s) => fs.existsSync(s.path));
   if (scenes.length === 0) { console.log("SKIP: no archetype scene dumps present (run js/test/_dump_*_scene.ts)"); process.exit(2); }
 
   let browser;
   try {
-    browser = await chromium.launch({ executablePath: CHROME, args: ["--no-sandbox", "--disable-dev-shm-usage", "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
+    browser = await chromium.launch({ executablePath: CHROME, args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
   } catch (e) { console.log("SKIP: could not launch chromium (" + e.message + ")"); process.exit(2); }
 
   const page = await (await browser.newContext()).newPage();
   try {
-    const resp = await page.goto("http://localhost:5173/render-harness.html", { waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => null);
+    const resp = await page.goto(`${EDITOR_BASE_URL}/render-harness.html`, { waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => null);
     if (!resp) { console.log("SKIP: harness not served on :5173"); await browser.close(); process.exit(2); }
     await page.waitForFunction(() => window.__ready === true, { timeout: 10000 });
 

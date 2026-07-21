@@ -1,0 +1,185 @@
+{
+  "schema": "limina.visual-design-contract/v1",
+  "id": "building/functional-hall-house-v4",
+  "subjectKind": "building",
+  "intendedFunction": "A grounded, enterable one-and-a-half-storey temperate hall-house with a working front door, dry threshold and stairs, clear circulation, usable furnishings, and a functional hearth; it must remain cohesive from exterior hero distance through interior interaction distance.",
+  "prompt": "Author the exact architecture-v5 asymmetric late-medieval hall-house as one construction-coherent building. Preserve its main hall, service-bay cross gable, dormer, offset chimney, two-step entrance, deeply recessed apertures, articulated inward-opening oak door, timber load paths, continuous fieldstone bearing, furnished clear aisle, and completed firebox. Match or exceed the user-supplied Project Gorgon PG40 house reference and the locked private Project Gorgon built-environment set in silhouette readability, material separation, authored depth, and lived-in coherence. Use the generated concept sheet only as a modeling cue, never as engine evidence or a texture source.",
+  "references": [
+    {
+      "id": "gorgon/built-town-square",
+      "sourceUrl": "https://www.reddit.com/r/MMORPG/comments/1nwksxk/adventures_through_project_gorgon_screenshots/",
+      "creator": "u/PalwaJoko; Project: Gorgon by Elder Game, LLC",
+      "license": "All rights reserved; private internal visual reference only; not redistributed",
+      "retrievedAt": "2026-07-11T00:00:00Z",
+      "localPath": "art-direction/library/project-gorgon-floor-20260711/adventures-through-project-gorgon-screenshots-from-my-v0-58d3pxwdgssf1.webp",
+      "sha256": "sha256:d4a063fee863f1748cd1999f094987cc01e79bad2542b065c8f2286e44fd708f",
+      "roles": ["silhouette", "construction", "material", "weathering", "function"]
+    },
+    {
+      "id": "gorgon/built-mountain-town",
+      "sourceUrl": "https://www.reddit.com/r/MMORPG/comments/1nwksxk/adventures_through_project_gorgon_screenshots/",
+      "creator": "u/PalwaJoko; Project: Gorgon by Elder Game, LLC",
+      "license": "All rights reserved; private internal visual reference only; not redistributed",
+      "retrievedAt": "2026-07-11T00:00:00Z",
+      "localPath": "art-direction/library/project-gorgon-floor-20260711/adventures-through-project-gorgon-screenshots-from-my-v0-fdp0qaqzfssf1.webp",
+      "sha256": "sha256:3c3f0adedc464d2b591d61cb7f30df3d0cbe942506386c80876d6d8a44f0ccd4",
+      "roles": ["silhouette", "construction", "joinery", "material", "function"]
+    },
+    {
+      "id": "gorgon/built-desert-facade",
+      "sourceUrl": "https://www.reddit.com/r/MMORPG/comments/1nwksxk/adventures_through_project_gorgon_screenshots/",
+      "creator": "u/PalwaJoko; Project: Gorgon by Elder Game, LLC",
+      "license": "All rights reserved; private internal visual reference only; not redistributed",
+      "retrievedAt": "2026-07-11T00:00:00Z",
+      "localPath": "art-direction/library/project-gorgon-floor-20260711/adventures-through-project-gorgon-screenshots-from-my-v0-xdlyr2hvfssf1.webp",
+      "sha256": "sha256:c8e53c529b8006f03b2d5c6648701937c12f71a9c1192fa6842f52a788ae3f1f",
+      "roles": ["silhouette", "construction", "material", "weathering", "function"]
+    }
+  ],
+  "cues": [
+    {
+      "id": "locked-architectural-envelope",
+      "statement": "The authored building preserves the exact architecture-v5 main-hall and service-bay envelopes without post-export scaling or silhouette substitution.",
+      "sourceIds": ["gorgon/built-town-square", "gorgon/built-mountain-town"],
+      "measurements": [
+        {"name": "main-hall-width", "unit": "m", "target": 9.6},
+        {"name": "main-hall-depth", "unit": "m", "target": 6.84},
+        {"name": "full-depth-with-service-bay", "unit": "m", "target": 8.44},
+        {"name": "main-eave-height", "unit": "m", "target": 3.55},
+        {"name": "service-eave-height", "unit": "m", "target": 3.7}
+      ],
+      "verification": "compiler"
+    },
+    {
+      "id": "coherent-roof-system",
+      "statement": "The main roof, service-bay cross gable, dormer, valleys, eaves, and chimney penetration form a closed weather-shedding system with no buried, floating, or protruding wall faces.",
+      "sourceIds": ["gorgon/built-town-square", "gorgon/built-mountain-town"],
+      "measurements": [
+        {"name": "main-roof-pitch", "unit": "deg", "target": 44.5},
+        {"name": "service-roof-pitch", "unit": "deg", "target": 54},
+        {"name": "dormer-roof-pitch", "unit": "deg", "target": 35},
+        {"name": "open-roof-junction-count", "unit": "count", "target": 0},
+        {"name": "wall-through-roof-count", "unit": "count", "target": 0}
+      ],
+      "verification": "blender"
+    },
+    {
+      "id": "functional-entry-construction",
+      "statement": "The recessed portal, hinged door, dry threshold, two grounded steps, and exterior grade form one aligned entry assembly with a full clear traversal path.",
+      "sourceIds": ["gorgon/built-town-square", "gorgon/built-desert-facade"],
+      "measurements": [
+        {"name": "door-open-yaw", "unit": "deg", "target": -95},
+        {"name": "entry-step-count", "unit": "count", "target": 2},
+        {"name": "clear-aisle-width", "unit": "m", "minimum": 1},
+        {"name": "clear-aisle-height", "unit": "m", "minimum": 2.2},
+        {"name": "threshold-gap-count", "unit": "count", "target": 0}
+      ],
+      "verification": "engine"
+    },
+    {
+      "id": "explicit-load-path-and-bearing",
+      "statement": "Foundation, walls, timber frame, floor, roof, dormer, and service bay visibly transfer load to terrain through connected members and continuous bearing rather than intersecting decorative boxes.",
+      "sourceIds": ["gorgon/built-mountain-town", "gorgon/built-desert-facade"],
+      "measurements": [
+        {"name": "disconnected-structural-member-count", "unit": "count", "target": 0},
+        {"name": "unsupported-foundation-segment-count", "unit": "count", "target": 0},
+        {"name": "floating-building-part-count", "unit": "count", "target": 0},
+        {"name": "maximum-terrain-relief", "unit": "m", "maximum": 0.5}
+      ],
+      "verification": "blender"
+    },
+    {
+      "id": "recessed-aperture-depth",
+      "statement": "Windows and doors read as openings cut through thick walls, with coherent reveals, frames, glazing, and clean material boundaries at interaction distance.",
+      "sourceIds": ["gorgon/built-town-square", "gorgon/built-desert-facade"],
+      "measurements": [
+        {"name": "face-mounted-aperture-count", "unit": "count", "target": 0},
+        {"name": "texture-seams-crossing-openings", "unit": "count", "target": 0},
+        {"name": "opaque-placeholder-pane-count", "unit": "count", "target": 0},
+        {"name": "certified-window-count", "unit": "count", "minimum": 6}
+      ],
+      "verification": "human"
+    },
+    {
+      "id": "material-scale-direction-depth",
+      "statement": "Stone, plaster, slate, oak, metal, glass, and floorboards retain distinct physical scale, grain direction, relief, roughness, and restrained construction-aware weathering.",
+      "sourceIds": ["gorgon/built-town-square", "gorgon/built-mountain-town", "gorgon/built-desert-facade"],
+      "measurements": [
+        {"name": "misoriented-structural-grain-count", "unit": "count", "target": 0},
+        {"name": "wall-roof-texture-substitution-count", "unit": "count", "target": 0},
+        {"name": "required-pbr-channel-coverage", "unit": "ratio", "target": 1},
+        {"name": "visible-material-role-count", "unit": "count", "minimum": 6}
+      ],
+      "verification": "engine"
+    },
+    {
+      "id": "furnished-traversable-hall",
+      "statement": "The interior reads as one lived-in hall with dining, hearth seating, and service storage while preserving the approved aisle, approaches, sightlines, and grounded furniture contacts.",
+      "sourceIds": ["gorgon/built-town-square", "gorgon/built-mountain-town"],
+      "measurements": [
+        {"name": "required-furniture-role-count", "unit": "count", "target": 4},
+        {"name": "blocked-required-approach-count", "unit": "count", "target": 0},
+        {"name": "furniture-floor-gap-count", "unit": "count", "target": 0},
+        {"name": "overlapping-furniture-part-count", "unit": "count", "target": 0}
+      ],
+      "verification": "engine"
+    },
+    {
+      "id": "completed-functional-hearth",
+      "statement": "The fireplace is grounded to the floor and connected to its flue, with a complete firebox, fuel, ember bed, volumetric flame, bounded reflected light, and deterministic start/burn/extinguish behavior.",
+      "sourceIds": ["gorgon/built-town-square", "gorgon/built-mountain-town"],
+      "measurements": [
+        {"name": "firebox-floor-gap", "unit": "m", "target": 0},
+        {"name": "fuel-stack-count", "unit": "count", "minimum": 3},
+        {"name": "volumetric-flame-count", "unit": "count", "target": 1},
+        {"name": "required-fire-state-count", "unit": "count", "minimum": 3},
+        {"name": "glow-only-fire", "unit": "boolean", "target": 0}
+      ],
+      "verification": "engine"
+    },
+    {
+      "id": "stable-production-lods",
+      "statement": "Three production LODs preserve the approved silhouette, roof closure, apertures, door isolation, and semantic interaction authority within explicit triangle and draw budgets.",
+      "sourceIds": ["gorgon/built-town-square", "gorgon/built-mountain-town", "gorgon/built-desert-facade"],
+      "measurements": [
+        {"name": "lod-count", "unit": "count", "target": 3},
+        {"name": "lod0-triangle-budget", "unit": "count", "maximum": 90000},
+        {"name": "lod1-triangle-budget", "unit": "count", "maximum": 32000},
+        {"name": "lod2-triangle-budget", "unit": "count", "maximum": 8000},
+        {"name": "draw-budget", "unit": "count", "maximum": 640}
+      ],
+      "verification": "compiler"
+    }
+  ],
+  "avoid": [
+    "Minecraft or voxel windows",
+    "face-mounted glazing and texture seams crossing openings",
+    "floating, disconnected, or decorative intersecting structural members",
+    "flat roof slabs, open valleys, buried eaves, and wall faces protruding through roofing",
+    "box-assembled thresholds or stairs that miss the building and terrain",
+    "uniformly repeated masonry, cross-grain timber, and incoherent texture mapping",
+    "sparse, overexposed, or non-traversable interiors",
+    "mangled or overlapping furniture",
+    "glow-only geometric fire",
+    "LOD holes, missing roof silhouettes, or functional nodes inside static batches",
+    "debug, Blender, or offline imagery presented as engine evidence"
+  ],
+  "requiredViews": [
+    "exterior-three-quarter-closed",
+    "exterior-three-quarter-open",
+    "roof-chimney-bumpout-junction",
+    "dormer-eave-roof-seat",
+    "threshold-stair-grade-open",
+    "entry-circulation-open",
+    "dining-three-quarter",
+    "hearth-seating-burn",
+    "service-storage",
+    "overall-room-burn",
+    "material-depth-exterior",
+    "material-depth-interior",
+    "lod0-18m",
+    "lod1-25m",
+    "lod2-75m"
+  ],
+  "status": "candidate"
+}

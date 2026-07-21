@@ -6,26 +6,117 @@
 // the scene graph. Storage is plain Float32Arrays (cache-friendly, JIT-able,
 // and a zero-copy path to native systems later).
 
+import type { World } from "bitecs";
 import { addComponent, addEntity, createWorld, query, removeEntity } from "../../build/bitecs.bundle.mjs";
 
 export const MAX_ENTITIES = 16384;
 
-export const Position = {
-  x: new Float32Array(MAX_ENTITIES),
-  y: new Float32Array(MAX_ENTITIES),
-  z: new Float32Array(MAX_ENTITIES),
+// ---- Per-world transform storage (Finding #8) -----------------------------
+// The transform SoA used to be module-global Float32Arrays. That made TWO worlds
+// in one process (e.g. a replay/verify world beside a live one) collide on the
+// same eid slots -- eids are allocated monotonically per bitECS world, so world A
+// eid 5 and world B eid 5 aliased the same array cell. Now each world OWNS a
+// TransformStore; the Position/Rotation/Scale views below are REBOUND to the
+// active world's store on setActiveTransformStore().
+//
+// SINGLE-world callers never touch activation: the default store is bound at
+// module init and stays bound, so every `Position.x[eid]` site reads/writes the
+// exact same arrays as before -- byte-for-byte identical, no call-site changes.
+//
+// MULTI-world callers (see js/test/p32_two_worlds.ts) activate the target world's
+// store before reading/writing/stepping it. Because the binding is process-global
+// (three.js render sync, bitECS queries, and the worldlog snapshot all read the
+// Position/Rotation/Scale views), the constraint is: at most one world is ACTIVE
+// at a time, and a world's transform work must run while its store is active.
+
+export interface Vec3Store {
+  x: Float32Array;
+  y: Float32Array;
+  z: Float32Array;
+}
+export interface Vec4Store extends Vec3Store {
+  w: Float32Array;
+}
+
+/** A world's private transform SoA (Position/Rotation/Scale), MAX_ENTITIES wide. */
+export interface TransformStore {
+  position: Vec3Store;
+  rotation: Vec4Store;
+  scale: Vec3Store;
+}
+
+/** Allocate a fresh, zeroed transform store for a new world. */
+export function createTransformStore(): TransformStore {
+  return {
+    position: {
+      x: new Float32Array(MAX_ENTITIES),
+      y: new Float32Array(MAX_ENTITIES),
+      z: new Float32Array(MAX_ENTITIES),
+    },
+    rotation: {
+      x: new Float32Array(MAX_ENTITIES),
+      y: new Float32Array(MAX_ENTITIES),
+      z: new Float32Array(MAX_ENTITIES),
+      w: new Float32Array(MAX_ENTITIES),
+    },
+    scale: {
+      x: new Float32Array(MAX_ENTITIES),
+      y: new Float32Array(MAX_ENTITIES),
+      z: new Float32Array(MAX_ENTITIES),
+    },
+  };
+}
+
+const defaultTransformStore = createTransformStore();
+let activeTransformStore: TransformStore = defaultTransformStore;
+
+// Component views. Their object identity is STABLE (bitECS uses them as opaque
+// component keys via addComponent/query); only their .x/.y/.z(/w) array fields
+// are rebound on activation. Initialized to the default store so imports that use
+// them at module-eval time see live arrays.
+export const Position: Vec3Store = {
+  x: defaultTransformStore.position.x,
+  y: defaultTransformStore.position.y,
+  z: defaultTransformStore.position.z,
 };
-export const Rotation = {
-  x: new Float32Array(MAX_ENTITIES),
-  y: new Float32Array(MAX_ENTITIES),
-  z: new Float32Array(MAX_ENTITIES),
-  w: new Float32Array(MAX_ENTITIES),
+export const Rotation: Vec4Store = {
+  x: defaultTransformStore.rotation.x,
+  y: defaultTransformStore.rotation.y,
+  z: defaultTransformStore.rotation.z,
+  w: defaultTransformStore.rotation.w,
 };
-export const Scale = {
-  x: new Float32Array(MAX_ENTITIES),
-  y: new Float32Array(MAX_ENTITIES),
-  z: new Float32Array(MAX_ENTITIES),
+export const Scale: Vec3Store = {
+  x: defaultTransformStore.scale.x,
+  y: defaultTransformStore.scale.y,
+  z: defaultTransformStore.scale.z,
 };
+
+/** Bind `store` as the active world's transform storage, rebinding the shared
+ *  Position/Rotation/Scale views to its arrays. Single-world code never calls
+ *  this; multi-world code activates a world before touching its transforms. */
+export function setActiveTransformStore(store: TransformStore): void {
+  activeTransformStore = store;
+  Position.x = store.position.x;
+  Position.y = store.position.y;
+  Position.z = store.position.z;
+  Rotation.x = store.rotation.x;
+  Rotation.y = store.rotation.y;
+  Rotation.z = store.rotation.z;
+  Rotation.w = store.rotation.w;
+  Scale.x = store.scale.x;
+  Scale.y = store.scale.y;
+  Scale.z = store.scale.z;
+}
+
+/** The currently active transform store (the one Position/Rotation/Scale alias). */
+export function getActiveTransformStore(): TransformStore {
+  return activeTransformStore;
+}
+
+/** The process default store, active until a multi-world caller activates another. */
+export function getDefaultTransformStore(): TransformStore {
+  return defaultTransformStore;
+}
 
 interface Vec3Settable {
   set(x: number, y: number, z: number): void;
@@ -43,23 +134,74 @@ export interface PhysicsTransformOps {
   op_physics_body_transform(id: number, out: Float32Array): void;
 }
 
+const defaultPhysicsTransformScratch = new Float32Array(7);
+
 // Sparse map eid -> scene object. AoS (object refs) deliberately, since three
 // objects are not SoA-friendly; only the numeric transforms live in TypedArrays.
 const renderables: (Transformable | undefined)[] = [];
 
-export function createEcsWorld(): unknown {
+/** Return the eid currently bound to a render object, if any. This intentionally
+ *  scans the existing eid -> object registry instead of maintaining duplicate
+ *  mesh identity state; picking is infrequent and can stay O(n). */
+export function renderableOwnerEid(object: unknown): number | undefined {
+  for (let eid = 0; eid < renderables.length; eid++) {
+    if (renderables[eid] === object) return eid;
+  }
+  return undefined;
+}
+
+export function createEcsWorld(): World {
   return createWorld();
+}
+
+// ---- Entity-index mutation hooks (registry lazy head-frame capture) --------
+// One-shot hooks fired BEFORE the next eid allocation/free on a world. The skill
+// registry's per-chain undo ledger (H1) must capture the bitECS entity index in
+// its PRE-chain state so a failed chain can rewind eid allocation; capturing it
+// eagerly on every write invoke is O(maxId) churn most invokes never need. The
+// seam lives HERE (not only on the EntityTable) because skills allocate the eid
+// via spawnRenderable BEFORE calling entities.create — a table-only hook would
+// capture an index that already contains the chain's first eid. Keyed by the
+// bitECS world object; multiple in-flight head chains may each arm one hook, and
+// the first index mutation fires (and clears) all of them.
+const entityIndexHooks = new WeakMap<object, Set<() => void>>();
+
+/** Arm a one-shot hook fired before the next eid allocation/free on `world`.
+ *  Returns a disarm function (idempotent). Non-object worlds (stub contexts
+ *  without a real bitECS world) get a no-op disarm and never fire. */
+export function armEntityIndexMutationHook(world: unknown, fn: () => void): () => void {
+  if (world === null || typeof world !== "object") return () => {};
+  let hooks = entityIndexHooks.get(world);
+  if (hooks === undefined) {
+    hooks = new Set();
+    entityIndexHooks.set(world, hooks);
+  }
+  hooks.add(fn);
+  return () => { hooks.delete(fn); };
+}
+
+function fireEntityIndexHooks(world: World): void {
+  const hooks = entityIndexHooks.get(world as unknown as object);
+  if (hooks === undefined || hooks.size === 0) return;
+  const fired = [...hooks];
+  hooks.clear();
+  for (const fn of fired) fn();
 }
 
 /** Spawn an entity with identity transform bound to a scene object. */
 export function spawnRenderable(
-  world: unknown,
+  world: World,
   object: Transformable,
   x: number,
   y: number,
   z: number,
 ): number {
+  fireEntityIndexHooks(world);
   const eid: number = addEntity(world);
+  if (eid < 0 || eid >= MAX_ENTITIES) {
+    removeEntity(world, eid);
+    throw new Error(`spawnRenderable: eid ${eid} exceeds MAX_ENTITIES ${MAX_ENTITIES}`);
+  }
   addComponent(world, eid, Position);
   addComponent(world, eid, Rotation);
   addComponent(world, eid, Scale);
@@ -79,15 +221,17 @@ export function spawnRenderable(
 
 /** Tear down an entity: free the eid (bitECS may recycle it) and drop its scene
  *  object binding so a recycled eid never renders the old mesh. */
-export function despawnRenderable(world: unknown, eid: number): void {
+export function despawnRenderable(world: World, eid: number): void {
+  fireEntityIndexHooks(world);
   renderables[eid] = undefined;
   removeEntity(world, eid);
 }
 
 /** Copy ECS transforms onto their bound scene objects. The ONLY path that
  *  drives object transforms - removing it freezes the scene. */
-export function renderSyncSystem(world: unknown): void {
+export function renderSyncSystem(world: World, skip?: Set<number>): void {
   for (const eid of query(world, [Position, Rotation, Scale])) {
+    if (skip?.has(eid)) continue;
     const object = renderables[eid];
     if (object === undefined) continue;
     object.position.set(Position.x[eid], Position.y[eid], Position.z[eid]);
@@ -101,7 +245,7 @@ export function syncPhysicsBodyTransform(
   eid: number,
   bodyId: number,
   ops: PhysicsTransformOps,
-  scratch = new Float32Array(7),
+  scratch = defaultPhysicsTransformScratch,
 ): void {
   ops.op_physics_body_transform(bodyId, scratch);
   Position.x[eid] = scratch[0];

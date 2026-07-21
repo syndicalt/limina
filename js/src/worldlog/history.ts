@@ -10,11 +10,27 @@
 //   • BRANCH       — `fork(name, from, atSeq)` copies a prefix into a new branch that diverges
 //                    independently (cheap: it shares the prefix's history).
 //   • DIFF         — `diff(a, b)` finds the common prefix and the commands unique to each side.
-//   • MERGE        — `merge(into, from)` fast-forwards when `into` is a prefix of `from`, else
-//                    appends `from`'s divergent commands onto `into`.
+//   • MERGE        — `merge(into, from)` fast-forwards when `into` is a prefix of `from`; a
+//                    divergent merge appends `from`'s unique commands only when the two tails are
+//                    conflict-free (no shared entity references, no duplicated command, no
+//                    post-fork reference rebinding risk — see detectMergeConflict), else it
+//                    is REFUSED with a structured conflict report.
 //
-// Branch command lists are kept seq-monotonic (commands are re-stamped on extend/fork/merge) so a
-// branch is always a valid, replayable log. Pure data operations — no engine/world refs, no wall
+// WHAT A NON-REFUSED DIVERGENT MERGE DOES AND DOES NOT GUARANTEE (be precise here —
+// "safely disjoint" was once overclaimed): it guarantees the appended tail's commands
+// carry NO `ent_` string references that could rebind (either the tails share no refs
+// and the source tail references only ids the common prefix itself references — proof
+// they pre-date the fork — or the source tail references nothing at all). It does NOT
+// guarantee: (a) physics-command safety — body ids are numeric and unattributable
+// here, so cross-branch edits to one body merge silently; (b) semantic compatibility
+// (two tails may author overlapping GEOMETRY without sharing an id); (c) that a
+// refusal implies real corruption — creation detection is HEURISTIC (every skill
+// command is treated as potentially entity-creating, because created ids are handler
+// outputs the log does not carry), so genuinely-safe merges whose source tail
+// references un-provable ids are refused conservatively. Err toward refusal.
+//
+// Branch command lists are kept seq-monotonic (commands are re-stamped on extend/fork/merge; a
+// divergent merge re-stamps ticks the same way) so a branch is always a valid, replayable log. Pure data operations — no engine/world refs, no wall
 // clock — so this module is deterministic and unit-testable on its own.
 
 import type { WorldCommand } from "./log.ts";
@@ -30,11 +46,35 @@ export interface BranchDiff {
   identical: boolean;
 }
 
-export type MergeKind = "already-current" | "fast-forward" | "appended";
+export type MergeKind = "already-current" | "fast-forward" | "appended" | "conflict";
+
+/** What made a divergent merge unsafe. Reported instead of silently merging. */
+export interface MergeConflict {
+  /** `ent_` ids referenced by BOTH divergent tails: the same entity was edited on
+   *  each side, and replaying one side's edits after the other would apply them
+   *  against a world (and an id-allocation sequence) neither side authored on. */
+  entities: string[];
+  /** Commands structurally identical (ignoring seq) in both divergent tails: the
+   *  same edit reached both branches past the detected fork point, so appending
+   *  would apply it twice (duplicate entities/mutations). */
+  duplicateCommands: number;
+  /** `ent_` ids the SOURCE tail references that cannot be proven pre-fork (they
+   *  are never referenced in the common prefix) while BOTH tails may create
+   *  entities: `ent_` ids allocate monotonically on replay, so the destination
+   *  tail's creations would shift the allocation sequence and these references
+   *  would REBIND to different entities than the ones the source branch authored
+   *  against. Present only when non-empty. Detection is deliberately
+   *  conservative — see detectMergeConflict. */
+  rebindRisk?: string[];
+}
+
 export interface MergeResult {
   kind: MergeKind;
   /** Commands added to `into` by the merge. */
   added: number;
+  /** Present iff kind === "conflict": the merge was REFUSED and neither branch
+   *  was modified. Callers surface it (or fork and reconcile manually). */
+  conflict?: MergeConflict;
 }
 
 /** Re-stamp a command list so seq = 0..n-1 (keeps a branch a valid monotonic log after edits). */
@@ -54,6 +94,84 @@ function commonPrefixLength(a: WorldCommand[], b: WorldCommand[]): number {
   let i = 0;
   while (i < n && commandKey(a[i]) === commandKey(b[i])) i++;
   return i;
+}
+
+const ENT_ID_RE = /^ent_\d+$/;
+
+/** Collect every `ent_` id a command's input references (deep string scan). Only
+ *  skill inputs carry entity ids; physics commands address bodies by numeric id,
+ *  which this scan cannot attribute, so cross-branch physics edits to one body are
+ *  NOT detected here. */
+function collectEntityRefs(value: unknown, out: Set<string>): void {
+  if (typeof value === "string") {
+    if (ENT_ID_RE.test(value)) out.add(value);
+    return;
+  }
+  if (typeof value !== "object" || value === null) return;
+  if (Array.isArray(value)) {
+    for (const v of value) collectEntityRefs(v, out);
+    return;
+  }
+  for (const k of Object.keys(value)) collectEntityRefs((value as Record<string, unknown>)[k], out);
+}
+
+function tailEntityRefs(tail: readonly WorldCommand[]): Set<string> {
+  const refs = new Set<string>();
+  for (const c of tail) if (c.kind === "skill") collectEntityRefs(c.input, refs);
+  return refs;
+}
+
+/** HEURISTIC, stated honestly: whether a tail may CREATE entities. The log does
+ *  not carry which commands create — created `ent_` ids are handler OUTPUTS, and
+ *  creation is a handler property this pure-data module cannot know — so EVERY
+ *  skill command is treated as potentially entity-creating (err toward refusal).
+ *  Physics commands allocate BODY ids, never `ent_` ids, so they do not shift
+ *  entity allocation (body-id attribution is out of scope; see collectEntityRefs). */
+function tailMayCreateEntities(tail: readonly WorldCommand[]): boolean {
+  return tail.some((c) => c.kind === "skill");
+}
+
+/** Detect why appending `srcTail` after `dstTail` would corrupt the merged world:
+ *  an entity edited on both sides, the same command present in both tails (it
+ *  would replay twice), or POST-FORK REFERENCE REBINDING — when both tails may
+ *  create entities and the source tail references an `ent_` id that cannot be
+ *  proven pre-fork, that id may have been allocated by the source tail itself;
+ *  replaying it after the destination tail's creations shifts the monotonic
+ *  allocation sequence and rebinds the reference to a different entity. The only
+ *  pre-fork proof this module can honestly give is "the common prefix itself
+ *  references the id" (a valid log only references live entities) — an id created
+ *  in the prefix but first referenced in a tail is indistinguishable from a
+ *  post-fork id and is REFUSED conservatively. Returns undefined when the tails
+ *  are safe under these checks (see the module header for the exact guarantee). */
+function detectMergeConflict(prefix: readonly WorldCommand[], dstTail: readonly WorldCommand[], srcTail: readonly WorldCommand[]): MergeConflict | undefined {
+  const dstRefs = tailEntityRefs(dstTail);
+  const srcRefs = tailEntityRefs(srcTail);
+  const entities: string[] = [];
+  for (const id of srcRefs) if (dstRefs.has(id)) entities.push(id);
+  entities.sort();
+  const dstKeys = new Set(dstTail.map(commandKey));
+  let duplicateCommands = 0;
+  for (const c of srcTail) if (dstKeys.has(commandKey(c))) duplicateCommands++;
+  const rebindRisk: string[] = [];
+  if (srcRefs.size > 0 && tailMayCreateEntities(dstTail) && tailMayCreateEntities(srcTail)) {
+    const prefixRefs = tailEntityRefs(prefix);
+    for (const id of srcRefs) if (!prefixRefs.has(id)) rebindRisk.push(id);
+    rebindRisk.sort();
+  }
+  if (entities.length === 0 && duplicateCommands === 0 && rebindRisk.length === 0) return undefined;
+  const conflict: MergeConflict = { entities, duplicateCommands };
+  if (rebindRisk.length > 0) conflict.rebindRisk = rebindRisk;
+  return conflict;
+}
+
+/** Highest tick carried by any command in `commands` (0 when none carry a tick). */
+function maxTick(commands: readonly WorldCommand[]): number {
+  let max = 0;
+  for (const c of commands) {
+    if (c.kind === "seed") continue;
+    if (c.tick > max) max = c.tick;
+  }
+  return max;
 }
 
 export class WorldHistory {
@@ -117,8 +235,14 @@ export class WorldHistory {
     return { commonPrefix: common, aOnly, bOnly, identical: aOnly.length === 0 && bOnly.length === 0 };
   }
 
-  /** Merge `from` into `into`. Fast-forwards when `into` is a strict prefix of `from`; otherwise
-   *  appends `from`'s divergent commands (after the common prefix) onto `into`. */
+  /** Merge `from` into `into`. Fast-forwards when `into` is a strict prefix of `from`. A DIVERGENT
+   *  merge is conflict-checked first: when both tails touch the same entity, the same command
+   *  reached both tails, or the source tail carries a post-fork reference-rebinding risk (both
+   *  tails may create entities and a source-tail `ent_` ref is not provably pre-fork — see
+   *  detectMergeConflict), the merge is REFUSED with a structured conflict report (kind
+   *  "conflict", branches untouched). A non-refused divergent tail is appended with seq AND tick
+   *  re-stamped, keeping the merged branch a monotonic, replayable log; the module header states
+   *  exactly what that append does and does not guarantee. */
   merge(into: string, from: string): MergeResult {
     const dst = this.require(into);
     const src = this.require(from);
@@ -130,9 +254,24 @@ export class WorldHistory {
       this.branches.set(into, reseq(src.slice()));
       return { kind: "fast-forward", added };
     }
-    // Divergent: append `from`'s unique tail onto `into`.
+    // Divergent: refuse on conflict, else append `from`'s unique tail onto `into`.
     const tail = src.slice(common);
-    this.extend(into, tail);
+    const conflict = detectMergeConflict(dst.slice(0, common), dst.slice(common), tail);
+    if (conflict !== undefined) return { kind: "conflict", added: 0, conflict };
+    // Ticks shift by a constant so the first appended command lands at/after the
+    // destination's last tick (mirroring the seq re-stamp): the tail's internal
+    // spacing is preserved and the merged log stays tick-monotonic in seq order.
+    const dstLastTick = maxTick(dst);
+    let offset = 0;
+    for (const c of tail) {
+      if (c.kind === "seed") continue;
+      offset = Math.max(0, dstLastTick - c.tick);
+      break;
+    }
+    for (const c of tail) {
+      const stamped = c.kind === "seed" ? { ...c } : { ...c, tick: c.tick + offset };
+      dst.push({ ...stamped, seq: dst.length } as WorldCommand);
+    }
     return { kind: "appended", added: tail.length };
   }
 }

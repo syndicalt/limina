@@ -1,0 +1,37 @@
+{
+  "schema": "limina.functional-building-mechanical-closure/v1",
+  "asset": {
+    "assetId": "buildings/functional-cottage-v1.glb",
+    "sha256": "a55775cc0224edb79bcc51dae1e3802690a4950e70761ce219c00082548e1470",
+    "byteLength": 16792,
+    "contract": "limina.functional-building/v1",
+    "buildingId": "cottage/one-room/v1"
+  },
+  "generator": {
+    "path": "tools/blender/functional-cottage.py",
+    "sha256": "3e7506aa61e3b301b29a0739196fa53841c5d1539d5c98aed5d7cb4737f17998",
+    "blenderVersion": "4.0.2",
+    "byteReproducible": true
+  },
+  "mechanicalGates": {
+    "pureByteContract": true,
+    "stableSemanticIds": true,
+    "decomposedShellCollision": true,
+    "canonicalDoorClip": true,
+    "closedDoorBlocksCharacter": true,
+    "openDoorPermitsEntry": true,
+    "arbitraryYawPlacement": true,
+    "worldlogReplay": true,
+    "snapshotRestoreThenToggle": true,
+    "idempotentDoorState": true,
+    "completeLifecycleTeardown": true,
+    "deterministicRebuild": true
+  },
+  "visual": {
+    "projectGorgonFloorPassed": false,
+    "humanApproved": false,
+    "reviewArtifact": null,
+    "decision": "Mechanical prototype only. Do not present as a visual candidate until FB-2 reaches the locked floor."
+  },
+  "next": "FB-2 production cottage art pass"
+}

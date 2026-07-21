@@ -1,0 +1,78 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+import { resolve } from "node:path";
+import { buildProductionReviewAuthority } from "./build-production-review-authority.mjs";
+import { findVariable, literalValue, parseTypeScript, propertyPath } from "./test-source-semantics.mjs";
+const ROOT = resolve(import.meta.dirname, "../.."),
+  OUTPUT =
+    "assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653/production-review-authority-v5.json";
+test("deterministic final R1 review authority binds frozen v3 CPU closure", async () => {
+  const result = await buildProductionReviewAuthority({ write: false }),
+    actual = JSON.parse(await readFile(resolve(ROOT, OUTPUT), "utf8"));
+  assert.deepEqual(result.authority, actual);
+  assert.equal(actual.schema, "limina.building-production-review-authority/v4");
+  assert.equal(actual.upstreamApprovals.length, 9);
+  assert.deepEqual(actual.placement, { position: [106.25, 0, 50.25], yaw: 1.175 });
+  assert.equal(
+    actual.siteFitEvidence.path,
+    "assets/buildings/authoring/functional-hall-house-v4/production-r1-candidate-9ba6f653/production-review-site-fit-v3.json",
+  );
+  assert.match(actual.siteFitEvidence.sha256, /^sha256:[0-9a-f]{64}$/);
+  assert.deepEqual(
+    actual.evidenceViews.map(({ id }) => id),
+    ["exterior-three-quarter", "entry-door-stairs", "interior-overall", "hearth-fire-seating", "dining-service"],
+  );
+  assert.deepEqual(actual.presentation.minimumResolution, [1920, 1080]);
+  assert.equal(actual.presentation.cameraVerticalBasis, "terrain-root-relative");
+  assert.equal(actual.approvalPolicy.timestampQueriesEnabled, false);
+  assert.equal(actual.approvalPolicy.humanDecision, "pending");
+  assert.equal(actual.environment.context, "approved-temperate-production");
+  assert.equal(actual.environment.populationExclusion, "rotated-authored-footprint-before-population-mount");
+});
+test("review demo owns a guarded native five-view capture and delegates solely to production mount", async () => {
+  const [demo, scene] = await Promise.all([
+      readFile(resolve(ROOT, "js/src/demos/building_production_review_window.ts"), "utf8"),
+      readFile(resolve(ROOT, "js/src/render/building-production-review-scene.ts"), "utf8"),
+    ]),
+    demoFile = parseTypeScript(demo, "building_production_review_window.ts");
+  assert.match(demo, /BUILDING_PRODUCTION_REVIEW_TRACE_ENV/);
+  assert.match(demo, /must be a bare \.json filename/);
+  assert.match(demo, /gpuTimestampMode:\s*"disabled"/);
+  assert.match(demo, /gpuTextureCompression:\s*"bc-required"/);
+  assert.match(demo, /renderBaseline:\s*false/);
+  assert.match(demo, /isSoftwareAdapter\(engine\.gpuAdapter\)/);
+  assert.match(demo, /renderer\.info\.autoReset\s*=\s*false/);
+  assert.match(demo, /withFrozenRendererTime/);
+  assert.match(demo, /withPresentedNativeSurfaceFrame/);
+  assert.match(demo, /readNativeSurfaceRgba/);
+  assert.match(demo, /requireWholeFrameRenderSubmissionTelemetry/);
+  assert.match(demo, /submission\.renderCalls\s*<=\s*1/);
+  assert.match(demo, /submission\.drawCalls\s*<=\s*1/);
+  assert.match(demo, /submission\.triangles\s*<=\s*1/);
+  assert.match(demo, /mounted!\.setEvidenceView\(view\.id\)/);
+  assert.match(demo, /await mounted\.dispose\(\)/);
+  assert.match(demo, /await gltfCache\.dispose\(\)/);
+  assert.match(demo, /await renderer\.dispose\(\)/);
+  const productionPrewarm = demo.indexOf("await prewarmGltfScene(productionAssetId"),
+    fuelPrewarm = demo.indexOf("await prewarmGltfScene(fuelAssetId"),
+    environmentMount = demo.indexOf("environment = await mountTemperateFidelityScene");
+  assert.ok(
+    productionPrewarm > 0 && fuelPrewarm > productionPrewarm && environmentMount > fuelPrewarm,
+    "production and fire GLBs must prewarm before environment beginWorld",
+  );
+  assert.ok(
+    findVariable(demoFile, "productionAssetId").some(
+      (declaration) => literalValue(declaration.initializer) === "buildings/functional-hall-house-v4-production.glb",
+    ),
+  );
+  assert.ok(
+    findVariable(demoFile, "fuelPath").some(
+      (declaration) =>
+        propertyPath(declaration.initializer) === "closure.manifest.runtimeFacets.fire.fuel.runtimeGlb.path",
+    ),
+  );
+  assert.doesNotMatch(demo, /gpu-timestamp|timestamp-diagnostic|timestamp-capture|LIMINA_GPU_TIMESTAMP_RISK_ACK/i);
+  assert.equal((scene.match(/mountBuildingProductionPackage\(/g) ?? []).length, 1);
+  assert.doesNotMatch(scene, /asset\.place|furniture\.placeFunctional|building\.placeFunctional/);
+});

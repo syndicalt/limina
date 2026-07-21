@@ -26,7 +26,7 @@ Twelve phases are complete with acceptance gates and tests green. The engine run
 | **Terrain** | `terrain.*` / `world.*` skill seam. Native heightfield op. `ProceduralTerrainSource` (deterministic noise) and `ModelTerrainSource` (IPC). Content-addressed tile cache. |
 | **Content** | Default PBR lighting/IBL. 10 named materials. Content-addressed `asset.place` / `asset.scatter` (elevation-aware). CC0 cottage-on-a-beach gate met. |
 | **Audio** | `limina-audio` (rodio 0.22 / cpal). Dedicated audio thread. 4-bus mixer (master/sfx/ambience/voice). Spatial `SpatialPlayer` (camera-listener + 1/d²). Fire-and-forget TTS (espeak/Piper). |
-| **Game-building** | ~85 skills across 17 systems: player, camera, animation, interaction, inventory, gamestate, triggers, quest, combat, behavior, navmesh, VFX, save, progression, worldstate. Progressive discovery (`skills.browse` / `skills.search`). 8 permission profiles. |
+| **Game-building** | ~85 skills across 17 systems: player, camera, animation, interaction, inventory, gamestate, triggers, quest, combat, behavior, navmesh, VFX, save, progression, worldstate. Progressive discovery (`skills.browse` / `skills.search`). 14 permission profiles. |
 | **Export** | Browser/phone playback (Mode A: snapshot-keyframe). Export package `{manifest, log.jsonl, keyframes.jsonl}`. Keyframe-driven `PhysicsOps` with bit-identical parity gate. Browser host (canvas-WebGPU + IndexedDB + rAF accumulator). |
 | **Native parallelism** | Rayon-based CSR spatial op in `limina-ecs`, bit-identical to the JS oracle, 4.5–5.4× / ≤ 2 ms. Profile-first found and memoized an un-cached `registry.list()` (`z.toJSONSchema` / agent / tick). `MAX_ENTITIES` → 16384. |
 

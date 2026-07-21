@@ -93,7 +93,7 @@ async function runErrand(session: string): Promise<{ entities: number; villageEn
 
 // ── 1. The village is built; the open world is navigable. ─────────────────────────────────────
 const A = await runErrand("ses_p16_quest_A");
-assert(A.villageEntities === 24, `the 3-building village is built (3×8 = 24 entities, got ${A.villageEntities})`);
+assert(A.villageEntities >= 30, `the 3-building village is built (3 kit buildings, got ${A.villageEntities} entities)`);
 assert(A.entities >= 24, `the village entities are present in the scene (total ${A.entities} ≥ 24 village)`);
 assert(A.reachable && A.pathLen >= 2, `there is a real A* route home → shrine (reachable=${A.reachable}, waypoints=${A.pathLen})`);
 

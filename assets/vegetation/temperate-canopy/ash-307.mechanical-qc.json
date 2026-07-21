@@ -1,0 +1,194 @@
+{
+  "schema": "limina.asset-qc-evidence/1",
+  "id": "limina-eztree-ash-307",
+  "model": {
+    "path": "vegetation/temperate-canopy/ash-307.glb",
+    "sha256": "sha256:ab32ae6e51205790c93be2a4b1408f5abe0175f31544b503331dc71e39e3c134",
+    "metrics": {
+      "boundsM": [
+        16.736865,
+        17,
+        17.095675
+      ],
+      "vertexCount": 28098,
+      "triangleCount": 21512,
+      "meshCount": 2,
+      "primitiveCount": 2,
+      "materialCount": 2,
+      "textureSlots": [
+        "baseColor",
+        "metallicRoughness",
+        "normal",
+        "occlusion"
+      ],
+      "textures": [
+        {
+          "slot": "baseColor",
+          "mimeType": "image/png",
+          "width": 512,
+          "height": 512
+        },
+        {
+          "slot": "metallicRoughness",
+          "mimeType": "image/png",
+          "width": 512,
+          "height": 512
+        },
+        {
+          "slot": "normal",
+          "mimeType": "image/png",
+          "width": 512,
+          "height": 512
+        },
+        {
+          "slot": "occlusion",
+          "mimeType": "image/png",
+          "width": 512,
+          "height": 512
+        }
+      ]
+    }
+  },
+  "lods": [
+    {
+      "level": 1,
+      "path": "vegetation/temperate-canopy/ash-307-lod1.glb",
+      "sha256": "sha256:a70653fbf82fdff3ea9dd953a810340d9b3fd5b7589e757d6249c3a28d2136e5",
+      "distanceM": 42,
+      "metrics": {
+        "boundsM": [
+          16.736865,
+          17,
+          17.095675
+        ],
+        "vertexCount": 23556,
+        "triangleCount": 14576,
+        "meshCount": 2,
+        "primitiveCount": 2,
+        "materialCount": 2,
+        "textureSlots": [
+          "baseColor",
+          "metallicRoughness",
+          "normal",
+          "occlusion"
+        ],
+        "textures": [
+          {
+            "slot": "baseColor",
+            "mimeType": "image/png",
+            "width": 512,
+            "height": 512
+          },
+          {
+            "slot": "metallicRoughness",
+            "mimeType": "image/png",
+            "width": 512,
+            "height": 512
+          },
+          {
+            "slot": "normal",
+            "mimeType": "image/png",
+            "width": 512,
+            "height": 512
+          },
+          {
+            "slot": "occlusion",
+            "mimeType": "image/png",
+            "width": 512,
+            "height": 512
+          }
+        ]
+      }
+    },
+    {
+      "level": 2,
+      "path": "vegetation/temperate-canopy/ash-307-lod2.glb",
+      "sha256": "sha256:03433eec4f45b44baaec4560257c840509aedab756e87770281e72c40a106d4f",
+      "distanceM": 96,
+      "metrics": {
+        "boundsM": [
+          16.736865,
+          17,
+          17.095675
+        ],
+        "vertexCount": 21540,
+        "triangleCount": 11748,
+        "meshCount": 2,
+        "primitiveCount": 2,
+        "materialCount": 2,
+        "textureSlots": [
+          "baseColor",
+          "metallicRoughness",
+          "normal",
+          "occlusion"
+        ],
+        "textures": [
+          {
+            "slot": "baseColor",
+            "mimeType": "image/png",
+            "width": 512,
+            "height": 512
+          },
+          {
+            "slot": "metallicRoughness",
+            "mimeType": "image/png",
+            "width": 512,
+            "height": 512
+          },
+          {
+            "slot": "normal",
+            "mimeType": "image/png",
+            "width": 512,
+            "height": 512
+          },
+          {
+            "slot": "occlusion",
+            "mimeType": "image/png",
+            "width": 512,
+            "height": 512
+          }
+        ]
+      }
+    }
+  ],
+  "contactSheet": {
+    "path": "qc/internal/temperate-canopy-candidates.png",
+    "sha256": "sha256:4b98769a2b1b6f084e23f492cccae11e79f37566b868c4f1e7ae568042538d2d"
+  },
+  "mechanicalFloor": {
+    "pass": true,
+    "score": 1,
+    "failures": [],
+    "measured": {
+      "readable": true,
+      "vertexCount": 28098,
+      "triangleCount": 21512,
+      "materialCount": 2,
+      "meshCount": 2,
+      "hasAlbedoMap": true,
+      "hasNormalMap": true,
+      "bboxDims": [
+        16.736865043640137,
+        17,
+        17.095675468444824
+      ],
+      "materials": [
+        {
+          "colorHex": "#ceccbe",
+          "roughness01": 1,
+          "metalness01": 0,
+          "hasAlbedoTex": true,
+          "hasNormalTex": true
+        },
+        {
+          "colorHex": null,
+          "roughness01": 1,
+          "metalness01": 0,
+          "hasAlbedoTex": true,
+          "hasNormalTex": false
+        }
+      ]
+    }
+  },
+  "generator": "ez-tree-1.1.0-native-pbr-software-browser"
+}

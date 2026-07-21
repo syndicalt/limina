@@ -32,6 +32,17 @@ interface MapImage { data?: unknown; width?: unknown; height?: unknown }
 interface TexLike { image?: MapImage; isDataTexture?: unknown }
 interface MatLike { map?: TexLike | null }
 
+function firstMesh(root: SceneObject): Record<string, unknown> {
+  let found: Record<string, unknown> | undefined;
+  const visit = (node: unknown): void => {
+    if (found === undefined && isRecord(node) && node.isMesh === true) found = node;
+  };
+  if (typeof root.traverse === "function") root.traverse(visit);
+  else visit(root);
+  assert(found !== undefined, "fixture has no mesh");
+  return found;
+}
+
 function collectBaseColorMaps(root: SceneObject): TexLike[] {
   const maps: TexLike[] = [];
   const visit = (node: unknown): void => {
@@ -50,29 +61,41 @@ function collectBaseColorMaps(root: SceneObject): TexLike[] {
   return maps;
 }
 
-// --- palm.glb: embedded bufferView base-color texture must now LOAD ----------
-const palmAsset = "palm.glb";
+// --- textured fixture: embedded bufferView base-color texture must LOAD ----------
+const palmAsset = "fixtures/textured-cube.glb";
 const palm = reg.resolve(palmAsset);
 const palmRoot = await parseGltfScene(palmAsset, palm.bytes);
 const palmMaps = collectBaseColorMaps(palmRoot);
 
-assert(palmMaps.length >= 1, "palm.glb base-color material.map is null/absent (embedded texture failed to load -> renders white)");
+assert(palmMaps.length >= 1, "textured fixture base-color material.map is null/absent (embedded texture failed to load -> renders white)");
 const map = palmMaps[0];
-assert(isRecord(map.image), "palm.glb material.map has no image (texture never decoded)");
+assert(isRecord(map.image), "textured fixture material.map has no image (texture never decoded)");
 const data = map.image?.data;
-assert(data instanceof Uint8Array && data.length >= 4, "palm.glb texture was not decoded to RGBA pixels (image.data missing)");
+assert(data instanceof Uint8Array && data.length >= 4, "textured fixture was not decoded to RGBA pixels (image.data missing)");
 const w = Number(map.image?.width ?? 0);
 const h = Number(map.image?.height ?? 0);
-assert(w > 0 && h > 0, `palm.glb texture has no decoded dimensions (${w}x${h})`);
-assert(data.length === w * h * 4, `palm.glb decoded pixel buffer size ${data.length} != ${w}*${h}*4`);
-assert(map.isDataTexture === true, "palm.glb texture was not re-homed to the DataTexture upload path (would render black on WebGPU)");
-// Non-trivial content: a real decoded atlas is not all-zero.
+assert(w > 0 && h > 0, `textured fixture has no decoded dimensions (${w}x${h})`);
+assert(data.length === w * h * 4, `textured fixture decoded pixel buffer size ${data.length} != ${w}*${h}*4`);
+assert(map.isDataTexture === true, "textured fixture was not re-homed to the DataTexture upload path (would render black on WebGPU)");
+// Non-trivial content: a real decoded image is not all-zero.
 let nonZero = false;
 for (let i = 0; i < data.length; i++) { if (data[i] !== 0) { nonZero = true; break; } }
-assert(nonZero, "palm.glb decoded texture pixels are all zero (decode produced an empty image)");
+assert(nonZero, "textured fixture decoded texture pixels are all zero (decode produced an empty image)");
 
-// --- cottage.glb + rock.glb: factor/vertex-color assets parse clean ----------
-for (const id of ["cottage.glb", "rock.glb"]) {
+const palmRoot2 = await parseGltfScene(palmAsset, palm.bytes);
+const mesh1 = firstMesh(palmRoot);
+const mesh2 = firstMesh(palmRoot2);
+assert(mesh1.geometry === mesh2.geometry, "cached GLTF clones stopped sharing immutable geometry");
+assert(mesh1.material !== mesh2.material, "cached GLTF clones share mutable material state");
+const material1 = mesh1.material as { color?: { set(value: number): void; getHex(): number }; map?: unknown };
+const material2 = mesh2.material as { color?: { getHex(): number }; map?: unknown };
+const color2 = material2.color?.getHex();
+material1.color?.set(0xff00ff);
+assert(material2.color?.getHex() === color2, "material mutation on one GLTF placement contaminated another clone");
+assert(material1.map === material2.map, "cached GLTF clones stopped sharing immutable decoded textures");
+
+// --- untextured fixture: factor/vertex-color assets parse clean with 0 maps ----------
+for (const id of ["fixtures/mesh.glb"]) {
   const res = reg.resolve(id);
   const root = await parseGltfScene(id, res.bytes);
   let meshCount = 0;
@@ -92,6 +115,6 @@ for (const id of ["cottage.glb", "rock.glb"]) {
 }
 
 ops.op_log(
-  `p11_gltf_texture OK: palm.glb embedded bufferView base-color texture decoded to ${w}x${h} RGBA pixels ` +
-  `(material.map: null -> loaded DataTexture); cottage.glb + rock.glb still parse clean with 0 textures.`,
+  `p11_gltf_texture OK: textured fixture embedded bufferView base-color texture decoded to ${w}x${h} RGBA pixels ` +
+  `(material.map: null -> loaded DataTexture); untextured fixture still parses clean with 0 textures.`,
 );

@@ -25,6 +25,12 @@ import type { WorldCommand } from "../src/worldlog/log.ts";
 function assert(cond: boolean, msg: string): asserts cond {
   if (!cond) throw new Error("p16_coedit FAIL: " + msg);
 }
+const digestF32 = new Float32Array(1);
+const digestU32 = new Uint32Array(digestF32.buffer);
+function f32hex(value: number): string {
+  digestF32[0] = value;
+  return digestU32[0].toString(16).padStart(8, "0");
+}
 function makeWorld(worldOps: EngineOps): WorldContext {
   const scene = { add() {}, remove() {}, position: { set() {}, x: 0, y: 0, z: 0 }, background: null as unknown };
   const camera = { position: { set() {} }, aspect: 1, lookAt() {}, updateProjectionMatrix() {} };
@@ -91,7 +97,7 @@ assert(d1 === d2, `the co-authored world replays byte-identically (\n  ${d1}\n  
 assert(d1.startsWith("5|"), `the merged world has all 5 entities (digest=${d1})`);
 // Every author's boxes are present (x = 0 base, 1&2 from A, 3&4 from B).
 for (const x of [0, 1, 2, 3, 4]) {
-  assert(d1.includes(`:${x.toFixed(4)},0.0000,0.0000`), `the co-authored world includes the box at x=${x} (digest=${d1})`);
+  assert(d1.includes(`:${f32hex(x)},00000000,00000000`), `the co-authored world includes the box at x=${x} (digest=${d1})`);
 }
 
 // ── 4. Merge is symmetric in CONTENT: merging B first then A yields the same set of entities. ─
@@ -103,7 +109,7 @@ for (const x of [0, 1, 2, 3, 4]) {
   h2.merge("main", "a");
   const d = await replayDigest(h2.commands("main"));
   assert(d.startsWith("5|"), `merging in the other order still yields all 5 entities (digest=${d})`);
-  for (const x of [0, 1, 2, 3, 4]) assert(d.includes(`:${x.toFixed(4)},0.0000,0.0000`), `box x=${x} present regardless of merge order`);
+  for (const x of [0, 1, 2, 3, 4]) assert(d.includes(`:${f32hex(x)},00000000,00000000`), `box x=${x} present regardless of merge order`);
 }
 
 ops.op_log(

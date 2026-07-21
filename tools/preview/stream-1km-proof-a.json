@@ -1,0 +1,9 @@
+{
+  "_comment": "Map Phase 3.5 proof A: the ~1 km² FMG-compiled world (maps/fmg-1km.worldmap.json, extent 1000×1000 m) over the MAIN ISLAND — every visible tile is CLIENT-streamed around the live camera (world.setTerrainSource only; no generateRegion). The world.streamFollow command carries no valid regionId (this world never generated a region) so the skill call is an isolated authoring failure — it is here ONLY so runLive's client-stream radius picker (browser-entry.ts) reads radius:14, the Phase-3.5 cap. Expect: the central island (mountain core, grass/forest paint, river channels) with the two enrichment islets' water between, coastline falling to the sea floor, distance fading into sky-matched haze.",
+  "commands": [
+    { "kind": "physics", "op": "op_physics_create_world", "args": [-9.81] },
+    { "kind": "skill", "tool": "world.setTerrainSource", "input": { "kind": "map", "mapAssetId": "maps/fmg-1km.worldmap.json" } },
+    { "kind": "skill", "tool": "world.streamFollow", "input": { "regionId": "no-such-region", "anchor": [0, 0, 0], "radius": 14 } }
+  ],
+  "camera": { "center": [-90, 5, -40], "radius": 300, "height": 150, "autoSpin": 0, "far": 1500 }
+}

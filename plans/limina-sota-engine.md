@@ -14,7 +14,7 @@ The defining idea is architectural, not a bolt-on:
 
 ## Where limina stands today
 
-This is not greenfield. Phases 0–12 are complete: a single Rust binary (deno_core/V8 → WebGPU/three.js → native Rapier → bitECS), **~140 typed, permissioned, traced skills** across 17 systems, a perception→decision→action agent loop (scripted / Ollama / gateway), a human approval-gate editor (Phase 7), browser export-playback (Phase 8 Mode A), procedural terrain, and real rigged-glTF characters.
+This is not greenfield. Phases 0–12 are complete: a single Rust binary (deno_core/V8 → WebGPU/three.js → native Rapier → bitECS), **~230 typed, permissioned, traced skills** across 51 systems, a perception→decision→action agent loop (scripted / Ollama / gateway), a human approval-gate editor (Phase 7), browser export-playback (Phase 8 Mode A), procedural terrain, and real rigged-glTF characters.
 
 A hard audit of the flagship capstone located where the gap actually is:
 

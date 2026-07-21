@@ -1,0 +1,58 @@
+{
+  "schema": "limina.visual-reference-acquisition/v1",
+  "id": "furniture/dining-chair/v1",
+  "subjectKind": "furniture",
+  "sources": [
+    {
+      "id": "met/chair-186676",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/186676",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/es/original/24923.jpg",
+      "creator": "Unknown Flemish maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "roles": [
+        "silhouette",
+        "construction",
+        "joinery",
+        "material",
+        "function"
+      ]
+    },
+    {
+      "id": "met/side-chair-209203",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/209203",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/es/original/18833.jpg",
+      "creator": "Unknown Tuscan maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "roles": [
+        "silhouette",
+        "construction",
+        "function"
+      ]
+    },
+    {
+      "id": "met/side-chair-1620",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/1620",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/ad/original/DT236420.jpg",
+      "creator": "Unknown Boston maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "roles": [
+        "silhouette",
+        "construction",
+        "joinery",
+        "function"
+      ]
+    },
+    {
+      "id": "met/library-table-14282",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/14282",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/ad/original/DT185.jpg",
+      "creator": "Rose Valley Shops and William Lightfoot Price; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "roles": [
+        "construction",
+        "joinery",
+        "material"
+      ]
+    }
+  ]
+}

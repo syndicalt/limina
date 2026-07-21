@@ -75,6 +75,8 @@ const good = recorder.toJsonl();
   const a = await assessBundle(good);
   assert(a.shippable && a.structural && a.deterministic, `a genuine bundle is shippable (reason=${a.reason})`);
   assert((a.digest ?? "").startsWith("3|"), `the reconstructed world has 3 entities (digest=${a.digest})`);
+  assert(/:[0-9a-f]{8},[0-9a-f]{8},[0-9a-f]{8}/.test(a.digest ?? ""),
+    `the ship digest encodes bit-exact Float32 positions (digest=${a.digest})`);
 }
 
 // ── 2. REPLAY-EQUIVALENCE: replaying the same bundle twice reconstructs an identical world. ───

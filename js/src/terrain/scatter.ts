@@ -1,7 +1,7 @@
-// Phase 9.1 — deterministic prop SCATTER. Places trees/rocks/grass on a terrain
+// Phase 9.1 — deterministic prop SCATTER. Places trees/rocks on a terrain
 // tile as a PURE function of (seed, tile): a per-tile seeded RNG walks a jittered
 // candidate grid, reads each point's surface height + local slope from the tile's
-// own heights, and decides kind (steep -> rock; moderate/flat -> tree/grass) and
+// own heights, and decides kind (steep -> rock; moderate/flat -> tree) and
 // density. Props are RENDER-ONLY and RECOMPUTED from the tile on load (NOT
 // serialized/exported): because the scatter is portable-deterministic, replay and
 // browser playback reproduce the EXACT same props from the cached tile for free.
@@ -16,7 +16,6 @@ import type { TerrainTile } from "./types.ts";
 export enum PropKind {
   Tree = 0,
   Rock = 1,
-  Grass = 2,
 }
 
 /** One placed prop. `y` is the terrain surface at (x,z). Serializable / bit-exact. */
@@ -101,7 +100,7 @@ export function scatterProps(tile: TerrainTile, seed: number, opts: ScatterOptio
       const slope = Math.sqrt(ax * ax + az * az);
 
       const roll = rng();
-      let kind: number;
+      let kind: PropKind | null;
       let accept: number;
       if (slope > rockSlope) {
         kind = PropKind.Rock;
@@ -110,19 +109,23 @@ export function scatterProps(tile: TerrainTile, seed: number, opts: ScatterOptio
         kind = PropKind.Tree;
         accept = 0.45; // trees sparser, on moderate/flat ground
       } else {
-        kind = PropKind.Grass;
-        accept = 0.75; // grass dense on flat ground
+        // This branch used to emit the legacy four-plane grass prop. Keep the
+        // branch and its acceptance threshold solely to preserve the historical
+        // RNG schedule: later candidates, trees, and rocks must remain bit-exact.
+        // Grass is now owned exclusively by the pluggable grass-field package.
+        kind = null;
+        accept = 0.75;
       }
       const yaw = rng() * Math.PI * 2;
       const sizeJitter = rng();
-      if (roll > accept) continue;
+      if (kind === null || roll > accept) continue;
       props.push({
         kind,
         x,
         y,
         z,
         yaw,
-        scale: kind === PropKind.Grass ? 0.6 + sizeJitter * 0.5 : 0.8 + sizeJitter * 0.8,
+        scale: 0.8 + sizeJitter * 0.8,
       });
     }
   }

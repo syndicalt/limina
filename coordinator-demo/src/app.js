@@ -21,6 +21,7 @@ import {
 } from "./viewmodel.js";
 import { WorldRenderer } from "./world-renderer.js";
 
+const MAX_TRACE_EVENTS = 5000;
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -44,6 +45,20 @@ const state = {
 };
 
 const URL_DEFAULT = "ws://localhost:8787/";
+
+export function ingestTraceEvents(eventsById, events, maxEvents = MAX_TRACE_EVENTS) {
+  if (!Array.isArray(events) || events.length === 0) return;
+  for (const ev of events) {
+    if (!ev || typeof ev.id !== "string") continue;
+    if (eventsById.has(ev.id)) eventsById.delete(ev.id);
+    eventsById.set(ev.id, ev);
+  }
+  while (eventsById.size > maxEvents) {
+    const oldest = eventsById.keys().next().value;
+    if (oldest === undefined) break;
+    eventsById.delete(oldest);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Activity log.
@@ -178,7 +193,7 @@ async function refreshAll() {
   try {
     const tail = await c.callTool("trace.tail", { afterSeq: state.afterSeq, limit: 500 });
     if (tail && Array.isArray(tail.events)) {
-      for (const ev of tail.events) state.events.set(ev.id, ev);
+      ingestTraceEvents(state.events, tail.events);
       if (tail.nextAfterSeq !== null && tail.nextAfterSeq !== undefined) state.afterSeq = tail.nextAfterSeq;
     }
     const list = await c.callTool("approval.list", {});

@@ -1,0 +1,43 @@
+{
+  "schema": "limina.visual-fidelity-candidate-review/v1",
+  "artifact": {
+    "assetId": "qc/internal/temperate-river-leading-line-native-grass-v4.0.1.png",
+    "sha256": "232e84925ff4fd951159feb6d35a602d04b50ac753bf78e09692582d3304d173",
+    "byteLength": 3787259,
+    "cameraRoute": "river-leading-line"
+  },
+  "publication": {
+    "manifestHash": "sha256:12a9ea3b9aed64bc3952e06eccb61cef263daabda2bac81debcc6aeb8c6b881c",
+    "contentClosureHash": "sha256:f4239506113f835238c2326fdbfa8fd061d9963c21d6c1dbd89833993f371e09",
+    "grassVisualPackageVersion": "4.0.1",
+    "runtimePackVersion": "1.1.5",
+    "contentStatus": "candidate"
+  },
+  "capture": {
+    "backend": "native-webgpu",
+    "adapterDescription": "Intel(R) Iris(R) Xe Graphics (ADL GT2)",
+    "resolution": [1921, 1081],
+    "nvidiaXidObserved": false,
+    "tracePath": "traces/temperate-fidelity-native-capture.json"
+  },
+  "evidence": {
+    "schema": "limina.visual-fidelity-floor/v1",
+    "referenceSetId": "project-gorgon-floor-20260711",
+    "lane": "nature",
+    "captureClass": "production-engine",
+    "nativeBackend": true,
+    "fixedCameraRoute": true,
+    "humanReview": {
+      "approved": true,
+      "reviewer": "project-owner",
+      "statement": "it looks great."
+    }
+  },
+  "decision": {
+    "status": "human-approved-handoff-checkpoint",
+    "releasePassed": false,
+    "acceptedVisualChange": "Cinematic physical grass now dissolves from 18m to 32m into the existing far-surface proxy without increasing density, residency, or triangle budgets.",
+    "evidenceCaveat": "The v2 trace captured the final fullscreen post pass as one draw and one triangle. Those submission counters are invalid as whole-scene telemetry and must not be cited as release evidence. The pixel artifact and its hashes remain valid.",
+    "nextAction": "Resume formal roadmap closure on DGX Spark after rebuilding ARM64 dependencies; create the browser review bridge before the next visual capture."
+  }
+}

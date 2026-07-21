@@ -45,6 +45,7 @@ for (const n of ["scene.createEntity", "world.generateRegion", "skills.search", 
 for (const n of ["quest.define", "combat.melee", "progression.skillTree", "save.export"]) {
   assert(!bBoot.has(n) && bFull.has(n), `${n} should be discoverable-but-not-bootstrap for builder`);
 }
+assert(!bBoot.has("gds.plan") && bFull.has("gds.plan"), "specialized gds.plan should be discoverable-but-not-bootstrap for builder");
 
 // (4) Grant-filtering narrows the core set per profile: a player (no scene.write / no
 //     terrain.generate) does NOT get the build-only core verbs, but DOES get the play ones.

@@ -68,7 +68,7 @@ export interface PolicyContext {
 export interface QuotaState {
   key: string;
   limit: number;
-  windowMs: number;
+  windowTicks: number;
   /** hits already counted in the current window (BEFORE this call committed). */
   used: number;
   remaining: number;
@@ -114,7 +114,8 @@ export interface QuotaSpec {
   /** Counter scope: per session (default) or global across sessions. */
   perSession?: boolean;
   limit: number;
-  windowMs: number;
+  /** Deterministic simulation ticks in the rolling quota window. */
+  windowTicks: number;
 }
 
 /** A per-session resource budget. Any dimension left undefined is unbounded. */
@@ -145,7 +146,7 @@ interface BudgetLedger {
 export class PolicyEngine {
   private readonly profiles = new Map<string, Set<string>>();
   private readonly quotaRules: QuotaSpec[] = [];
-  /** sliding-window hit timestamps, keyed `${cap}::${scope}`. */
+  /** sliding-window hit TICKS (deterministic sim time), keyed `${cap}::${scope}`. */
   private readonly quotaHits = new Map<string, number[]>();
   /** revoked single capabilities, keyed `${sessionId}::${cap}`. */
   private readonly revokedCaps = new Set<string>();
@@ -155,6 +156,7 @@ export class PolicyEngine {
   private readonly revokedPackages = new Set<string>();
   private readonly budgets = new Map<string, BudgetLedger>();
   private readonly admittedSessions = new Set<string>();
+  private readonly admittedSessionRefs = new Map<string, number>();
   private readonly maxSessions: number;
 
   constructor(opts: PolicyEngineOptions = {}) {
@@ -245,7 +247,7 @@ export class PolicyEngine {
     // 4. quota (peek; commit only if the whole decision allows).
     const quota = this.quotaPeek(ctx);
     if (quota !== undefined && quota.remaining <= 0) {
-      return { ...base, allow: false, rule: "quota.exceeded", reason: `quota exhausted for '${quota.key}' (${quota.used}/${quota.limit} per ${quota.windowMs}ms)`, quota };
+      return { ...base, allow: false, rule: "quota.exceeded", reason: `quota exhausted for '${quota.key}' (${quota.used}/${quota.limit} per ${quota.windowTicks} ticks)`, quota };
     }
     // 5. resource budget (peek).
     const ledger = this.budgets.get(ctx.sessionId);
@@ -287,16 +289,31 @@ export class PolicyEngine {
     if (ctx.profile !== undefined && !this.profiles.has(ctx.profile)) {
       return { ...base, allow: false, rule: "profile.unknown", reason: `unknown profile '${ctx.profile}'`, permissionDenial: true };
     }
-    if (!this.admittedSessions.has(ctx.sessionId) && this.admittedSessions.size >= this.maxSessions) {
+    const alreadyAdmitted = this.admittedSessions.has(ctx.sessionId);
+    if (!alreadyAdmitted && this.admittedSessions.size >= this.maxSessions) {
       return { ...base, allow: false, rule: "quota.exceeded", reason: `session admission quota full (${this.admittedSessions.size}/${this.maxSessions})` };
     }
     this.admittedSessions.add(ctx.sessionId);
+    this.admittedSessionRefs.set(ctx.sessionId, (this.admittedSessionRefs.get(ctx.sessionId) ?? 0) + 1);
     return { ...base, allow: true, rule: "session.admitted", reason: `session admitted under profile '${ctx.profile ?? "(none)"}'` };
   }
 
-  /** Release an admitted session (frees a session-quota slot on disconnect). */
+  /** Release an admitted session (frees a session-quota slot on final disconnect). */
   releaseSession(sessionId: string): void {
+    const refs = this.admittedSessionRefs.get(sessionId) ?? 0;
+    if (refs > 1) {
+      this.admittedSessionRefs.set(sessionId, refs - 1);
+      return;
+    }
+    this.admittedSessionRefs.delete(sessionId);
     this.admittedSessions.delete(sessionId);
+    this.budgets.delete(sessionId);
+    for (const capKey of [...this.revokedCaps]) {
+      if (capKey.startsWith(`${sessionId}::`)) this.revokedCaps.delete(capKey);
+    }
+    for (const quotaKey of [...this.quotaHits.keys()]) {
+      if (quotaKey.endsWith(`::${sessionId}`)) this.quotaHits.delete(quotaKey);
+    }
   }
 
   // ---- package load (the M9 hook) ------------------------------------------
@@ -391,22 +408,24 @@ export class PolicyEngine {
   private quotaPeek(ctx: PolicyContext): QuotaState | undefined {
     const match = this.matchingQuota(ctx);
     if (match === undefined) return undefined;
-    const used = this.windowHits(match.key, match.spec.windowMs).length;
-    return { key: match.key, limit: match.spec.limit, windowMs: match.spec.windowMs, used, remaining: Math.max(0, match.spec.limit - used) };
+    const used = this.windowHits(match.key, match.spec.windowTicks, ctx.tick ?? 0).length;
+    return { key: match.key, limit: match.spec.limit, windowTicks: match.spec.windowTicks, used, remaining: Math.max(0, match.spec.limit - used) };
   }
 
   private quotaCommit(ctx: PolicyContext): QuotaState | undefined {
     const match = this.matchingQuota(ctx);
     if (match === undefined) return undefined;
-    const hits = this.windowHits(match.key, match.spec.windowMs);
-    hits.push(Date.now());
+    const now = ctx.tick ?? 0;
+    const hits = this.windowHits(match.key, match.spec.windowTicks, now);
+    hits.push(now);
     this.quotaHits.set(match.key, hits);
-    return { key: match.key, limit: match.spec.limit, windowMs: match.spec.windowMs, used: hits.length, remaining: Math.max(0, match.spec.limit - hits.length) };
+    return { key: match.key, limit: match.spec.limit, windowTicks: match.spec.windowTicks, used: hits.length, remaining: Math.max(0, match.spec.limit - hits.length) };
   }
 
-  /** Prune hits older than the window and return the live (in-window) hits. */
-  private windowHits(key: string, windowMs: number): number[] {
-    const cutoff = Date.now() - windowMs;
+  /** Prune hits older than the window (measured in deterministic TICKS) and return
+   *  the live (in-window) hits. `nowTick` is the current simulation tick. */
+  private windowHits(key: string, windowTicks: number, nowTick: number): number[] {
+    const cutoff = nowTick - windowTicks;
     const hits = (this.quotaHits.get(key) ?? []).filter((t) => t > cutoff);
     this.quotaHits.set(key, hits);
     return hits;

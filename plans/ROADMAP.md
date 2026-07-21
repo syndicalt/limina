@@ -21,30 +21,85 @@
 | **5 — Presentation & Audio** | On-screen text/UI rendering + spatial audio (multimodal output) | ✅ **COMPLETE & verified** — **P5-A (Text/UI):** expressive in-scene containers (text/speech/thought/callout/label + screen HUD), builder-styled, billboard/anchored/lifecycle, via permission-gated traced `ui.*` skills; embedded font → `DataTexture`. **P5-B (Audio):** `limina-audio` (rodio 0.22.2/cpal) — dedicated audio thread, 4-bus mixer (master/sfx/ambience/voice), spatial `SpatialPlayer` (camera-listener + 1/d²), 12 `audio.*` ops, permissioned/traced `audio.*` skills, Rust-side **fire-and-forget TTS** (espeak/Piper; never freezes the frame); backend explicit via `LIMINA_AUDIO=null` (device-free CI). **Capstone demos:** `forest_conversation.ts` — agents hold a real non-deterministic Ollama conversation in speech bubbles **and speak it aloud** over an ambient bed; `numbers_party.ts` — ambient bed + positional chatter as the flythrough camera sweeps the crowd (102 fps). 52 headless pass + capstone; clippy/fmt 0; procedural synthesis (no audio assets), voice via espeak-ng (`plans/limina-phase-5b-audio/plan.md`, `plans/limina-phase-5-presentation-audio/plan.md`) |
 | **6 — Open the Door & De-risk** | Host-capability seams + web-export contract + worldgen S0 greenlight | ✅ **COMPLETE** (`plans/phase-6-open-the-door-plan.md`) — `installOps()` boundary, `RenderOps`/`PhysicsOps`/`TraceOps` seams, W0 snapshot-keyframe export contract, S0 InfiniteDiffusion greenlit (RTX 3050, exact determinism, 0.87 s/tile) |
 | **7 — The Authoring Surface** | Human-in-the-loop approval gate + co-authoring editor + multi-turn | ✅ **COMPLETE** (`plans/phase-7-authoring-surface-plan.md`) — opt-in review gate in `registry.invoke()` (pending/grant/deny, causal chain intact, revocation-safe), `editor/` web app (reasoning tree + approval queue), 54/54 tests green |
-| **8 — Run Anywhere** | Export-playback to browser/phone (snapshot-keyframe, one-command export) | ✅ **COMPLETE — first cut (Mode A)** (`plans/phase-8-run-anywhere-plan.md`) — export package `{manifest, log.jsonl, keyframes.jsonl}`, keyframe-driven `PhysicsOps` (bit-identical parity gate), browser host (canvas-WebGPU + IndexedDB + rAF accumulator), 57/57 tests green. **Mode B (live wasm-Rapier authoring) deferred.** |
+| **8 — Run Anywhere** | Export-playback to browser/phone (snapshot-keyframe, one-command export) | ✅ **COMPLETE — first cut (Mode A)** (`plans/phase-8-run-anywhere-plan.md`) — export package `{manifest, log.jsonl, keyframes.jsonl}`, keyframe-driven `PhysicsOps` (bit-identical parity gate), browser host (canvas-WebGPU + IndexedDB + rAF accumulator), 57/57 tests green. **Mode B: first cut shipped — see the Beyond MVP table below.** |
 | **9 — Worlds Worth Authoring** | `terrain.*`/`world.*` skill seam + native heightfield + model IPC | ✅ **COMPLETE — first cut** (`plans/phase-9-worlds-worth-authoring-plan.md`) — `op_physics_add_heightfield`, `ProceduralTerrainSource` (deterministic noise), 4 typed/permissioned skills, content-addressed tile cache, `ModelTerrainSource` (S1 IPC), browser playback from cached tiles, 61/61 tests green. **W2/W3 polish deferred.** |
 | **10 — Agent Governance & Orchestration** | Scoped exposure + permission bundles + delegate/coordinator | ✅ **COMPLETE** (`plans/phase-10-governance-orchestration.md`, `plans/phase-10-implementation-plan.md`) — filtered `registry.list(grants?)`, `AgentRecord.bundle?`, `skills.search`, `delegate` skill + gate-driven review, 66/66 tests green |
 | **11 — Content & Assets** | Render baseline + material palette + asset registry + scatter + water | ✅ **COMPLETE** (`plans/phase-11-content-assets.md`, `plans/phase-11-implementation-plan.md`) — default PBR lighting/IBL, 10 named materials, content-addressed `asset.place`/`asset.scatter` (elevation-aware), CC0 cottage-on-a-beach gate met, 74/74 tests green. **Generator-richness polish deferred.** |
-| **12 — Game-Building Skill Catalog** | ~85 skills across 17 systems (player, camera, combat, quest, NPC, navmesh, VFX, save, progression…) | ✅ **COMPLETE** (`plans/phase-12-playable-game-skills.md`; **finished + made deterministic in waves A/B/C** — `plans/phase-12-finish.md`) — 15 modules (player/camera/animation/interaction/inventory/gamestate/triggers/quest/combat/behavior/navmesh/vfx/save/progression/worldstate), all WIRED + replay-deterministic + tested; progressive discovery (`skills.browse`/`skills.search`) + a bootstrap tool surface, 8 permission profiles. **Capstone — first cut done:** `playable_game_window.ts` + `p12_capstone.ts` (an agent authors *and* plays a tiny complete game — terrain → player → item pickup → trigger → win, deterministic); the full Part-F integrated demo (NPCs/combat/quest/save in one) is still open. |
+| **12 — Game-Building Skill Catalog** | ~85 skills across 17 systems (player, camera, combat, quest, NPC, navmesh, VFX, save, progression…) | ✅ **COMPLETE** (`plans/phase-12-playable-game-skills.md`; **finished + made deterministic in waves A/B/C** — `plans/phase-12-finish.md`) — 15 modules (player/camera/animation/interaction/inventory/gamestate/triggers/quest/combat/behavior/navmesh/vfx/save/progression/worldstate), all WIRED + replay-deterministic + tested; progressive discovery (`skills.browse`/`skills.search`) + a bootstrap tool surface, 14 permission profiles. **Capstone — first cut done:** `playable_game_window.ts` + `p12_capstone.ts` (an agent authors *and* plays a tiny complete game — terrain → player → item pickup → trigger → win, deterministic); the full Part-F integrated demo (NPCs/combat/quest/save in one) is still open. |
 
 **Shipped (0+1):** one native binary — Rust host → V8 (`deno_core`) → WebGPU (`deno_webgpu` + Three.js) → native Rapier physics → bitECS, on a fixed-timestep loop. A typed/permissioned/versioned skill registry with hooks, an **in-process** MCP `listTools`/`callTool` surface, EventLoom-shaped traces with a sha256 chain + JSONL export, and an agent ecosystem (perception → decision → action, LLM-agnostic: scripted / local Ollama / cloud gateway). Builder + player demos, all verified.
 
 ## Beyond MVP (post-0.1.0)
 
-Phases 6–12 are **done** (host seams, authoring surface, browser export-playback, terrain generation, governance, assets, game-building catalog). **Also shipped since (polish + proof):** the default-render skill library (auto-surface terrain + biome scatter + post), the demo suite + materials showcase, a **rigged skinned-glTF player** (skeletal animation confirmed working on deno_webgpu), curvature-aware prop placement (no float/bury), and a public **`/examples` page whose flagship island runs LIVE in-browser** — a concrete proof of the Phase 8 export-playback path in a real browser tab. The remaining work:
+Phases 6–12 are **done** (host seams, authoring surface, browser export-playback, terrain generation, governance, assets, game-building catalog). **Also shipped since (polish + proof):** the default-render skill library (auto-surface terrain + biome scatter + post), the demo suite + materials showcase, a **rigged skinned-glTF player** (skeletal animation confirmed working on deno_webgpu), curvature-aware prop placement (no float/bury), and a public **`/examples` page whose flagship island runs LIVE in-browser** — a concrete proof of the Phase 8 export-playback path in a real browser tab.
+
+**Shipped on `feat/gamestack-refactor` since 2026-07-06 (post-dated this roadmap's last edit):** the **Map Studio + Map Painter** authoring surface (`plans/map-painter.md`, P1–P5 CLOSED) — paint landmass/terrain/elevation/biome/river/stamp layers → a pure compiler → the WorldMap IR → both terrain paths, with a real-GPU **3D peek**; the **streamed 1 km² world** milestone; the **in-game editor** with the ＋New describe→architect→QC→approve→catalog→place loop; the **architect daemon** (asset-authoring pipeline); **kernel push-subscribe** (K4, replaces 1 s polling); Blender-backed asset authoring with QC gates; and an **alpha outsider bundle** (`dist-alpha/`). The full remaining-roadmap execution plan is `plan-89ac14290cd84b65` (Tracks 0–4). The remaining work:
 
 | Phase / Item | Status | Plan |
 |---|---|---|
-| **13 — Ecosystem & Marketplace** | 🔲 Not started | Public registry + external memory adapters |
-| **Phase 8 Mode B** (live wasm-Rapier browser authoring) | 🔲 Deferred | Sim-worker / SAB split (see `plans/phase-8-run-anywhere-plan.md`) |
-| **Worldgen W2** (hydraulic + thermal erosion bake pass) | 🔲 Deferred | `plans/worldgen-roadmap.md` |
-| **Worldgen W3** (agent-steerable coarse→fine generation) | 🔲 Deferred | `plans/worldgen-roadmap.md` |
+| **13 — Ecosystem & Marketplace** | 🔲 Not started — **asset repository first** (decision 2026-07-07) | `plans/skills-exchange-roadmap.md` · public registry + external memory adapters |
+| **Capstone game = Beacon Quest** | ✅ First integrated proof complete — functional/design/export/package/render dogfood gate green; retained as a regression world | `games/beacon-quest/` · `plans/phase-12-playable-game-skills.md` |
+| **Phase 8 Mode B** (live wasm-Rapier browser authoring) | ✅ First cut shipped — sim-worker/SAB live authoring path and policy boundary are present and gated | `plans/phase-8-run-anywhere-plan.md` |
+| **On-Ramp** (`create-limina-app`, one-command outsider start) | ✅ First cut shipped — project-scoped editor persistence, self-contained scaffold, deterministic export, and scaffold gate | `tools/create-limina-app/` · `tools/scaffold/` |
+| **Worldgen W2** (hydraulic + thermal erosion bake pass) | ✅ Shipped in **WB-F0 Slice 0.4** using the existing canonical erosion pipeline | `plans/world-builder-aaa.md` |
+| **Worldgen W3** (agent-steerable coarse→fine generation) | 🔲 **Re-scoped 2026-07-07** — the authored-map path is superseded by the Map Painter; only the pure-procedural hint API remains | `plans/worldgen-roadmap.md` |
 | **Worldgen W5** (native wgpu model port) | 🔲 Deferred | `plans/worldgen-roadmap.md` |
-| **Water rendering upgrade** (depth-buffer, proper surf transition) | 🔲 Deferred | `plans/worldgen-roadmap.md` |
-| **Phase 12 capstone** (FULL integrated game: NPCs/combat/quest/save in one) | 🟡 First cut done (tiny game ships + passes `p12_capstone`); full Part-F open | `plans/phase-12-playable-game-skills.md` |
-| **bmap pipeline** (real-world geo → limina world) | 🔲 Parked | `plans/bmap-pipeline-spike.md` |
+| **Water rendering upgrade** (depth-buffer, proper surf transition) | 🟡 **WB-W1 mechanically complete; human-approved candidate recorded; formal release open** — generated topology/render/contact/swim, Atlas authoring, terrain-depth colour/coverage, downstream flow, bank foam/caustics, waterfall foam/mist, depth-safe viewport refraction, and owned planar reflection are shipped. The owner approved the fixed-camera v13 production-scene result against the locked visual floor; flow-driven foam and local turbulence are deferred polish. Native-backend, regression, lifecycle, and target-hardware evidence remain mandatory. | `plans/world-builder-aaa.md` |
+| **Biomes & production surface content** | 🟡 **WB-B2 runtime/content path shipped; human-approved candidate recorded; formal release open** — strict 40-biome metadata registry, deterministic full-world blended field, exact runtime pack, 256-chunk PBR surface/population publication, bounded camera-resident grass/tree systems, closure-gated content, compiler/runtime activation, and accepted-asset integration are green. The representative nature scene now has explicit owner approval at the Project Gorgon floor. Browser construction was reduced from 402.1s to 46.0s without changing scene counts; native regression, lifecycle, target-hardware evidence, texture compression, and post-buffer budgets remain. | `plans/world-builder-aaa.md` |
+| **Native asset-generation pipeline** | 🟡 **Chunk A + B1/B2 + B3 mechanical path complete; human-approved candidate recorded; formal release open** — the exact locked WorldMap deterministically rebuilds a complete 256-chunk 1.4 revision with one compiler-owned biome field, albedo/normal/ORM surface composites, 54,822 ecological anchors, package-selected dense grass, tree LODs, closure-authorized content, atomic publication, and authenticated runtime retrieval. Compiler→publisher→server E2E and no-write regeneration pass, and the v13 reference-floor production-scene candidate is owner-approved. The bundle remains `candidate` until native-backend, regression, lifecycle, target-hardware, compression, and buffer-budget evidence closes. | `plans/native-asset-generation-pipeline.md` |
+| **Hero asset build pipeline** | 🔲 **Planned** — a specialized profile over the native asset compiler for focal-point castles, sacred trees, monoliths, temples, and landmarks. Adds visual thesis, narrative construction, site/approach authority, bespoke interactions, silhouette-preserving LOD review, expanded guarded engine captures, and exact-artifact human approval without creating a second asset ecosystem. | `plans/hero-asset-pipeline.md` |
+| **Functional buildings** | 🟡 **FB-2 closed; FB-3 complete; FB-4 mechanically closed / visual HITL pending** — the approved R1 cottage remains the immutable v1 visual regression fixture. Strict v2 layered topology, room-aware acoustics/residency/spawns, structural multi-room compilation, Blender semantic round-trip, and real native capsule traversal across every portal/stair are CPU-verified. A new guarded engine artifact and exact owner approval remain required before FB-4 closes; FB-5 catalog and settlement publication authority are proceeding without bypassing that gate. | `plans/functional-buildings.md` |
+| **bmap pipeline** (real-world geo → limina world) | 🔲 Parked — un-park via its S0 | `plans/bmap-pipeline-spike.md` |
 
-The **immediate next sequence** — the Capstone Game → the On-Ramp → Live Authoring → *then* Phase 13 — is planned in [`plans/path-to-adoption.md`](./path-to-adoption.md) (strategy), with the milestone-level execution detail (work units, acceptance gates, what's reuse vs gap) in [`plans/implementation-plan.md`](./implementation-plan.md). The full post-MVP sequencing, acceptance gates, and detail live in [`plans/post-mvp-roadmap.md`](./post-mvp-roadmap.md). The original MVP spec is preserved at [`docs/mvp-spec.md`](../docs/mvp-spec.md).
+The active execution sequence is the approved **Limina Studio Foundation + World Builder** program:
+M0 baseline/measurement → WB-F0 transactions, Atlas↔3D, editor loop, and fidelity contract → WB-W1
+water/swim → WB-B2 biomes/surface → separate underground, aerial, scale, content, and overlay milestones.
+The source-controlled execution detail is [`plans/world-builder-aaa.md`](./world-builder-aaa.md), with
+interactive review plan `plan-6c5cbc419f824a8d`. Older adoption and implementation plans remain
+historical evidence for the already-shipped Capstone, On-Ramp, and Live Authoring work.
+
+The hard visual release floor is [`plans/visual-fidelity-release-contract.md`](./visual-fidelity-release-contract.md).
+Diagnostic fixtures and headless pixel checks are engineering evidence only; they cannot be presented or
+accepted as visual results. Production captures become reviewable only after every automated facet passes,
+and release still requires explicit human comparison against the locked nine-frame reference set.
+
+### Backlog: agent-quality runtime and world-building guardrails
+
+Limina must make the reliable, performant path the default for agent-authored games and worlds. A
+generated feature is not complete because a demo runs: it must remain deterministic where simulation
+requires it, bounded, observable, testable, and responsive on declared target hardware and world scale.
+
+- Provide narrow domain APIs for gameplay and world authoring so agents do not invent competing update
+  loops, streaming systems, resource managers, or persistence paths.
+- Keep authoritative simulation fixed-step and replay-verifiable; isolate nondeterministic presentation,
+  networking, model inference, and wall-clock effects behind explicit recorded boundaries.
+- Require atomic authoring transactions, cancellation, rollback, and source-fenced derived artifacts so a
+  failed agent operation cannot leave a partially updated world.
+- Enforce per-frame CPU, GPU, allocation, draw-call, triangle, texture-memory, streaming, startup, and hitch
+  budgets in generated-project release gates, with target-hardware profiles rather than one desktop score.
+- Add static and runtime checks for unbounded loops, full-world scans, N+1 work, per-frame allocation,
+  blocking frame-loop I/O, resource leaks, unsafe low-level access, and nondeterministic state mutation.
+- Make compiled artifacts, instancing, LOD, pooling, culling, and bounded residency the standard APIs for
+  terrain, vegetation, POIs, navigation, and other high-cardinality world content.
+- Validate asset complexity, mesh LOD coverage, texture dimensions/compression, material count, animation
+  cost, collision complexity, and memory footprint during import and before publication.
+- Ship adversarial generated-project tests covering malformed assets, large worlds, rapid edits,
+  cancellation, concurrency, repeated Edit/Play cycles, save/load, replay equivalence, and constrained
+  hardware profiles.
+- Maintain representative fidelity and performance benchmark worlds with reproducible captures and
+  regression thresholds; visual improvement does not justify an unexplained frame-time or memory regression.
+- Expose actionable agent-facing diagnostics that identify the violated invariant, responsible artifact or
+  system, measured value, budget, and supported remediation rather than returning generic failures.
+- Add quality-scored generation gates covering correctness, determinism, boundedness, lifecycle ownership,
+  test depth, and measured performance before generated code or content can be accepted.
+- Permit low-level escape hatches only through explicit capabilities with tighter budgets, focused tests,
+  traceability, and human review.
+- Extend `create-limina-app` scaffold gates so every generated game inherits these protections and cannot
+  silently delete, disable, or bypass them.
+
+**Exit criterion:** an adversarial agent-generated reference game and world pass deterministic replay for
+authoritative state, save/load equivalence, lifecycle stress, bounded streaming, malformed-input rejection,
+and target-hardware frame-time/memory gates without project-specific reliability patches.
 
 ## The arc
 
@@ -119,3 +174,47 @@ a vector DB, or none) living as an **external adapter behind the provider**, nev
 dependency. External Agent Builders bring their own memory over MCP. So: **engine = world +
 perception + durable log (substrate); brain = decision + recall (pluggable); memory backend =
 external.** Persisting the world well (logging) serves any memory-builder without the engine owning memory.
+
+
+## Track R — native editor client (committed 2026-07-20, owner decision)
+
+Two delivery shapes, sequenced:
+
+**R0 — studio desktop shell (LANDED 2026-07-20).** `tools/studio-shell/` — an
+Electron wrapper around the studio web app with PINNED GPU behavior
+(`--force_high_performance_gpu`, `--enable-unsafe-webgpu`, optional
+`--unsafely-treat-insecure-origin-as-secure` for LAN origins; sandboxed
+webContents, no node integration). Motivated by two production incidents:
+dual-GPU laptop GPU roulette and a host with broken WebGPU where browser
+secure-context rules removed every fallback. Verified end-to-end: studio boots
+in-shell on the GB10 with the NVIDIA card driving WebGL
+(`ANGLE (NVIDIA GB10/PCIe, OpenGL 4.5.0)`).
+
+**R1 — native wgpu editor port (Track R proper, planned).** Port the editor
+viewport's render surface onto the native path (`limina --window`, winit +
+`limina_render` wgpu ops) so the editor carries no browser engine at all.
+Committed phases:
+
+- R1.1 **Scene-graph bridge**: the derived-terrain chunk renderer (mesh
+  mount/unmount, residency windows) as native render ops — the editor's
+  largest, most mechanical Three.js surface, and the one whose mount cost
+  drives navigation stalls (see 2.0-B remainder; R1.1 and incremental chunk
+  activation share the same substrate work and should be scheduled together).
+- R1.2 **Water + grass renderers** on native ops (generated-water field is
+  already realm-verified data; only the draw moves).
+- R1.2b **Volumetrics** (study: `plans/volumetrics-study.md`, owner-prioritized):
+  froxel-grid fog foundation first (blue-noise jitter, temporal accumulation
+  with neighborhood clamping + NaN guard, ≤1.5ms tier budget), then sparse
+  brick local volumes (SVT shape), cloud layer, and underwater-as-medium.
+  Architecture is backend-agnostic so the current Three.js path can host V1
+  while Track R adopts V2/V3 as compute passes.
+- R1.3 **Gizmos/overlays** (TransformControls, brush ring, marquee,
+  compass) — small but interaction-critical; brings input mapping onto
+  winit's device events (windowed.rs already normalizes them).
+- R1.4 **Shell parity + retirement**: the Electron shell remains the fallback
+  until the native client reaches viewport-feature parity (selection, tools,
+  telemetry); browser editor stays the zero-install on-ramp regardless.
+
+Standing constraint: every native render op is recorded/replayable like the
+skills behind it — Track R changes WHERE pixels come from, never the
+authoring/determinism contract.

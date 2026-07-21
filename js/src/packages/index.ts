@@ -3,10 +3,11 @@
 // every other capability uses. `registerPackageSkills` binds them to a concrete
 // PackageRegistry; registerCoreSkills wires a default instance so the skills
 // exist out of the box, and a runtime/test can rebind to its own (policy-attached)
-// PackageRegistry by calling registerPackageSkills again (register replaces by name).
+// PackageRegistry by calling registerPackageSkills again (rebind goes through
+// replace(); bare register() throws on collision).
 
 import { z } from "../../build/zod.bundle.mjs";
-import type { SkillRegistry } from "../skills/registry.ts";
+import type { SkillDefinition, SkillRegistry } from "../skills/registry.ts";
 import { PackageRegistry } from "./registry.ts";
 
 export { PackageRegistry } from "./registry.ts";
@@ -16,7 +17,11 @@ export type { PackageManifest, PackageKind } from "./manifest.ts";
 export { satisfies, parseSemver, compareSemver, compareVersions, isSemver } from "./semver.ts";
 
 export function registerPackageSkills(registry: SkillRegistry, packages: PackageRegistry): void {
-  registry.register({
+  // This function is a rebind seam: later calls swap the bound PackageRegistry.
+  const bind = <I, O>(def: SkillDefinition<I, O>): void => {
+    if (!registry.replace(def.name, def as unknown as SkillDefinition)) registry.register(def);
+  };
+  bind({
     name: "package.list",
     version: "1.0.0",
     description: "List installed packages with their manifest provenance: ref (name@version), kind, declared capabilities, engine-compat range, content hash, and whether the package is attested.",
@@ -52,7 +57,7 @@ export function registerPackageSkills(registry: SkillRegistry, packages: Package
     },
   });
 
-  registry.register({
+  bind({
     name: "package.load",
     version: "1.0.0",
     description: "Load an installed package (by name@version ref) under a profile: validates the manifest, checks engine-compat (out-of-bounds rejected), gates declared-vs-granted capabilities via the policy engine (over-claim denied), and loads the untrusted entry into the M6 sandbox. Returns the load decision + provenance event id.",

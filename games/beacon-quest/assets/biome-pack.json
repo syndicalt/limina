@@ -1,0 +1,12 @@
+{
+  "conifer": {
+    "id": "pine.glb",
+    "embedRadius": 0.6
+  },
+  "broadleaf": {
+    "id": "broadleaf.glb"
+  },
+  "boulder": {
+    "id": "rock.glb"
+  }
+}

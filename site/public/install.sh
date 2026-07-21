@@ -22,6 +22,7 @@ WRAPPER_DIR="$REPO/bin"
 WRAPPER="$WRAPPER_DIR/limina-mcp"
 SERVER_NAME="limina"
 REPO_URL="${LIMINA_REPO_URL:-https://github.com/syndicalt/limina.git}"
+GIT_REF="${LIMINA_GIT_REF:-41e9de4e574932bd11762efb24d25094c866fb1b}"
 LIMINA_DIR="${LIMINA_DIR:-$HOME/.limina}"
 BOOTSTRAP=0
 
@@ -45,6 +46,7 @@ you select. Run from a cloned repo, or remotely:
   --help
 
 Env: LIMINA_DIR (clone target, default ~/.limina)
+     LIMINA_GIT_REF (git commit/tag/branch to install, default pinned release commit)
      LIMINA_HARNESSES (non-interactive selection: all | detected | comma,list)
 USAGE
       exit 0 ;;
@@ -85,13 +87,18 @@ bootstrap_if_needed() {
   BOOTSTRAP=1
   REPO="$LIMINA_DIR"; BIN="$REPO/target/release/limina"
   WRAPPER_DIR="$REPO/bin"; WRAPPER="$WRAPPER_DIR/limina-mcp"
-  if [ "$DRY_RUN" = 1 ]; then warn "(dry-run) would clone $REPO_URL → $LIMINA_DIR and build"; return; fi
+  if [ "$DRY_RUN" = 1 ]; then warn "(dry-run) would fetch $REPO_URL@$GIT_REF → $LIMINA_DIR and build"; return; fi
   command -v git >/dev/null 2>&1 || { echo "git is required to bootstrap limina." >&2; exit 1; }
   command -v cargo >/dev/null 2>&1 || { echo "Rust/cargo is required to build limina — see https://rustup.rs" >&2; exit 1; }
   if [ -f "$REPO/js/src/mcp/stdio_runtime.ts" ]; then
-    bold "Updating limina checkout in $LIMINA_DIR"; git -C "$REPO" pull --ff-only || warn "pull failed; using existing checkout"
+    bold "Updating limina checkout in $LIMINA_DIR to $GIT_REF"
+    git -C "$REPO" fetch --depth 1 origin "$GIT_REF"
+    git -C "$REPO" checkout --detach FETCH_HEAD
   else
-    bold "Cloning limina into $LIMINA_DIR"; git clone --depth 1 "$REPO_URL" "$REPO"
+    bold "Cloning limina into $LIMINA_DIR at $GIT_REF"
+    git clone --no-checkout --filter=blob:none "$REPO_URL" "$REPO"
+    git -C "$REPO" fetch --depth 1 origin "$GIT_REF"
+    git -C "$REPO" checkout --detach FETCH_HEAD
   fi
 }
 

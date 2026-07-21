@@ -88,6 +88,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     description: "List the skills the caller is authorized to invoke (names + descriptions). `mode:\"bootstrap\"` returns only the small CORE surface an agent starts with (discover the rest via skills.search/browse); `mode:\"full\"` (default) lists everything authorized.",
     category: "system",
     permissions: [],
+    effect: "read",
     input: z.object({ mode: z.enum(["bootstrap", "full"]).optional().describe("bootstrap = core tools only; full = all authorized (default).") }),
     output: z.object({ tools: z.array(z.object({ name: z.string(), description: z.string(), category: z.string().optional(), priority: z.string().optional() })) }),
     handler: (input, ctx) => ({
@@ -105,6 +106,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     description: "Describe a skill: version, category, and JSON-Schema input.",
     category: "system",
     permissions: [],
+    effect: "read",
     input: describeInput,
     output: z.object({
       name: z.string(),
@@ -139,21 +141,34 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     description: "Search the AUTHORIZED skills by name/description (+ optional category) — browse a large catalog instead of listing everything.",
     category: "system",
     permissions: [],
+    effect: "read",
     input: searchInput,
     output: z.object({ matches: z.array(z.object({ name: z.string(), description: z.string(), category: z.string() })) }),
     handler: (input, ctx) => {
-      const q = input.query.toLowerCase();
       const limit = input.limit ?? 25;
-      const matches: { name: string; description: string; category: string }[] = [];
+      // TOKENIZED + lightly STEMMED match (not one raw-substring test). A naive whole-query substring
+      // made real agent queries miss: "scatter trees" / "plant trees randomly" never substring-match
+      // a name/description, and "trees"/"scattering"/"planting" don't match "tree"/"scatter"/"plant".
+      // Now: split into words, add a crude stem of each (drop -ing/-ed/-s), and a skill matches if its
+      // name+description contains ANY token; rank by how many tokens hit so the best skill leads.
+      const stem = (w: string): string => w.replace(/(ing|ed)$/, "").replace(/s$/, "");
+      const tokens = [...new Set(
+        input.query.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 2).flatMap((w) => [w, stem(w)]),
+      )];
+      const scored: { score: number; name: string; description: string; category: string }[] = [];
       for (const t of registry.list(ctx.permissions)) {
         const def = registry.describe(t.name);
         if (def === undefined) continue;
         if (input.category !== undefined && def.category !== input.category) continue;
-        if (q.length > 0 && !t.name.toLowerCase().includes(q) && !t.description.toLowerCase().includes(q)) continue;
-        matches.push({ name: t.name, description: t.description, category: def.category });
-        if (matches.length >= limit) break;
+        const hay = (t.name + " " + t.description).toLowerCase();
+        let score = 0;
+        for (const tok of tokens) if (hay.includes(tok)) score++;
+        // Empty query → list everything (category filter still applies); otherwise require a token hit.
+        if (tokens.length > 0 && score === 0) continue;
+        scored.push({ score, name: t.name, description: t.description, category: def.category });
       }
-      return { matches };
+      scored.sort((a, b) => b.score - a.score);
+      return { matches: scored.slice(0, limit).map(({ name, description, category }) => ({ name, description, category })) };
     },
   });
 
@@ -167,6 +182,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     description: "Browse the AUTHORIZED skills in a specific category — progressive discovery of a large catalog.",
     category: "system",
     permissions: [],
+    effect: "read",
     input: browseInput,
     output: z.object({ tools: z.array(z.object({ name: z.string(), description: z.string(), category: z.string() })) }),
     handler: (input, ctx) => {
@@ -205,6 +221,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     // behind `trace.read` so only observer profiles (reviewer / reviewer.coordinator
     // / system.readonly) can read it — a scoped delegate worker must NOT.
     permissions: ["trace.read"],
+    effect: "read",
     input: z.object({
       afterSeq: z.number().int().min(-1).optional(),
       limit: z.number().int().min(0).max(1000).optional(),
@@ -226,6 +243,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     // Resolves a cross-agent event + its causal neighbours — same read surface as
     // trace.tail, so it is gated behind the same `trace.read` capability.
     permissions: ["trace.read"],
+    effect: "read",
     input: z.object({ eventId: z.string() }),
     output: z.object({
       event: eventSchema,
@@ -248,14 +266,37 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     // than trace.tail, so it stays behind the same `trace.read` observer capability
     // (one cap, kept simple). A scoped worker has neither read nor export.
     permissions: ["trace.read"],
+    effect: "admin",
     input: z.object({ name: z.string().min(1) }),
     output: z.object({ name: z.string(), events: z.number().int(), bytes: z.number().int() }),
     handler: (input) => tracer.flush(input.name),
   });
 
+  // The live surface material off an entity's mesh (color/roughness/metalness), best-effort — the
+  // headless editor host builds real MeshStandard node materials, so the inspector can seed from
+  // the CURRENT material rather than the create-time origin. Bootstrap/stub meshes return undefined.
+  function readMaterial(mesh: unknown): { color?: number; roughness?: number; metalness?: number } | undefined {
+    const mat = (mesh as { material?: { color?: { getHex?: () => number }; roughness?: unknown; metalness?: unknown } } | undefined)?.material;
+    if (mat === undefined) return undefined;
+    const out: { color?: number; roughness?: number; metalness?: number } = {};
+    if (typeof mat.color?.getHex === "function") out.color = mat.color.getHex();
+    if (typeof mat.roughness === "number") out.roughness = mat.roughness;
+    if (typeof mat.metalness === "number") out.metalness = mat.metalness;
+    return out;
+  }
+
   const snapshotInput = z.object({
     afterEntity: z.string().optional(),
+    entityVersion: z.number().int().nonnegative().optional(),
     limit: z.number().int().min(0).max(500).default(100),
+    // Per-poll cost controls for high-frequency observers (the live editor). Both default
+    // TRUE so the observability contract is unchanged for every existing caller/test. A
+    // routine poller that only needs entities+transforms sets them false to skip the two
+    // blocks that scale with world size / are static catalog data:
+    //   includeResources=false  -> skip the O(all-entities) resource scan (loaded/counts).
+    //   includeSkills=false     -> skip re-serializing the full (static) skill catalog.
+    includeResources: z.boolean().default(true),
+    includeSkills: z.boolean().default(true),
   });
   registry.register({
     name: "inspector.snapshot",
@@ -263,22 +304,38 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     description: "Return a bounded, paginated snapshot of world, entities, agents, skills, permissions, resources, and trace metadata.",
     category: "system",
     permissions: ["scene.read", "ecs.read", "physics.read", "agent.read"],
+    effect: "read",
     input: snapshotInput,
     output: z.object({
       page: z.object({
         limit: z.number().int(),
         totalEntities: z.number().int(),
         nextAfterEntity: z.string().nullable(),
+        entityVersion: z.number().int().nonnegative(),
       }),
       world: z.unknown(),
       entities: z.array(z.object({
         entity: z.string(),
         eid: z.number().int(),
         generation: z.number().int(),
+        parent: z.string().nullable(),
         transform: z.object({ position: Vec3, rotation: Quat, scale: Vec3 }),
         tags: z.array(z.string()),
         physics: z.object({ bodyId: z.number().int().optional() }),
         resource: z.unknown().optional(),
+        // The create command ({tool, input}) — gives the editor the full property set
+        // (shape/size/material/color/static/dynamic) so the inspector can edit more than transform.
+        origin: z.object({ tool: z.string(), input: z.record(z.string(), z.unknown()) }).optional(),
+        // The entity's surface material — first-class world state (MaterialState), so it seeds even
+        // for an asset-backed/mesh-less entity, falling back to the live mesh material. `name`/`pbr`
+        // describe a palette/imported surface; the numeric fields are the resolved PBR params.
+        material: z.object({
+          color: z.number().optional(),
+          roughness: z.number().optional(),
+          metalness: z.number().optional(),
+          name: z.string().optional(),
+          pbr: z.boolean().optional(),
+        }).optional(),
       })),
       agents: z.array(z.unknown()),
       skills: z.array(z.object({
@@ -304,8 +361,13 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     }),
     handler: (input, ctx) => {
       const ids = ctx.world.entities.ids();
-      const start = input.afterEntity === undefined ? 0 : ids.indexOf(input.afterEntity) + 1;
-      const offset = Math.max(0, start);
+      const entityVersion = ctx.world.entities.version;
+      if (input.entityVersion !== undefined && input.entityVersion !== entityVersion) {
+        throw new Error(`entity snapshot changed during pagination (expected ${input.entityVersion}, current ${entityVersion})`);
+      }
+      const cursorIndex = input.afterEntity === undefined ? -1 : ids.indexOf(input.afterEntity);
+      if (input.afterEntity !== undefined && cursorIndex < 0) throw new Error(`unknown inspector.snapshot cursor '${input.afterEntity}'`);
+      const offset = cursorIndex + 1;
       const selected = ids.slice(offset, offset + input.limit);
       const nextAfterEntity = offset + input.limit < ids.length && selected.length > 0 ? selected[selected.length - 1] : null;
       const entities = selected.flatMap((entity) => {
@@ -316,6 +378,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
           entity,
           eid: entry.eid,
           generation: entry.generation,
+          parent: entry.parent ?? null,
           transform: {
             position: [Position.x[entry.eid], Position.y[entry.eid], Position.z[entry.eid]] as [number, number, number],
             rotation: [Rotation.x[entry.eid], Rotation.y[entry.eid], Rotation.z[entry.eid], Rotation.w[entry.eid]] as [number, number, number, number],
@@ -324,12 +387,18 @@ export function registerSystemSkills(registry: SkillRegistry): void {
           tags,
           physics: { bodyId: entry.bodyId },
           resource: entry.resource,
+          origin: entry.origin,
+          material: entry.material ?? readMaterial(entry.mesh),
         }];
       });
-      const loaded = ids.flatMap((entity) => {
-        const resource = ctx.world.entities.resolve(entity)?.resource;
-        return resource === undefined ? [] : [{ entity, ...resource }];
-      });
+      // The resource scan walks EVERY entity (not just the page), so it is O(world) per
+      // call — the dominant per-poll cost on a large map. A routine poller opts out.
+      const loaded = input.includeResources
+        ? ids.flatMap((entity) => {
+          const resource = ctx.world.entities.resolve(entity)?.resource;
+          return resource === undefined ? [] : [{ entity, ...resource }];
+        })
+        : [];
       const resources = loaded.map((r) => r as LoadedResourceMetadata);
       // The trace block is the SAME cross-agent surface trace.tail exposes — so it is
       // gated by the SAME `trace.read` capability (Fix 1). inspector.snapshot stays
@@ -342,7 +411,7 @@ export function registerSystemSkills(registry: SkillRegistry): void {
         ? traceView
         : { threadId: traceView.threadId, eventCount: traceView.eventCount, actors: [], recent: [] };
       return {
-        page: { limit: input.limit, totalEntities: ids.length, nextAfterEntity },
+        page: { limit: input.limit, totalEntities: ids.length, nextAfterEntity, entityVersion },
         world: sceneMetadata(ctx),
         entities,
         agents: ctx.world.agents?.all?.().map(agentSnapshot) ?? [],
@@ -353,15 +422,17 @@ export function registerSystemSkills(registry: SkillRegistry): void {
         // static catalog metadata, NOT sensitive cross-agent runtime data, so this is
         // not a capability leak. The trace block (real cross-agent events WITH payloads)
         // IS sensitive and is gated by trace.read below.
-        skills: [...registry.list()].map((tool) => {
-          const def = registry.describe(tool.name);
-          return {
-            name: tool.name,
-            version: def?.version ?? "unknown",
-            category: def?.category ?? "unknown",
-            permissions: [...(def?.permissions ?? [])],
-          };
-        }),
+        skills: input.includeSkills
+          ? [...registry.list()].map((tool) => {
+            const def = registry.describe(tool.name);
+            return {
+              name: tool.name,
+              version: def?.version ?? "unknown",
+              category: def?.category ?? "unknown",
+              permissions: [...(def?.permissions ?? [])],
+            };
+          })
+          : [],
         permissions: {
           caller: [...ctx.permissions].sort(),
           profiles: Object.fromEntries(Object.entries(PERMISSION_PROFILES).map(([name, permissions]) => [name, [...permissions]])),
@@ -386,7 +457,8 @@ export function registerSystemSkills(registry: SkillRegistry): void {
     version: "2.0.0",
     description: "Live-reload a skill (registry unregister+re-register so a later callTool runs the new handler) or re-run a registered scene builder; emits an honest dev.*.reload.completed/.failed trace event listing what was invalidated. Targets that genuinely cannot reload fail honestly instead of pretending success.",
     category: "system",
-    permissions: ["scene.read"],
+    permissions: ["system.admin"],
+    effect: "admin",
     input: reloadInput,
     output: z.object({
       ok: z.boolean(),

@@ -1,7 +1,7 @@
 // Phase 9 / workstream D — tile heightfield -> render mesh GEOMETRY.
 //
 // PURE math, no THREE, no DOM: `terrainTileGeometry` turns a `TerrainTile` into
-// flat typed arrays (positions / indices / normals). It is the visual twin of the
+// flat typed arrays (positions / indices / normals / UVs). It is the visual twin of the
 // native `op_physics_add_heightfield` collider — the vertices sit on the SAME world
 // surface the collider reads (heights*scaleY at the tile origin, rows->z cols->x),
 // so the rendered ground and the thing an agent stands on are the same surface
@@ -20,6 +20,8 @@ export interface TerrainGeometry {
   indices: Uint32Array;
   /** Per-vertex unit normals, length = nrows*ncols*3. */
   normals: Float32Array;
+  /** Canonical X/Z tile parameterization, length = nrows*ncols*2. */
+  uvs: Float32Array;
 }
 
 /**
@@ -34,6 +36,33 @@ export interface TerrainGeometry {
  *
  * Pure: identical tiles produce byte-identical buffers (replay/cache friendly).
  */
+/**
+ * Bilinear world-surface height at (x, z) over one tile — THE shared sampler for
+ * every consumer that grounds content on a heightfield (village.build siting,
+ * asset.place ground-conform, water depth derivation). Uses the SAME world<->grid
+ * mapping as the vertices below (x/z clamped into the tile's extent,
+ * y = origin.y + h*scaleY), so a sampled height sits ON the rendered/collided
+ * surface. Keep this the single copy: hand-maintained forks of this loop have
+ * already diverged once (on the scaleY factor).
+ */
+export function sampleTileSurfaceHeight(tile: TerrainTile, x: number, z: number): number {
+  const n = tile.ncols, nr = tile.nrows;
+  const [, oy] = tile.origin;
+  const [sizeX, sy, sizeZ] = tile.scale;
+  const x0 = tile.origin[0] - sizeX / 2, z0 = tile.origin[2] - sizeZ / 2;
+  const dx = sizeX / (n - 1), dz = sizeZ / (nr - 1);
+  const heights = tile.heights;
+  const fc = Math.min(n - 1, Math.max(0, (x - x0) / dx));
+  const fr = Math.min(nr - 1, Math.max(0, (z - z0) / dz));
+  const c0 = Math.floor(fc), r0 = Math.floor(fr);
+  const c1 = Math.min(n - 1, c0 + 1), r1 = Math.min(nr - 1, r0 + 1);
+  const tx = fc - c0, tz = fr - r0;
+  const h = (r: number, c: number): number => oy + heights[r * n + c] * sy;
+  const a = h(r0, c0) + (h(r0, c1) - h(r0, c0)) * tx;
+  const b = h(r1, c0) + (h(r1, c1) - h(r1, c0)) * tx;
+  return a + (b - a) * tz;
+}
+
 export function terrainTileGeometry(tile: TerrainTile): TerrainGeometry {
   const { nrows, ncols, heights } = tile;
   if (!Number.isInteger(nrows) || !Number.isInteger(ncols) || nrows < 2 || ncols < 2) {
@@ -55,6 +84,7 @@ export function terrainTileGeometry(tile: TerrainTile): TerrainGeometry {
   const vertCount = nrows * ncols;
   const positions = new Float32Array(vertCount * 3);
   const normals = new Float32Array(vertCount * 3);
+  const uvs = new Float32Array(vertCount * 2);
 
   for (let r = 0; r < nrows; r++) {
     for (let c = 0; c < ncols; c++) {
@@ -63,6 +93,8 @@ export function terrainTileGeometry(tile: TerrainTile): TerrainGeometry {
       positions[o] = x0 + c * dxStep;
       positions[o + 1] = oy + heights[v] * scaleY;
       positions[o + 2] = z0 + r * dzStep;
+      uvs[v * 2] = c / (ncols - 1);
+      uvs[v * 2 + 1] = r / (nrows - 1);
     }
   }
 
@@ -98,7 +130,7 @@ export function terrainTileGeometry(tile: TerrainTile): TerrainGeometry {
   for (let v = 0; v < vertCount; v++) {
     const o = v * 3;
     const nx = normals[o], ny = normals[o + 1], nz = normals[o + 2];
-    const len = Math.hypot(nx, ny, nz);
+    const len = Math.sqrt(nx * nx + ny * ny + nz * nz); // sqrt is IEEE-754 correctly-rounded -> bit-stable (Math.hypot is not)
     if (len > 0) {
       normals[o] = nx / len;
       normals[o + 1] = ny / len;
@@ -109,5 +141,5 @@ export function terrainTileGeometry(tile: TerrainTile): TerrainGeometry {
     }
   }
 
-  return { positions, indices, normals };
+  return { positions, indices, normals, uvs };
 }

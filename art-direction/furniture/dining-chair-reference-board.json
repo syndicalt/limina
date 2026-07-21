@@ -1,0 +1,75 @@
+{
+  "schema": "limina.visual-reference-board/v1",
+  "id": "furniture/dining-chair/v1",
+  "subjectKind": "furniture",
+  "acquisitionManifest": "art-direction/furniture/dining-chair-reference-acquisition.json",
+  "sources": [
+    {
+      "id": "met/chair-186676",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/186676",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/es/original/24923.jpg",
+      "creator": "Unknown Flemish maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-15T20:51:03.615Z",
+      "localPath": "art-direction/reference-cache/met/chair-186676.jpg",
+      "sha256": "sha256:1e3797eace293f4e4fcb7599ed1000e5853dc1192a2fd309c57195d81d1f8f50",
+      "bytes": 197137,
+      "roles": [
+        "silhouette",
+        "construction",
+        "joinery",
+        "material",
+        "function"
+      ]
+    },
+    {
+      "id": "met/side-chair-209203",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/209203",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/es/original/18833.jpg",
+      "creator": "Unknown Tuscan maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-15T20:51:03.684Z",
+      "localPath": "art-direction/reference-cache/met/side-chair-209203.jpg",
+      "sha256": "sha256:c75f0dff13f6ea7a1ffa0983321fc60e3437f4bf23039f3568c16bd7b720d3b4",
+      "bytes": 212493,
+      "roles": [
+        "silhouette",
+        "construction",
+        "function"
+      ]
+    },
+    {
+      "id": "met/side-chair-1620",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/1620",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/ad/original/DT236420.jpg",
+      "creator": "Unknown Boston maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-15T20:51:04.112Z",
+      "localPath": "art-direction/reference-cache/met/side-chair-1620.jpg",
+      "sha256": "sha256:02bd70a4cb4c8954bdb7820915ce2532c66a3d3358e6dd17a59de846a7333ec6",
+      "bytes": 1750592,
+      "roles": [
+        "silhouette",
+        "construction",
+        "joinery",
+        "function"
+      ]
+    },
+    {
+      "id": "met/library-table-14282",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/14282",
+      "imageUrl": "https://images.metmuseum.org/CRDImages/ad/original/DT185.jpg",
+      "creator": "Rose Valley Shops and William Lightfoot Price; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-15T19:45:12.802Z",
+      "localPath": "art-direction/reference-cache/met/library-table-14282.jpg",
+      "sha256": "sha256:88e2a242e1aebb71d080aa21b353553e4a00523fc52d5aaad12d81c3b902b273",
+      "bytes": 1925563,
+      "roles": [
+        "construction",
+        "joinery",
+        "material"
+      ]
+    }
+  ]
+}

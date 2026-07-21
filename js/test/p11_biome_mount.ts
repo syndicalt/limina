@@ -24,9 +24,20 @@
 import { TILE_SIZE } from "../src/terrain/procedural.ts";
 import { terrainTypeHints, type RegionBounds } from "../src/terrain/terrain-types.ts";
 import {
-  scatterBiomeContent, biomeScatterConfigs, surveyRegionRelief,
-  PINE_ASSET, BROADLEAF_ASSET, ROCK_ASSET, BIOME_CONTENT,
+  scatterBiomeContent, biomeScatterConfigs, surveyRegionRelief, BIOME_CONTENT, type BiomePack,
 } from "../src/terrain/biome-content.ts";
+
+// The engine ships NO biome pack; this gate supplies a TEST PACK binding each role to the SAME glb
+// + embed radius the catalog hardcoded before decoupling, so the mounted scatter is byte-identical.
+const TEST_PACK: BiomePack = {
+  conifer: { id: "pine.glb", embedRadius: 1.2 },
+  broadleaf: { id: "broadleaf.glb", embedRadius: 1.3 },
+  boulder: { id: "rock.glb", embedRadius: 0.5 },
+  bush: { id: "bush.glb" },
+  grass: { id: "grass.glb" },
+  cactus: { id: "cactus.glb" },
+  palm: { id: "palm.glb" },
+};
 import * as THREE from "../build/three.bundle.mjs";
 import { EntityTable, ops } from "../src/engine.ts";
 import { createEcsWorld } from "../src/ecs/world.ts";
@@ -92,7 +103,7 @@ async function runDemoScatter(passRegions: boolean) {
   const seaLevel = relief.minY + SEA_FRACTION * (relief.maxY - relief.minY);
   const scattered = await scatterBiomeContent({
     registry, source: core.terrain.source, regions: passRegions ? core.terrain.regions : undefined,
-    regionId, type: TYPE, bounds: BOUNDS, seed: SEED, base, waterLevel: seaLevel, waterMargin: WATER_MARGIN,
+    regionId, type: TYPE, pack: TEST_PACK, bounds: BOUNDS, seed: SEED, base, waterLevel: seaLevel, waterMargin: WATER_MARGIN,
   });
   return { scattered, added, seaLevel, registry, core, base, regionId, relief };
 }
@@ -114,7 +125,11 @@ assert(pineLayer.instances >= rockLayer.instances, `pines (${pineLayer.instances
 // The captured InstancedMeshes themselves carry real, written instance counts (> 0). Every
 // pine sub-mesh InstancedMesh has the SAME count as the pine layer's placement total.
 const instMeshes = added.filter((o): o is THREE.InstancedMesh => o instanceof THREE.InstancedMesh);
-assert(instMeshes.length === pineLayer.mounted + rockLayer.mounted, `scene.add count ${instMeshes.length} != total mounted ${pineLayer.mounted + rockLayer.mounted}`);
+const layerMounted = scattered.layers.reduce((sum, layer) => sum + layer.mounted, 0);
+assert(scattered.mounted === layerMounted,
+  `whole-population mounted total ${scattered.mounted} != layer sum ${layerMounted}`);
+assert(instMeshes.length === scattered.mounted,
+  `scene.add count ${instMeshes.length} != whole-population mounted ${scattered.mounted}`);
 assert(instMeshes.every((m) => m.count > 0), "a mounted InstancedMesh has count 0 (no instances written to the buffer)");
 const pineMeshes = instMeshes.filter((m) => m.count === pineLayer.instances);
 assert(pineMeshes.length === 2, `expected 2 pine sub-mesh InstancedMeshes of count ${pineLayer.instances}, found ${pineMeshes.length}`);
@@ -134,14 +149,15 @@ assert(bad.layers[0].instances < pineLayer.instances,
 // ── 4b. NO PROPS IN / BELOW WATER: the spawn mask keeps every layer above the shoreline ─
 // Over the demo's ACTUAL config (island-falloff eroded mountains flooded to 18% of relief + a
 // 2.5 m dry margin — the config the user A/B'd), assert ZERO mounted prop instances — pine AND
-// rock, across ALL layers, inland lakes + the island coast included — sit at or below
-// waterLevel + margin. The placements come from the REAL mount path (scatterBiomeContent →
+// rock, across ALL layers, inland lakes + the island coast included — sit below
+// waterLevel + margin. Equality is valid because elevationMin is an inclusive floor.
+// The placements come from the REAL mount path (scatterBiomeContent →
 // asset.scatter output), not a re-derived pure scatter.
 const dryFloor = seaLevel + WATER_MARGIN;
 const allPlacements = scattered.layers.flatMap((l) => l.placements);
 assert(allPlacements.length === scattered.instances, `placements (${allPlacements.length}) != total instances (${scattered.instances}) — mount path did not return every placement`);
-const inWater = allPlacements.filter((p) => p.y <= dryFloor);
-assert(inWater.length === 0, `${inWater.length} mounted props sit at/below the waterline+margin (dryFloor ${dryFloor.toFixed(2)}; lowest ${Math.min(...allPlacements.map((p) => p.y)).toFixed(2)}) — props standing in water`);
+const inWater = allPlacements.filter((p) => p.y < dryFloor);
+assert(inWater.length === 0, `${inWater.length} mounted props sit below the waterline+margin (dryFloor ${dryFloor.toFixed(2)}; lowest ${Math.min(...allPlacements.map((p) => p.y)).toFixed(2)}) — props standing in water`);
 // Non-vacuous: the region genuinely HAS surface below the dry floor (the flooded valleys are
 // submerged), so the empty result above is the gate doing work, not an empty candidate set.
 assert(relief.minY < dryFloor - 0.5, `relief floor ${relief.minY.toFixed(2)} is not below the dry floor ${dryFloor.toFixed(2)} — the no-props-in-water check would be vacuous`);
@@ -149,7 +165,7 @@ assert(relief.minY < dryFloor - 0.5, `relief floor ${relief.minY.toFixed(2)} is 
 // FALSIFIABLE CONTROL: scatter the SAME pine palette through the SAME mount path (asset.scatter)
 // but with the water gate REMOVED (no waterLevel → no elevationMin floor). Pines then DO land
 // at/below the waterline — proving the clean result above is the gate, and the test is non-vacuous.
-const looseCfg = biomeScatterConfigs(TYPE, relief)[0]; // pine layer, no water gate
+const looseCfg = biomeScatterConfigs(TYPE, TEST_PACK, relief)[0]; // pine layer, no water gate
 assert(looseCfg.elevationMin === undefined, "control setup: ungated pine config still has an elevationMin floor");
 const loose = ok(await reg.invoke("asset.scatter", { regionId: rid, config: looseCfg }, base0));
 const loosePlacements = loose.placements as { y: number }[];
@@ -170,20 +186,20 @@ ops.op_physics_create_world(-9.81);
   const fgen = ok(await registry.invoke("world.generateRegion", { seed: SEED, bounds: fbounds, lod: 0, type: "forest" }, fbase));
   const forest = await scatterBiomeContent({
     registry, source: core.terrain.source, regions: core.terrain.regions,
-    regionId: fgen.regionId as string, type: "forest", bounds: fbounds, seed: SEED, base: fbase,
+    regionId: fgen.regionId as string, type: "forest", pack: TEST_PACK, bounds: fbounds, seed: SEED, base: fbase,
   });
   const canopy = forest.layers[0]; // broadleaf(2) + pine(2)
   assert(canopy.instances > 0, "forest canopy layer placed nothing");
   assert(canopy.mounted === 4, `forest canopy (broadleaf 2-mesh + pine 2-mesh) should mount 4 InstancedMeshes, mounted ${canopy.mounted}`);
-  assert(canopy.assetHashes[BROADLEAF_ASSET] !== undefined && canopy.assetHashes[PINE_ASSET] !== undefined, "forest canopy missing a species hash");
+  assert(canopy.assetHashes[TEST_PACK.broadleaf!.id] !== undefined && canopy.assetHashes[TEST_PACK.conifer!.id] !== undefined, "forest canopy missing a species hash");
 }
 
 ops.op_log(
   `p11_biome_mount OK: demo config (mountains amp ${AMP} erode, 4×4, sea ${(SEA_FRACTION * 100) | 0}%, margin ${WATER_MARGIN}) ` +
   `mounts pine ${pineLayer.instances}× across ${pineLayer.mounted} sub-meshes (foliage+trunk) + rock ${rockLayer.instances}× across ${rockLayer.mounted} mesh ` +
   `(pines ≥ boulders); every InstancedMesh count > 0; pine sub-meshes instance distinct geometry. ` +
-  `Water spawn-mask (${WATER_MARGIN} m margin): 0/${scattered.instances} mounted props at/below dryFloor ${dryFloor.toFixed(1)} ` +
+  `Water spawn-mask (${WATER_MARGIN} m margin): 0/${scattered.instances} mounted props below dryFloor ${dryFloor.toFixed(1)} ` +
   `(relief ${relief.minY.toFixed(1)}..${relief.maxY.toFixed(1)}, sea ${seaLevel.toFixed(1)}); ungated control placed ${looseBelow.length} below (gate non-vacuous). ` +
   `Root cause pinned: bare type-hint survey collapses pines to ${bad.layers[0].instances} (region-hints survey is load-bearing). ` +
-  `[${PINE_ASSET}/${BROADLEAF_ASSET}/${ROCK_ASSET}]`,
+  `[${TEST_PACK.conifer!.id}/${TEST_PACK.broadleaf!.id}/${TEST_PACK.boulder!.id}]`,
 );

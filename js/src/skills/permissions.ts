@@ -1,8 +1,11 @@
 // Permission profiles (static allow-lists) resolved to a Set for O(1) checks.
 // Data-only agents in MVP; true capability isolation (QuickJS) is Phase 2.
 
+export const DERIVED_RUNTIME_DISCOVERY_PERMISSION = "runtime.derived.read";
+
 export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
   "builder.readWrite": [
+    "authoring.read", "authoring.write",
     "scene.read", "scene.write", "ecs.read", "ecs.modify",
     "physics.read", "physics.write", "agent.read", "agent.write",
     "ui.write", "audio.play", "terrain.read", "terrain.generate",
@@ -11,7 +14,7 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
     "interaction.read", "interaction.write", "interaction.configure",
     "inventory.read", "inventory.write", "inventory.configure",
     "item.configure",
-    "game.write", "game.configure",
+    "game.write", "game.configure", "game.plan",
     "trigger.configure", "event.read", "event.write",
     "quest.read", "quest.write", "quest.configure",
     "stats.read", "stats.write", "stats.configure",
@@ -25,6 +28,8 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
     "save.write",
     "progression.read", "progression.write", "progression.configure",
     "world.read", "world.write",
+    "design.read", "design.write",
+    "catalog.read", "studio.suggest",
   ],
   // Full player character control (Part D).
   "player.full": [
@@ -71,7 +76,8 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
   ],
   // Game rules and quest authoring
   "game.author": [
-    "game.write", "game.configure",
+    "game.write", "game.configure", "game.plan",
+    "design.read", "design.write",
     "quest.read", "quest.write", "quest.configure",
     "trigger.configure", "event.read", "event.write",
     "stats.configure",
@@ -91,11 +97,13 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
   // World dynamics (time, weather, spawn)
   "world.author": [
     "world.write", "checkpoint.read", "checkpoint.write",
+    "design.read", "design.write", "game.plan",
     "save.write",
     "scene.read", "ecs.read", "physics.read",
   ],
   // Terrain authoring (existing)
   "terrain.author": [
+    "authoring.read", "authoring.write",
     "scene.read", "scene.write", "ecs.read", "ecs.modify",
     "physics.read", "physics.write", "terrain.read", "terrain.generate",
   ],
@@ -104,14 +112,23 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
     "scene.read", "ecs.read", "physics.read", "agent.read", "agent.write", "social.act", "audio.play",
   ],
   // Observer profiles (existing)
-  "system.readonly": ["scene.read", "ecs.read", "physics.read", "agent.read", "trace.read"],
+  "system.readonly": ["scene.read", "ecs.read", "physics.read", "agent.read", "trace.read", "design.read", DERIVED_RUNTIME_DISCOVERY_PERMISSION],
+  /** Runtime maintenance identity. Deliberately separate from builder and readonly
+   *  profiles because dev.reload replaces code and rebuilds scene state. */
+  "system.admin": ["system.admin", "scene.read", "ecs.read", "physics.read", "agent.read", "trace.read", "design.read"],
+  /** Project-local derived-build sidecar. authoring.commit additionally restricts
+   *  this profile to one guarded revision-zero MapDoc bootstrap transaction. */
+  "system.derived-build": ["authoring.read", "authoring.write"],
   // Phase 7 human-in-the-loop (existing)
   "builder.review": [
+    "authoring.read", "authoring.write",
     "scene.read", "scene.write", "ecs.read", "ecs.modify",
     "physics.read", "physics.write", "agent.read", "agent.write",
     "ui.write", "audio.play",
+    "design.read", "design.write", "game.plan",
+    "catalog.read",
   ],
-  "reviewer": ["scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read"],
+  "reviewer": ["authoring.read", "scene.read", "ecs.read", "physics.read", "agent.read", "approval.review", "trace.read", "design.read", "catalog.read", "studio.suggest", DERIVED_RUNTIME_DISCOVERY_PERMISSION],
   // Phase 10 coordinator/delegate (existing)
   "reviewer.coordinator": [
     "orchestrate", "approval.review",
@@ -120,5 +137,32 @@ export const PERMISSION_PROFILES: Record<string, readonly string[]> = {
 };
 
 export function resolveProfile(name: string): ReadonlySet<string> {
-  return new Set(PERMISSION_PROFILES[name] ?? []);
+  // Object.hasOwn, not `?? []`: a name matching an Object.prototype key
+  // ("toString", "constructor", "valueOf", "__proto__") resolves up the prototype
+  // chain to a function/object, and `new Set(function)` throws "not iterable" —
+  // an unknown profile name must yield an empty set, never crash the recorder's
+  // permissionProfileFor or a policy lookup.
+  return new Set(Object.hasOwn(PERMISSION_PROFILES, name) ? PERMISSION_PROFILES[name] : []);
+}
+
+/** The ONE default authoring profile BOTH execution realms boot with — the render
+ *  realm (`browser-entry.ts` `runLive`, overridable via `opts.profile`) and the sim
+ *  worker realm (`sim-worker.ts` `DEFAULT_GRANTS`, overridable via `opts.grants`).
+ *  The two realms replay the SAME command log, so their default grant sets MUST be
+ *  identical or the realms fork on a permission denial (a worker-denied
+ *  `terrain.generate` while the render realm allowed it — realm asymmetry by
+ *  drift, which is why this constant exists instead of two hand-maintained lists).
+ *  Intended realm differences, should one ever be decided, belong in
+ *  `REALM_GRANT_ALLOWED_ASYMMETRY` below — never in a forked list. Gated by
+ *  p108_realm_grant_parity. */
+export const REALM_DEFAULT_PROFILE = "builder.readWrite";
+
+/** Documented, decided-on differences between the two realms' default grants.
+ *  Empty today: any entry needs a comment stating the decision and why the realms
+ *  may legitimately differ. p108 fails on any UNDOCUMENTED asymmetry. */
+export const REALM_GRANT_ALLOWED_ASYMMETRY: ReadonlySet<string> = new Set([]);
+
+/** The default grant set each realm derives its boot permissions from. */
+export function realmDefaultGrants(): ReadonlySet<string> {
+  return resolveProfile(REALM_DEFAULT_PROFILE);
 }

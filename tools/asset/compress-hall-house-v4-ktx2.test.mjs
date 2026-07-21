@@ -1,0 +1,50 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+const H = (b) => createHash("sha256").update(b).digest("hex"),
+  root = new URL("../../", import.meta.url),
+  manifest = JSON.parse(
+    await readFile(new URL("assets/buildings/functional-hall-house-v4-production.ktx2.json", root)),
+  );
+test("production KTX2 artifact is authority-bound and within hard budgets", async () => {
+  const source = await readFile(new URL(manifest.source.path, root)),
+    out = await readFile(new URL(manifest.output.path, root));
+  assert.equal(H(source), manifest.source.sha256);
+  assert.equal(H(out), manifest.output.sha256);
+  assert.ok(out.length <= 24 * 1048576);
+  assert.ok(manifest.gpuResidency.bytes <= 72 * 1048576);
+  assert.equal(manifest.textures.length, 18);
+  assert.deepEqual(new Set(manifest.textures.map((x) => x.pack)).size, 6);
+  assert.ok(manifest.textures.every((x) => x.sourceMapSha256 && x.payloadSha256 && x.options.includes("--genmipmap")));
+  assert.equal(manifest.policy.pngFallback, false);
+});
+test("GLB requires KHR_texture_basisu and contains no fallback sources", async () => {
+  const b = await readFile(new URL(manifest.output.path, root)),
+    jl = b.readUInt32LE(12),
+    g = JSON.parse(
+      b
+        .subarray(20, 20 + jl)
+        .toString()
+        .trimEnd(),
+    );
+  assert.ok(g.extensionsRequired.includes("KHR_texture_basisu"));
+  assert.ok(g.images.every((x) => x.mimeType === "image/ktx2"));
+  assert.ok(
+    g.textures.every((x) => x.source === undefined && Number.isInteger(x.extensions?.KHR_texture_basisu?.source)),
+  );
+});
+test("manifest payload hashes bind every embedded KTX2 byte range", async () => {
+  const b = await readFile(new URL(manifest.output.path, root)),
+    jl = b.readUInt32LE(12),
+    o = 20 + jl,
+    g = JSON.parse(b.subarray(20, o).toString().trimEnd()),
+    bin = b.subarray(o + 8);
+  assert.equal(manifest.source.sha256, "8fcb0c7df015d7681d078f3ec6619411f7ec368c87705f5bf963fbb528865493");
+  for (const record of manifest.textures) {
+    const v = g.bufferViews[g.images[record.image].bufferView],
+      payload = bin.subarray(v.byteOffset ?? 0, (v.byteOffset ?? 0) + v.byteLength);
+    assert.equal(H(payload), record.payloadSha256);
+    assert.equal(payload.length, record.payloadBytes);
+  }
+});

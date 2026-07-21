@@ -8,8 +8,8 @@
 //
 // Geometry is FLAT-SHADED: every triangle owns 3 fresh vertices and carries its own
 // face normal, so normals are guaranteed unit-length and indices are the trivial
-// sequence 0,1,2,…. Per-part VERTEX COLORS (brown trunk + green canopy, grey rock,
-// green grass) so one InstancedMesh per kind still shows multi-material props.
+// sequence 0,1,2,…. Per-part VERTEX COLORS (brown trunk + green canopy, grey rock)
+// so one InstancedMesh per kind still shows multi-material props.
 //
 // OUTWARD NORMALS: every face winds CCW-as-seen-from-OUTSIDE so single-sided
 // FrontSide materials light the visible face (an earlier inward-winding bug rendered
@@ -43,7 +43,6 @@ function hexRGB(hex: number): RGB {
 const TRUNK = hexRGB(0x5b4636); // brown
 const FOLIAGE = hexRGB(0x2f6d39); // green
 const ROCKCOL = hexRGB(0x6f6f6a); // grey
-const GRASSCOL = hexRGB(0x4f8a3f); // green
 
 /** Mutable triangle-soup accumulator (flat shading: one face normal per triangle). */
 interface Soup {
@@ -64,7 +63,7 @@ function addTri(
   let nx = e1y * e2z - e1z * e2y;
   let ny = e1z * e2x - e1x * e2z;
   let nz = e1x * e2y - e1y * e2x;
-  const len = Math.hypot(nx, ny, nz) || 1;
+  const len = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1; // sqrt is IEEE-754 correctly-rounded -> bit-stable (Math.hypot is not)
   nx /= len; ny /= len; nz /= len;
   s.pos.push(ax, ay, az, bx, by, bz, cx, cy, cz);
   s.nrm.push(nx, ny, nz, nx, ny, nz, nx, ny, nz);
@@ -144,32 +143,6 @@ function rockSoup(): Soup {
   return s;
 }
 
-// Grass: a small clump of 4 short tapered blades, each rooted at y=0 and oriented to
-// face radially OUTWARD (so its normal points away from the clump axis). Double-sided
-// material covers the back; max height ~0.6 of the unit so it never towers.
-function grassSoup(): Soup {
-  const s: Soup = { pos: [], nrm: [], col: [] };
-  const rb = 0.06; // base offset from the axis (keeps the blade off-axis)
-  const lean = 0.09; // outward lean of the tip
-  const wb = 0.08; // base width (tangential)
-  const wt = 0.012; // tip width (tapered to a near-point)
-  const heights = [0.55, 0.48, 0.60, 0.50];
-  for (let k = 0; k < 4; k++) {
-    const th = (k / 4) * Math.PI * 2 + 0.4; // spread around the clump
-    const rx = Math.cos(th), rz = Math.sin(th); // radial (outward) dir
-    const tx = -Math.sin(th), tz = Math.cos(th); // tangential dir
-    const h = heights[k];
-    const blx = rb * rx - (wb / 2) * tx, blz = rb * rz - (wb / 2) * tz;
-    const brx = rb * rx + (wb / 2) * tx, brz = rb * rz + (wb / 2) * tz;
-    const tcx = (rb + lean) * rx, tcz = (rb + lean) * rz;
-    const tlx = tcx - (wt / 2) * tx, tlz = tcz - (wt / 2) * tz;
-    const trx = tcx + (wt / 2) * tx, trz = tcz + (wt / 2) * tz;
-    // CCW from the OUTSIDE (+radial) so the front normal points radially out.
-    addQuad(s, GRASSCOL, blx, 0, blz, tlx, h, tlz, trx, h, trz, brx, 0, brz);
-  }
-  return s;
-}
-
 function soupToGeometry(s: Soup): PropGeometry {
   const positions = new Float32Array(s.pos);
   const normals = new Float32Array(s.nrm);
@@ -188,7 +161,6 @@ export function propGeometry(kind: number): PropGeometry {
   switch (kind) {
     case PropKind.Tree: return soupToGeometry(treeSoup());
     case PropKind.Rock: return soupToGeometry(rockSoup());
-    case PropKind.Grass: return soupToGeometry(grassSoup());
     default: throw new Error(`propGeometry: unknown PropKind ${kind}`);
   }
 }

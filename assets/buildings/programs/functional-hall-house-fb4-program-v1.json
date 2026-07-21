@@ -1,0 +1,154 @@
+{
+  "schema": "limina.building-program/v1",
+  "id": "building-program/functional-hall-house/fb4-v1",
+  "prototype": {
+    "typology": "two-storey-timber-hall-house",
+    "storeys": 2,
+    "structuralSystem": "timber-frame",
+    "framingExpression": "legible",
+    "primaryRoof": "gable"
+  },
+  "household": {
+    "residents": { "minimum": 2, "target": 5, "maximum": 8 }
+  },
+  "envelope": {
+    "footprintWidthM": { "minimum": 9.2, "target": 9.6, "maximum": 10.2 },
+    "footprintDepthM": { "minimum": 6.5, "target": 6.84, "maximum": 7.2 },
+    "groundClearHeightM": { "minimum": 3.2, "target": 3.46, "maximum": 3.7 },
+    "upperClearHeightM": { "minimum": 2.8, "target": 3.0, "maximum": 3.3 },
+    "wallThicknessM": { "minimum": 0.3, "target": 0.36, "maximum": 0.42 },
+    "floorAssemblyThicknessM": { "minimum": 0.15, "target": 0.16, "maximum": 0.22 },
+    "gable": {
+      "ridgeRiseM": { "minimum": 3.0, "target": 3.36, "maximum": 3.7 },
+      "pitchDegrees": { "minimum": 40, "target": 44.5, "maximum": 49 },
+      "overhangM": { "minimum": 0.45, "target": 0.55, "maximum": 0.7 }
+    }
+  },
+  "circulation": {
+    "minimumStairClearWidthM": 0.9,
+    "minimumHeadroomM": 2.1,
+    "minimumLandingDepthM": 0.9
+  },
+  "site": {
+    "maximumGradeDegrees": 8,
+    "minimumTerrainClearanceM": 0.12,
+    "minimumVegetationClearanceM": 0.8,
+    "maximumTerrainReliefM": 0.5
+  },
+  "spaces": [
+    {
+      "id": "space/ground-hall",
+      "storey": "ground",
+      "use": "hall",
+      "privacy": "public",
+      "areaM2": { "minimum": 50, "target": 58, "maximum": 68 },
+      "daylight": { "exteriorWindows": "required", "minimumWindowCount": 3, "preferredFacades": ["front", "rear", "left"] }
+    },
+    {
+      "id": "space/kitchen",
+      "storey": "ground",
+      "use": "kitchen",
+      "privacy": "service",
+      "areaM2": { "minimum": 5, "target": 8, "maximum": 14 },
+      "daylight": { "exteriorWindows": "required", "minimumWindowCount": 1, "preferredFacades": ["front"] }
+    },
+    {
+      "id": "space/upper-landing",
+      "storey": "upper",
+      "use": "landing",
+      "privacy": "circulation",
+      "areaM2": { "minimum": 7, "target": 10, "maximum": 14 },
+      "daylight": { "exteriorWindows": "not-required", "minimumWindowCount": 0, "preferredFacades": [] }
+    },
+    {
+      "id": "space/bedroom-a",
+      "storey": "upper",
+      "use": "bedroom",
+      "privacy": "private",
+      "areaM2": { "minimum": 18, "target": 24, "maximum": 30 },
+      "daylight": { "exteriorWindows": "required", "minimumWindowCount": 2, "preferredFacades": ["front", "left"] }
+    },
+    {
+      "id": "space/bedroom-b",
+      "storey": "upper",
+      "use": "bedroom",
+      "privacy": "private",
+      "areaM2": { "minimum": 18, "target": 24, "maximum": 30 },
+      "daylight": { "exteriorWindows": "required", "minimumWindowCount": 2, "preferredFacades": ["rear", "right"] }
+    }
+  ],
+  "connections": [
+    {
+      "id": "connection/hall-kitchen",
+      "fromSpaceId": "space/ground-hall",
+      "toSpaceId": "space/kitchen",
+      "kind": "open-passage",
+      "minimumClearWidthM": 1.2
+    },
+    {
+      "id": "connection/primary-stair",
+      "fromSpaceId": "space/ground-hall",
+      "toSpaceId": "space/upper-landing",
+      "kind": "stair",
+      "minimumClearWidthM": 0.9,
+      "wallPlacement": "exterior-wall"
+    },
+    {
+      "id": "connection/landing-bedroom-a",
+      "fromSpaceId": "space/upper-landing",
+      "toSpaceId": "space/bedroom-a",
+      "kind": "door",
+      "minimumClearWidthM": 0.85
+    },
+    {
+      "id": "connection/landing-bedroom-b",
+      "fromSpaceId": "space/upper-landing",
+      "toSpaceId": "space/bedroom-b",
+      "kind": "door",
+      "minimumClearWidthM": 0.85
+    }
+  ],
+  "entrances": [
+    {
+      "id": "entrance/primary",
+      "role": "primary",
+      "connectsToSpaceId": "space/ground-hall",
+      "facade": "front",
+      "stepFree": "not-required",
+      "weatherProtection": "required"
+    }
+  ],
+  "requirements": {
+    "circulation": {
+      "wallAdjacentPrimaryStair": true,
+      "allSpacesReachPrimaryEntrance": true
+    },
+    "daylight": {
+      "everyUpperHabitableSpaceHasExteriorWindow": true,
+      "minimumUpperFloorWindowCount": 4
+    },
+    "construction": {
+      "timberFrameExpression": "required",
+      "timberFrameVerification": "perceptual"
+    },
+    "roof": {
+      "preserveContinuousWeatherLayer": true,
+      "resolveEveryRoofWallJunction": true
+    }
+  },
+  "objectives": [
+    "circulation-efficiency",
+    "structural-legibility",
+    "daylight",
+    "roof-simplicity",
+    "facade-rhythm",
+    "usable-area"
+  ],
+  "budgets": {
+    "lod0MaximumTriangles": 90000,
+    "lod1MaximumTriangles": 32000,
+    "lod2MaximumTriangles": 8000,
+    "maximumDrawCalls": 640,
+    "visualFloorHash": "sha256:3acd7a7569891f5ea007d417ba170cc07ed36d048e8dda5e57a1afd9126bdc06"
+  }
+}

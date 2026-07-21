@@ -1,0 +1,9 @@
+{
+  "_comment": "Map Phase 3.5 proof B: SAME 1 km world, camera MID-OCEAN at x=1250 — 750 m east of the nearest land (land bbox ±500 m), beyond the master field entirely (frame half 549 m), so every tile here is the open-ocean deep floor (seaLevel − 6 m) streamed around the camera. Camera below sea level on the sea floor, the same read stream-proof-b.json established. Expect: continuous sandy deep-sea floor under the camera in every direction (streaming follows the camera far off the map), fading into haze — NO island in sight, NO terrain hole.",
+  "commands": [
+    { "kind": "physics", "op": "op_physics_create_world", "args": [-9.81] },
+    { "kind": "skill", "tool": "world.setTerrainSource", "input": { "kind": "map", "mapAssetId": "maps/fmg-1km.worldmap.json" } },
+    { "kind": "skill", "tool": "world.streamFollow", "input": { "regionId": "no-such-region", "anchor": [1250, -5, 0], "radius": 14 } }
+  ],
+  "camera": { "center": [1250, -5, 0], "radius": 30, "height": 24, "autoSpin": 0, "far": 1500 }
+}

@@ -33,6 +33,11 @@ const SEED = 0x0bada55;
 const TICKS = 240;
 const INTERVAL = 20;
 const STIR = 3;
+// A deliberately NON-keyframe tick, sitting exactly halfway between two keyframes
+// (f=0.5, the worst case for straight-line interpolation error), used by the
+// inter-keyframe parity check below. MID_TICK % INTERVAL !== 0 so playback MUST
+// interpolate here (it can't serve a stored transform verbatim).
+const MID_TICK = 130;
 
 function makeHeadlessWorld(worldOps: typeof ops): WorldContext {
   const ecs = createEcsWorld();
@@ -80,10 +85,14 @@ for (let gz = -1; gz <= 1; gz++) {
 }
 assert(balls.length >= STIR, "not enough balls");
 
+assert(MID_TICK % INTERVAL !== 0 && MID_TICK < TICKS, "MID_TICK must be a non-keyframe tick inside the run");
 keyframeRec.maybeCapture(world, 0); // initial keyframe (tick 0)
 const stir = balls.slice(0, STIR);
 const GAIN = 0.05, SWIRL = 0.02;
 const Position = (await import("../src/ecs/world.ts")).Position;
+// The native (real-physics) state at an interpolated, NON-keyframe tick — captured so
+// playback's nlerp between the bracketing keyframes can be checked against real physics.
+let nativeMid: ReturnType<typeof captureWorldState> | undefined;
 for (let tick = 1; tick <= TICKS; tick++) {
   recorder.tick = tick;
   for (const ball of stir) {
@@ -93,7 +102,9 @@ for (let tick = 1; tick <= TICKS; tick++) {
   recOps.op_physics_step();
   syncAllBodies(world);
   keyframeRec.maybeCapture(world, tick);
+  if (tick === MID_TICK) nativeMid = captureWorldState(world);
 }
+assert(nativeMid !== undefined, "native mid-tick state was never captured");
 keyframeRec.capture(world, TICKS); // force the final keyframe so end state is exact
 
 const nativeFinal = captureWorldState(world);
@@ -139,11 +150,48 @@ const player = new ReplayPlayer(pkg, {
 });
 await player.init();
 let guard = 0;
-while (!player.done && guard++ < TICKS + 10) await player.stepTick();
+// Snapshot the player at the NON-keyframe MID_TICK too — the tick the inter-keyframe
+// parity check compares against real native physics (playback interpolates here).
+let playerMid: ReturnType<typeof captureWorldState> | undefined;
+while (!player.done && guard++ < TICKS + 10) {
+  await player.stepTick();
+  if (player.tick === MID_TICK) playerMid = player.state();
+}
 assert(player.tick === TICKS, `player ended at tick ${player.tick}, expected ${TICKS}`);
 const playerState = player.state();
 const playerCmp = compareWorldState(nativeFinal, playerState);
 assert(playerCmp.identical, `tick-by-tick player diverged from native (${playerCmp.comparisons} fields): ${playerCmp.detail ?? "?"}`);
+
+// ---- INTER-KEYFRAME PARITY (interpolated tick, bounded tolerance) -----------
+// The equality checks above all land on the FORCED final keyframe (tick TICKS), where
+// KeyframePhysics serves the stored transform VERBATIM — so they prove keyframe fidelity
+// but make final-tick equality near-tautological and never exercise the BETWEEN-keyframe
+// path. Here we compare MID_TICK, a non-keyframe tick: native holds the real integrated
+// physics state, while playback nlerps between the two bracketing keyframes (kf 120↔140,
+// f=0.5). That is APPROXIMATE by construction — a straight chord vs a curved trajectory —
+// so this is a BOUNDED CLOSENESS check, NOT bit-identical. MID_TOL is the interpolation
+// "sagitta" the chord may miss the true path by over one INTERVAL of this stirred motion.
+// Measured on this build: the interpolated pose sits ~0.12 m from native here, whereas
+// serving the PREVIOUS keyframe verbatim would be ~0.43 m off and the keyframes are ~0.78 m
+// apart — so MID_TOL=0.20 m passes a genuinely-tracking interpolation yet is comfortably
+// BELOW the stale-keyframe/travel error, meaning a playback that stopped interpolating (or
+// served a wrong keyframe) would blow past it. Verbatim final-tick equality remains exact.
+function maxBodyPosDelta(a: ReturnType<typeof captureWorldState>, b: ReturnType<typeof captureWorldState>): { delta: number; where: string } {
+  let delta = 0, where = "none";
+  for (const ea of a.entities) {
+    const eb = b.entities.find((e) => e.id === ea.id);
+    if (ea.body === undefined || eb === undefined || eb.body === undefined) continue;
+    for (let i = 0; i < 3; i++) {
+      const d = Math.abs(ea.body[i] - eb.body[i]);
+      if (d > delta) { delta = d; where = `${ea.id} body[${i}]`; }
+    }
+  }
+  return { delta, where };
+}
+assert(playerMid !== undefined, `player never observed the inter-keyframe tick ${MID_TICK}`);
+const MID_TOL = 0.20; // meters — interpolation sagitta budget (see comment above)
+const midDelta = maxBodyPosDelta(nativeMid, playerMid);
+assert(midDelta.delta <= MID_TOL, `inter-keyframe playback drifted from native by ${midDelta.delta.toFixed(4)} m at ${midDelta.where} (tol ${MID_TOL} m)`);
 
 // ---- FALSIFIABILITY: corrupt one keyframe transform -> MUST diverge ---------
 const corrupted = pkg.keyframes.map((k) => ({ tick: k.tick, bodies: k.bodies.map((b) => ({ id: b.id, t: [...b.t] as typeof b.t })) }));
@@ -158,4 +206,4 @@ const badPlayback = await replayCommands(pkg.commands, {
 const badCmp = compareWorldState(nativeFinal, badPlayback.state);
 assert(!badCmp.identical, "corrupting a keyframe did NOT diverge — playback isn't actually using the keyframes");
 
-ops.op_log(`p8_playback_parity OK: native ${TICKS}t/${recorder.commands.length}cmd/${pkg.keyframes.length}kf -> keyframe-driven playback BIT-IDENTICAL (${cmp.comparisons} fields, ${playback.state.entities.length} entities); corrupting a keyframe falsifies divergence [${badCmp.detail ?? "?"}].`);
+ops.op_log(`p8_playback_parity OK: native ${TICKS}t/${recorder.commands.length}cmd/${pkg.keyframes.length}kf -> keyframe-driven playback BIT-IDENTICAL on keyframe ticks (${cmp.comparisons} fields, ${playback.state.entities.length} entities); inter-keyframe tick ${MID_TICK} tracks native to ${midDelta.delta.toFixed(4)} m (tol ${MID_TOL} m); corrupting a keyframe falsifies divergence [${badCmp.detail ?? "?"}].`);

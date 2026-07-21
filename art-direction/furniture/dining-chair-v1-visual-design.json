@@ -1,0 +1,379 @@
+{
+  "schema": "limina.visual-design-contract/v1",
+  "id": "furniture/dining-chair/v1",
+  "subjectKind": "furniture",
+  "intendedFunction": "A sturdy armless one-adult oak dining chair whose seat and front frame tuck beneath the approved cottage trestle table while its back remains outside, remains comfortable at human scale, and carries seated load through an explicit joined frame inside the exact I1 chair envelope.",
+  "prompt": "Author a cohesive period-inspired oak dining side chair from a dimensioned human-use section, not from a decorative silhouette. Keep all authored geometry, compound collision, and the occupancy socket anchor inside the exact 500 by 900 by 500 mm I1 envelope without post-export scaling; the socket's declared 300 mm clearance volume may extend beyond that envelope. Use a 480 mm overall width, 890 mm overall height, 470 mm overall depth, a 450 mm seat height, and a 420 by 420 mm usable solid-wood seat. Make each rear post one straight continuous member raked rearward by 4.5 degrees from floor to crest on one symmetric construction plane, join two restrained horizontal back rails between them, and tie all four legs with seat rails and low stretchers. Every load-bearing rail must terminate in a visible, bounded mortise-and-tenon shoulder; nothing may float or terminate against empty space. Deliberately omit arms so the seat and front frame clear the table while the back remains outside, eliminating the prior disconnected-arm defect. Keep members mostly square or gently tapered with eased edges rather than elaborate turning. Match the approved trestle table's restrained three-role oak vocabulary: oak frame, oak panel, and oak endgrain limited to discrete pegs or wedges the adapter can represent. Favor longitudinal grain on structural members and left-to-right seat grain, and reject upholstery, glossy varnish, or decorative texture layering.",
+  "references": [
+    {
+      "id": "met/chair-186676",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/186676",
+      "creator": "Unknown Flemish maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-15T20:51:03.615Z",
+      "localPath": "art-direction/reference-cache/met/chair-186676.jpg",
+      "sha256": "sha256:1e3797eace293f4e4fcb7599ed1000e5853dc1192a2fd309c57195d81d1f8f50",
+      "roles": [
+        "silhouette",
+        "construction",
+        "joinery",
+        "material",
+        "function"
+      ]
+    },
+    {
+      "id": "met/side-chair-209203",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/209203",
+      "creator": "Unknown Tuscan maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-15T20:51:03.684Z",
+      "localPath": "art-direction/reference-cache/met/side-chair-209203.jpg",
+      "sha256": "sha256:c75f0dff13f6ea7a1ffa0983321fc60e3437f4bf23039f3568c16bd7b720d3b4",
+      "roles": [
+        "silhouette",
+        "construction",
+        "function"
+      ]
+    },
+    {
+      "id": "met/side-chair-1620",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/1620",
+      "creator": "Unknown Boston maker; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-15T20:51:04.112Z",
+      "localPath": "art-direction/reference-cache/met/side-chair-1620.jpg",
+      "sha256": "sha256:02bd70a4cb4c8954bdb7820915ce2532c66a3d3358e6dd17a59de846a7333ec6",
+      "roles": [
+        "silhouette",
+        "construction",
+        "joinery",
+        "function"
+      ]
+    },
+    {
+      "id": "met/library-table-14282",
+      "sourceUrl": "https://www.metmuseum.org/art/collection/search/14282",
+      "creator": "Rose Valley Shops and William Lightfoot Price; The Metropolitan Museum of Art",
+      "license": "Public Domain / The Met Open Access",
+      "retrievedAt": "2026-07-15T19:45:12.802Z",
+      "localPath": "art-direction/reference-cache/met/library-table-14282.jpg",
+      "sha256": "sha256:88e2a242e1aebb71d080aa21b353553e4a00523fc52d5aaad12d81c3b902b273",
+      "roles": [
+        "construction",
+        "joinery",
+        "material"
+      ]
+    }
+  ],
+  "cues": [
+    {
+      "id": "locked-i1-envelope",
+      "statement": "The chair is authored at human scale inside the exact approved I1 envelope, grounded at local Y zero, with no post-export scaling.",
+      "sourceIds": [
+        "met/chair-186676",
+        "met/side-chair-209203",
+        "met/side-chair-1620"
+      ],
+      "measurements": [
+        {
+          "name": "overall-width",
+          "unit": "m",
+          "target": 0.48,
+          "maximum": 0.5
+        },
+        {
+          "name": "overall-height",
+          "unit": "m",
+          "target": 0.89,
+          "maximum": 0.9
+        },
+        {
+          "name": "overall-depth",
+          "unit": "m",
+          "target": 0.47,
+          "maximum": 0.5
+        },
+        {
+          "name": "floor-contact-y",
+          "unit": "m",
+          "target": 0
+        }
+      ],
+      "verification": "compiler"
+    },
+    {
+      "id": "dimensioned-one-adult-seat",
+      "statement": "Seat proportions are locked before back and ornament so the chair reads as usable dining furniture rather than a shallow shelf, deep lounge chair, or oversized throne.",
+      "sourceIds": [
+        "met/side-chair-209203",
+        "met/side-chair-1620"
+      ],
+      "measurements": [
+        {
+          "name": "occupancy",
+          "unit": "count",
+          "target": 1
+        },
+        {
+          "name": "seat-height",
+          "unit": "m",
+          "minimum": 0.44,
+          "target": 0.45,
+          "maximum": 0.46
+        },
+        {
+          "name": "usable-seat-width",
+          "unit": "m",
+          "minimum": 0.4,
+          "target": 0.42,
+          "maximum": 0.44
+        },
+        {
+          "name": "usable-seat-depth",
+          "unit": "m",
+          "minimum": 0.4,
+          "target": 0.42,
+          "maximum": 0.43
+        },
+        {
+          "name": "seat-slope",
+          "unit": "deg",
+          "minimum": 0,
+          "maximum": 2
+        }
+      ],
+      "verification": "blender"
+    },
+    {
+      "id": "continuous-frame-load-path",
+      "statement": "The seated load travels from one solid seat into four contacted seat rails, four legs, and the floor; continuous rear posts carry the back while a complete low stretcher ring resists racking.",
+      "sourceIds": [
+        "met/chair-186676",
+        "met/side-chair-1620"
+      ],
+      "measurements": [
+        {
+          "name": "leg-count",
+          "unit": "count",
+          "target": 4
+        },
+        {
+          "name": "continuous-rear-post-count",
+          "unit": "count",
+          "target": 2
+        },
+        {
+          "name": "seat-rail-count",
+          "unit": "count",
+          "target": 4
+        },
+        {
+          "name": "low-stretcher-count",
+          "unit": "count",
+          "target": 4
+        },
+        {
+          "name": "unsupported-load-member-count",
+          "unit": "count",
+          "target": 0
+        }
+      ],
+      "verification": "blender"
+    },
+    {
+      "id": "controlled-back-section",
+      "statement": "Both straight continuous rear posts and both back rails share one restrained rearward construction plane from floor to crest; the back supports the torso without the previously rejected arbitrary angle or narrow seat relationship.",
+      "sourceIds": [
+        "met/chair-186676",
+        "met/side-chair-1620"
+      ],
+      "measurements": [
+        {
+          "name": "upper-back-rake",
+          "unit": "deg",
+          "minimum": 3.5,
+          "target": 4.5,
+          "maximum": 5.5
+        },
+        {
+          "name": "back-plane-symmetry-residual",
+          "unit": "m",
+          "maximum": 0.002
+        },
+        {
+          "name": "horizontal-back-rail-count",
+          "unit": "count",
+          "target": 2
+        },
+        {
+          "name": "seat-to-crest-height",
+          "unit": "m",
+          "minimum": 0.42,
+          "target": 0.44,
+          "maximum": 0.45
+        }
+      ],
+      "verification": "blender"
+    },
+    {
+      "id": "bounded-period-joinery",
+      "statement": "Seat rails, stretchers, and back rails terminate in the posts with visible shoulders and bounded mortise-and-tenon contact; no rail merely overlaps, floats, or penetrates through its receiver.",
+      "sourceIds": [
+        "met/chair-186676",
+        "met/side-chair-1620"
+      ],
+      "measurements": [
+        {
+          "name": "mortise-tenon-joint-count",
+          "unit": "count",
+          "minimum": 16
+        },
+        {
+          "name": "joint-tolerance",
+          "unit": "m",
+          "maximum": 0.003
+        },
+        {
+          "name": "disconnected-joint-count",
+          "unit": "count",
+          "target": 0
+        },
+        {
+          "name": "implausible-member-penetration-count",
+          "unit": "count",
+          "target": 0
+        }
+      ],
+      "verification": "blender"
+    },
+    {
+      "id": "deliberately-armless-table-clearance",
+      "statement": "This dining side chair has no arms, allowing its seat and front frame to tuck beneath the table while its back remains outside and eliminating the prior disconnected-arm-to-base failure mode.",
+      "sourceIds": [
+        "met/chair-186676",
+        "met/side-chair-209203",
+        "met/side-chair-1620"
+      ],
+      "measurements": [
+        {
+          "name": "arm-count",
+          "unit": "count",
+          "target": 0
+        },
+        {
+          "name": "table-apron-clearance",
+          "unit": "m",
+          "minimum": 0.2
+        }
+      ],
+      "verification": "engine"
+    },
+    {
+      "id": "restrained-oak-material-direction",
+      "statement": "One subdued oak family unifies the chair: grain follows each member's load axis, the seat grain runs left-to-right, and end grain appears only at actual member ends and restrained pegs.",
+      "sourceIds": [
+        "met/chair-186676",
+        "met/side-chair-1620",
+        "met/library-table-14282"
+      ],
+      "measurements": [
+        {
+          "name": "wood-material-family-count",
+          "unit": "count",
+          "target": 1
+        },
+        {
+          "name": "material-role-count",
+          "unit": "count",
+          "target": 3
+        },
+        {
+          "name": "misoriented-structural-grain-count",
+          "unit": "count",
+          "target": 0
+        },
+        {
+          "name": "upholstery-area-ratio",
+          "unit": "ratio",
+          "target": 0
+        },
+        {
+          "name": "edge-radius",
+          "unit": "m",
+          "minimum": 0.003,
+          "maximum": 0.008
+        }
+      ],
+      "verification": "engine"
+    },
+    {
+      "id": "stable-support-and-functional-proof",
+      "statement": "Four grounded feet form a broad support polygon, one occupancy socket resolves above the actual seat, and compound collision follows the frame instead of enclosing the chair in a generic box.",
+      "sourceIds": [
+        "met/chair-186676",
+        "met/side-chair-209203"
+      ],
+      "measurements": [
+        {
+          "name": "floor-contact-foot-count",
+          "unit": "count",
+          "target": 4
+        },
+        {
+          "name": "support-polygon-width",
+          "unit": "m",
+          "minimum": 0.34
+        },
+        {
+          "name": "support-polygon-depth",
+          "unit": "m",
+          "minimum": 0.34
+        },
+        {
+          "name": "occupancy-socket-count",
+          "unit": "count",
+          "target": 1
+        },
+        {
+          "name": "compound-collider-count",
+          "unit": "count",
+          "minimum": 5
+        },
+        {
+          "name": "whole-object-aabb-collider",
+          "unit": "boolean",
+          "target": 0
+        }
+      ],
+      "verification": "engine"
+    }
+  ],
+  "avoid": [
+    "rear posts or back rails with an arbitrary asymmetric angle",
+    "seat width or depth outside the locked human-use section",
+    "arms, floating arm supports, or arms disconnected from the base",
+    "a throne-like high back that exceeds the I1 envelope",
+    "ornate turning copied from the references without structural purpose",
+    "upholstery copied from the references",
+    "plain intersecting boxes without bounded joints",
+    "floating seat or seat rails that miss the posts",
+    "rear rails that terminate against empty space",
+    "narrow or three-legged support polygon",
+    "whole-object AABB collision",
+    "post-export scaling",
+    "cross-grain texture on rails, legs, posts, or seat",
+    "multiple competing wood colors or glossy varnish",
+    "anonymous baked geometry without semantic parts"
+  ],
+  "requiredViews": [
+    "front",
+    "right-side",
+    "back",
+    "three-quarter",
+    "joinery-detail",
+    "seat-section",
+    "socket-overlay",
+    "collision-overlay"
+  ],
+  "status": "draft"
+}

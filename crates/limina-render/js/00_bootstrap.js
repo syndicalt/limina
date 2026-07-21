@@ -69,6 +69,94 @@ if (typeof globalThis.URL === "function") {
     __liminaObjectUrls.delete(String(url));
   };
 }
+
+// The embedded host intentionally has no general Web Worker capability, but
+// Three's KTX2Loader runs the project-owned Basis transcoder in a Worker made
+// from a blob URL. Provide the smallest compatible surface for those in-memory
+// workers only. Source must come from the object-URL registry above; external
+// URLs, files, and network workers remain forbidden. Jobs execute as ordered
+// microtasks in this isolate, retaining deterministic loader ownership without
+// broadening host authority.
+if (typeof globalThis.Worker === "undefined") {
+  class LiminaBlobWorker {
+    constructor(url) {
+      this.url = String(url);
+      this.terminated = false;
+      this.mainListeners = new Map();
+      this.workerListeners = new Map();
+      const blob = __liminaObjectUrls.get(this.url);
+      if (blob === undefined) throw new Error(`Worker requires a Limina-owned object URL: ${this.url}`);
+      this.ready = blob.text().then((source) => {
+        if (this.terminated) return;
+        const scope = {
+          location: { href: this.url },
+          addEventListener: (type, listener) => {
+            if (typeof listener !== "function") return;
+            const key = String(type);
+            const listeners = this.workerListeners.get(key) ?? new Set();
+            listeners.add(listener);
+            this.workerListeners.set(key, listeners);
+          },
+          removeEventListener: (type, listener) => this.workerListeners.get(String(type))?.delete(listener),
+          postMessage: (data) => queueMicrotask(() => this.dispatchMain("message", { data })),
+          close: () => this.terminate(),
+        };
+        // The source is generated locally by KTX2Loader from the byte-pinned
+        // Basis runtime. Keeping `self` explicit isolates worker event state.
+        // Emscripten's Basis wrapper selects its worker runtime by probing the
+        // lexical `importScripts` binding, even though the byte-pinned module
+        // receives its WASM binary directly and never imports another script.
+        const workerWebAssembly = Object.create(WebAssembly);
+        workerWebAssembly.instantiate = (input, imports) => {
+          try {
+            if (input instanceof WebAssembly.Module) {
+              return Promise.resolve(new WebAssembly.Instance(input, imports));
+            }
+            const module = new WebAssembly.Module(input);
+            const instance = new WebAssembly.Instance(module, imports);
+            return Promise.resolve({ module, instance });
+          } catch (error) {
+            return Promise.reject(error);
+          }
+        };
+        Function("self", "importScripts", "WebAssembly", `"use strict";\n${source}\n//# sourceURL=${this.url}`)(scope, () => {
+          throw new Error("Limina local workers cannot import additional scripts");
+        }, workerWebAssembly);
+      });
+    }
+    addEventListener(type, listener) {
+      if (typeof listener !== "function") return;
+      const key = String(type);
+      const listeners = this.mainListeners.get(key) ?? new Set();
+      listeners.add(listener);
+      this.mainListeners.set(key, listeners);
+    }
+    removeEventListener(type, listener) {
+      this.mainListeners.get(String(type))?.delete(listener);
+    }
+    dispatchMain(type, event) {
+      if (this.terminated) return;
+      for (const listener of this.mainListeners.get(type) ?? []) listener.call(this, event);
+      const property = this[`on${type}`];
+      if (typeof property === "function") property.call(this, event);
+    }
+    postMessage(data) {
+      this.ready.then(() => {
+        if (this.terminated) return;
+        queueMicrotask(() => {
+          if (this.terminated) return;
+          for (const listener of this.workerListeners.get("message") ?? []) listener({ data });
+        });
+      }).catch((error) => this.dispatchMain("error", { error, message: String(error?.message ?? error) }));
+    }
+    terminate() {
+      this.terminated = true;
+      this.mainListeners.clear();
+      this.workerListeners.clear();
+    }
+  }
+  globalThis.Worker = LiminaBlobWorker;
+}
 if (typeof globalThis.createImageBitmap === "undefined" && webImage.createImageBitmap !== undefined) {
   globalThis.createImageBitmap = webImage.createImageBitmap;
   globalThis.ImageBitmap = webImage.ImageBitmap;
@@ -277,4 +365,84 @@ if (typeof globalThis.requestAnimationFrame === "undefined") {
 }
 if (typeof globalThis.performance === "undefined") {
   globalThis.performance = { now: () => Date.now() };
+}
+
+// Web timers, backed by deno_core's built-in timer wheel (02_timers.js:
+// core.createTimer/cancelTimer -> op_timer_* ops; the event loop's
+// has_pending_timers keeps the process alive while a refed timer is
+// outstanding, matching web/Node semantics). Host-global scope only:
+// js/src/skills stays wall-clock-free (its determinism lint bans clock
+// reads); a timer here schedules work, it never feeds time into world state.
+// String callbacks (eval-by-string) are forbidden in this embedder.
+if (typeof globalThis.setTimeout === "undefined") {
+  const activeTimers = new Map();
+  let nextTimerHandle = 1;
+  const scheduleTimer = (callback, delay, args, repeat) => {
+    if (typeof callback !== "function") {
+      throw new TypeError("limina timers require a function callback");
+    }
+    const handle = nextTimerHandle++;
+    const fire = repeat ? callback : (...fireArgs) => {
+      activeTimers.delete(handle);
+      return callback(...fireArgs);
+    };
+    const timer = core.createTimer(fire, delay, args.length > 0 ? args : undefined, repeat, true, false);
+    activeTimers.set(handle, timer);
+    return handle;
+  };
+  const cancelTimer = (handle) => {
+    const timer = activeTimers.get(handle);
+    if (timer === undefined) return;
+    activeTimers.delete(handle);
+    core.cancelTimer(timer);
+  };
+  globalThis.setTimeout = function setTimeout(callback, delay = 0, ...args) {
+    return scheduleTimer(callback, delay, args, false);
+  };
+  globalThis.setInterval = function setInterval(callback, delay = 0, ...args) {
+    return scheduleTimer(callback, delay, args, true);
+  };
+  globalThis.clearTimeout = function clearTimeout(handle) { cancelTimer(handle); };
+  globalThis.clearInterval = function clearInterval(handle) { cancelTimer(handle); };
+}
+
+// structuredClone via deno_core's op_structured_clone (V8 ValueSerializer /
+// ValueDeserializer round-trip): plain objects/arrays, Map/Set, ArrayBuffer /
+// TypedArrays, Date, RegExp, and circular references all clone correctly;
+// functions and host objects throw DataCloneError-shaped TypeErrors from V8.
+// Transfer lists are not supported in this embedder (no cross-realm targets).
+if (typeof globalThis.structuredClone === "undefined") {
+  globalThis.structuredClone = function structuredClone(value, options) {
+    if (options?.transfer !== undefined && options.transfer.length > 0) {
+      throw new TypeError("limina structuredClone does not support transfer lists");
+    }
+    return core.structuredClone(value);
+  };
+}
+
+// crypto.getRandomValues over op_crypto_random_hex (OS CSPRNG via getrandom).
+// Host-global scope only: skills draw from the recorded seeded RNG, never from
+// here - this exists for auth-token-grade entropy (the editor host's token
+// generator prefers crypto.getRandomValues and falls back to hashed native
+// Math.random draws, which are not CSPRNG-grade). Integer arrays are filled
+// through their underlying byte view per the web contract; the 65536-byte
+// quota error matches the WebCrypto spec shape.
+if (typeof globalThis.crypto === "undefined") {
+  globalThis.crypto = {
+    getRandomValues(array) {
+      if (!ArrayBuffer.isView(array) || array instanceof Float32Array || array instanceof Float64Array || array instanceof DataView) {
+        throw new TypeError("crypto.getRandomValues requires an integer TypedArray");
+      }
+      if (array.byteLength > 65536) {
+        throw new Error("crypto.getRandomValues quota exceeded (max 65536 bytes)");
+      }
+      if (array.byteLength === 0) return array;
+      const hex = core.ops.op_crypto_random_hex(array.byteLength);
+      const bytes = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
+      for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+      }
+      return array;
+    },
+  };
 }

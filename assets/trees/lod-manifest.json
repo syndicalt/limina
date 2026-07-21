@@ -1,0 +1,46 @@
+{
+  "schema": "limina.vegetation-lod-manifest/1",
+  "generator": "tools/asset/generate-vegetation-lod-cli.mjs",
+  "assets": [
+    {
+      "source": "assets/trees/oak-1.glb",
+      "sourceSha256": "e7499cf22ea1e84ec8a85373350c47da0ac0fdb8a4b7174cf70e88a7c73811a6",
+      "output": "assets/trees/oak-1-lod1.glb",
+      "ratio": 0.2,
+      "error": 0.05,
+      "trianglesBefore": 15628,
+      "trianglesAfter": 3036,
+      "outputSha256": "a047014b894ab0521e6ab4a43a66bc2acccb4c6d6e49e2b996d08f17daa83ce6"
+    },
+    {
+      "source": "assets/trees/oak-1.glb",
+      "sourceSha256": "e7499cf22ea1e84ec8a85373350c47da0ac0fdb8a4b7174cf70e88a7c73811a6",
+      "output": "assets/trees/oak-1-lod2.glb",
+      "ratio": 0.05,
+      "error": 0.1,
+      "trianglesBefore": 15628,
+      "trianglesAfter": 764,
+      "outputSha256": "22e9d46d6ac9f08d30277f8ccc6924bcf8367309147abd6a84f24a159d8e1e0d"
+    },
+    {
+      "source": "assets/trees/pine-1.glb",
+      "sourceSha256": "3bfd22de1fd46872d26ef40d3893452a31f34c855b6c2894f1f2819d30cdad98",
+      "output": "assets/trees/pine-1-lod1.glb",
+      "ratio": 0.25,
+      "error": 0.03,
+      "trianglesBefore": 5488,
+      "trianglesAfter": 1798,
+      "outputSha256": "4fa193f8902f90c2a6360d3fb2d5425fa7369943e2b679351fe354d9485d2c49"
+    },
+    {
+      "source": "assets/trees/pine-1.glb",
+      "sourceSha256": "3bfd22de1fd46872d26ef40d3893452a31f34c855b6c2894f1f2819d30cdad98",
+      "output": "assets/trees/pine-1-lod2.glb",
+      "ratio": 0.08,
+      "error": 0.1,
+      "trianglesBefore": 5488,
+      "trianglesAfter": 408,
+      "outputSha256": "1ea06e0a29d3ab7d34cf42e761235adb3d1f79434429e1231003e3e1c87d7f52"
+    }
+  ]
+}

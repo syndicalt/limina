@@ -10,18 +10,40 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "esbuild": "^0.24.2"
+    "@dgreenheck/ez-tree": "^1.1.0",
+    "@types/three": "0.184.0",
+    "@webgpu/types": "0.1.71",
+    "esbuild": "0.28.1",
+    "playwright-core": "^1.57.0",
+    "prettier": "3.9.5",
+    "sharp": "^0.34.4",
+    "typescript": "5.9.3"
   },
   "scripts": {
-    "bundle:three": "esbuild build/three-entry.js --bundle --format=esm --outfile=build/three.bundle.mjs",
+    "sync:basis-runtime": "node scripts/sync-basis-runtime.mjs",
+    "postinstall": "node scripts/install-ktx-tools.mjs --required && npm run sync:basis-runtime",
+    "deps:ktx": "node scripts/install-ktx-tools.mjs --required",
+    "patch:three-timestamp": "node scripts/patch-three-timestamp-query.mjs",
+    "check:three-timestamp-patch": "node scripts/patch-three-timestamp-query.mjs --check --check-bundle",
+    "bundle:three": "npm run sync:basis-runtime && npm run patch:three-timestamp && esbuild build/three-entry.js --bundle --format=esm --outfile=build/three.bundle.mjs && node scripts/patch-three-timestamp-query.mjs --check --check-bundle",
     "bundle:runtime": "esbuild src/browser-entry.ts --bundle --format=esm --platform=browser --outfile=../web/public/limina-runtime.js --loader:.ts=ts",
     "bundle:worker": "esbuild src/browser/sim-worker-entry.ts --bundle --format=esm --platform=browser --outfile=../web/public/sim-worker-entry.js --loader:.ts=ts",
-    "bundle:live": "npm run bundle:runtime && npm run bundle:worker",
-    "bundle:editor": "esbuild src/browser-entry.ts --bundle --format=esm --platform=browser --outfile=../editor/vendor/limina-runtime.js --loader:.ts=ts && esbuild src/browser/sim-worker-entry.ts --bundle --format=esm --platform=browser --outfile=../editor/vendor/sim-worker-entry.js --loader:.ts=ts && esbuild src/editor/history_controller.ts --bundle --format=esm --platform=browser --outfile=../editor/vendor/history-controller.js --loader:.ts=ts && esbuild src/eyes/render_harness_entry.ts --bundle --format=esm --platform=browser --outfile=../editor/vendor/render-harness.js --loader:.ts=ts && esbuild src/eyes/self_correct.ts --bundle --format=esm --platform=browser --outfile=../editor/vendor/self_correct.mjs --loader:.ts=ts",
+    "bundle:derived-runtime-worker": "esbuild src/browser/derived-runtime-worker-entry.ts --bundle --format=esm --platform=browser --outfile=../web/public/derived-runtime-worker-entry.js --loader:.ts=ts",
+    "bundle:derived-verify-worker": "esbuild src/browser/derived-verify-worker-entry.ts --bundle --format=esm --platform=browser --outfile=../web/public/derived-verify-worker-entry.js --loader:.ts=ts",
+    "bundle:live": "npm run bundle:runtime && npm run bundle:worker && npm run bundle:derived-runtime-worker && npm run bundle:derived-verify-worker",
+    "bundle:player": "esbuild src/browser-entry.ts --bundle --format=iife --global-name=LiminaPlayer --platform=browser --define:import.meta.url=document.baseURI --outfile=../tools/scaffold/public/limina-player.js --loader:.ts=ts && esbuild src/browser-entry.ts --bundle --format=iife --global-name=LiminaPlayer --platform=browser --define:import.meta.url=document.baseURI --outfile=../site/public/examples/limina-player.js --loader:.ts=ts",
+    "bundle:editor": "esbuild src/browser-entry.ts --bundle --format=esm --platform=browser --outfile=../editor/vendor/limina-runtime.js --loader:.ts=ts && esbuild src/browser/sim-worker-entry.ts --bundle --format=esm --platform=browser --outfile=../editor/vendor/sim-worker-entry.js --loader:.ts=ts && esbuild src/browser/derived-runtime-worker-entry.ts --bundle --format=esm --platform=browser --outfile=../editor/vendor/derived-runtime-worker-entry.js --loader:.ts=ts && esbuild src/browser/derived-verify-worker-entry.ts --bundle --format=esm --platform=browser --outfile=../editor/vendor/derived-verify-worker-entry.js --loader:.ts=ts && esbuild src/editor/history_controller.ts --bundle --format=esm --platform=browser --outfile=../editor/vendor/history-controller.js --loader:.ts=ts && esbuild src/eyes/render_harness_entry.ts --bundle --format=esm --platform=browser --outfile=../editor/vendor/render-harness.js --loader:.ts=ts && esbuild src/eyes/self_correct.ts --bundle --format=esm --platform=browser --outfile=../editor/vendor/self_correct.mjs --loader:.ts=ts",
+    "bundle:world-compiler": "esbuild src/world/compiler/node-entry.ts --bundle --format=esm --platform=node --target=node18 --outfile=build/world-compiler.bundle.mjs --loader:.ts=ts",
     "export:demo": "cd .. && ./target/release/limina js/scripts/export-demo.ts && mkdir -p web/public/worlds/demo && cp -f traces/demo.manifest.json web/public/worlds/demo/manifest.json && cp -f traces/demo.log.jsonl web/public/worlds/demo/log.jsonl && cp -f traces/demo.keyframes.jsonl web/public/worlds/demo/keyframes.jsonl",
     "check:portability": "node scripts/check-host-portability.mjs",
+    "check:determinism": "node scripts/check-determinism.mjs",
     "check:live": "node scripts/check-live-composition.mjs",
+    "check:assets": "node ../tools/qc/asset-sanity.mjs ../assets",
     "bundle:coordinator-demo": "esbuild ../coordinator-demo/src/app.js --bundle --format=esm --platform=browser --outfile=../coordinator-demo/dist/coordinator-demo.js --loader:.ts=ts",
-    "check:coordinator-demo": "node scripts/check-coordinator-demo.mjs"
+    "check:coordinator-demo": "node scripts/check-coordinator-demo.mjs",
+    "check:types": "tsc -p tsconfig.check.json",
+    "check:types:all": "tsc -p tsconfig.check.all.json",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\""
   }
 }

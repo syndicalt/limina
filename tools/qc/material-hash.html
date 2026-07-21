@@ -1,0 +1,35 @@
+<!doctype html><html><head><meta charset="utf-8"><title>material texture hash</title></head>
+<body>
+<script type="module">
+// Determinism harness for village-materials: build every material from a FIXED palette + seed and
+// hash each albedo + normal-map canvas (FNV-1a over the raw pixels). Used to prove a refactor of the
+// paint functions is byte-identical — the hashes must not move. window.__hashes = { name: {albedo, normal} }.
+window.__hashes = null; window.__err = [];
+try {
+  const THREE = await import("/js/build/three.bundle.mjs");
+  const { makeMaterials } = await import("/js/src/world/pipeline/village-materials.mjs");
+  const { mulberry32 } = await import("/js/src/world/pipeline/village-layout.mjs");
+  const direction = {
+    palette: { stone: "#8a8378", slate: "#4a4f55", plaster: "#d8cdb8", timber: "#6b4f33",
+               trim: "#5a4a30", thatch: "#b39a5a", terracotta: "#9e5a3c" },
+    mood: "weathered, lived-in",
+  };
+  const mats = makeMaterials(THREE, direction, mulberry32(0x1a2b3c4d));
+  const NAMES = ["stone", "timber", "timberDark", "plaster", "thatch", "slate", "terracotta", "trim", "opening", "earth", "gravel", "cobble"];
+  const hashCanvas = (cv) => {
+    if (!cv) return null;
+    const ctx = cv.getContext("2d");
+    const d = ctx.getImageData(0, 0, cv.width, cv.height).data;
+    let h = 0x811c9dc5;
+    for (let i = 0; i < d.length; i++) { h ^= d[i]; h = Math.imul(h, 0x01000193); }
+    return (h >>> 0).toString(16).padStart(8, "0");
+  };
+  const out = {};
+  for (const nm of NAMES) {
+    const m = mats[nm]; if (!m) { out[nm] = "MISSING"; continue; }
+    out[nm] = { albedo: hashCanvas(m.map && m.map.image), normal: hashCanvas(m.normalMap && m.normalMap.image) };
+  }
+  window.__hashes = out;
+} catch (e) { window.__err.push(String((e && (e.stack || e.message)) || e)); }
+window.__done = true;
+</script></body></html>

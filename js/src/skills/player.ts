@@ -29,23 +29,34 @@
 
 import { z } from "../../build/zod.bundle.mjs";
 import type { SkillDefinition, SkillRegistry } from "./registry.ts";
-import { MAX_ENTITIES, despawnRenderable, spawnRenderable, type Transformable } from "../ecs/world.ts";
-import { CharacterController } from "../world/character.ts";
+import { MAX_ENTITIES, despawnRenderable, spawnRenderable } from "../ecs/world.ts";
+import { inertTransform } from "./_util.ts";
+import {
+  CharacterController,
+  MAX_BUOYANCY_GAIN_PER_S2,
+  MAX_SWIM_SPEED_MPS,
+  MAX_SWIM_VERTICAL_SPEED_MPS,
+  MAX_WATER_DRAG_PER_S,
+  type CharacterWaterContactProvider,
+} from "../world/character.ts";
 import type { PhysicsOps } from "../engine.ts";
 
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
 const MetaField = z.record(z.string(), z.unknown()).optional().describe("Agent-supplied extension metadata.");
+const WaterMode = z.enum(["dry", "wading", "swimming"]);
+const boundedPositive = (defaultValue: number, maximum: number) => z.number()
+  .refine((value) => Number.isFinite(value) && value > 0 && value <= maximum, `Expected a finite number in (0, ${maximum}]`)
+  .default(defaultValue);
+
+interface PlayerWaterOutput {
+  swimming: boolean;
+  submerged: boolean;
+  waterMode: "dry" | "wading" | "swimming";
+}
 
 /** The fixed sim step (seconds) every player.move / player.jump advances. A CONSTANT
  *  (not wall-clock) so a command sequence is deterministic + replay-faithful. */
 const FIXED_DT = 1 / 60;
-
-/** Inert transform binding for the headless character entity (the visible capsule mesh
- *  is mounted by the host/demo render path; the ECS entity exists so the character is a
- *  first-class, snapshot/replay-comparable entity even headless). */
-function inertTransform(): Transformable {
-  return { position: { set() {} }, quaternion: { set() {} }, scale: { set() {} } };
-}
 
 // ---- Input binding system -------------------------------------------------
 
@@ -210,12 +221,18 @@ const queryAxisInput = z.object({
 
 const spawnPlayerInput = z.object({
   position: Vec3.describe("Spawn position — the capsule CENTER. Rest height = surfaceY + halfHeight + radius."),
-  halfHeight: z.number().positive().default(0.5).describe("Capsule cylindrical half-height (excludes the radius caps)."),
-  radius: z.number().positive().default(0.35).describe("Capsule radius."),
-  walkSpeed: z.number().positive().default(4.5).describe("Ground walk speed (m/s)."),
-  runSpeed: z.number().positive().default(8.0).describe("Run/sprint speed (m/s)."),
+  // Human-scale capsule: total height 2·(halfHeight+radius) = 2·(0.6+0.3) = 1.8 m, so a person reads
+  // correctly next to a ~3.5 m church portal and a ~12 m keep (not doll-scaled).
+  halfHeight: z.number().positive().default(0.6).describe("Capsule cylindrical half-height (excludes the radius caps). 0.6 ⇒ ~1.8 m human with the 0.3 radius caps."),
+  radius: z.number().positive().default(0.3).describe("Capsule radius."),
+  walkSpeed: z.number().positive().default(3.0).describe("Ground walk speed (m/s) — a natural human walk."),
+  runSpeed: z.number().positive().default(6.0).describe("Run/sprint speed (m/s) — a brisk run (Shift)."),
   gravity: z.number().positive().default(22).describe("Downward gravity acceleration magnitude (m/s^2)."),
   jumpSpeed: z.number().positive().default(8).describe("Initial upward jump velocity (m/s)."),
+  swimSpeed: boundedPositive(3, MAX_SWIM_SPEED_MPS).describe("Horizontal swim speed (m/s); sprint is ignored while swimming."),
+  buoyancyGain: boundedPositive(18, MAX_BUOYANCY_GAIN_PER_S2).describe("Vertical spring gain toward the surface-relative float target (1/s^2)."),
+  waterDrag: boundedPositive(6, MAX_WATER_DRAG_PER_S).describe("Vertical damping while swimming (1/s)."),
+  maxSwimVerticalSpeed: boundedPositive(4, MAX_SWIM_VERTICAL_SPEED_MPS).describe("Symmetric vertical swim-speed limit (m/s)."),
   crouchSpeedScale: z.number().positive().max(1).default(0.5).describe("Move-speed scale while crouching."),
   meta: MetaField,
 });
@@ -258,6 +275,7 @@ export function registerPlayerSkills(
   opts?: {
     inputRegistry?: InputRegistry;
     characterControllers?: CharacterControllerRegistry;
+    waterContact?: CharacterWaterContactProvider;
   },
 ): { input: InputRegistry; controllers: CharacterControllerRegistry } {
   const input = opts?.inputRegistry ?? new InputRegistry();
@@ -302,6 +320,7 @@ export function registerPlayerSkills(
     description: "Query whether a bound action is currently active (pressed/held). Reflects the latest native poll or input.set injection.",
     category: "player",
     permissions: ["player.read"],
+    effect: "read",
     input: queryActionInput,
     output: z.object({ active: z.boolean() }),
     handler: (i) => {
@@ -316,6 +335,7 @@ export function registerPlayerSkills(
     description: "Query a continuous axis value (e.g. moveX, moveY, lookX, lookY). Range is typically -1 to 1.",
     category: "player",
     permissions: ["player.read"],
+    effect: "read",
     input: queryAxisInput,
     output: z.object({ value: z.number() }),
     handler: (i) => {
@@ -326,14 +346,14 @@ export function registerPlayerSkills(
 
   // ---- Player skills (drive the REAL CharacterController) ----
 
-  const spawnPlayer: SkillDefinition<z.infer<typeof spawnPlayerInput>, { entity: string; bodyId: number; position: [number, number, number]; grounded: boolean }> = {
+  const spawnPlayer: SkillDefinition<z.infer<typeof spawnPlayerInput>, { entity: string; bodyId: number; position: [number, number, number]; grounded: boolean } & PlayerWaterOutput> = {
     name: "player.spawn",
     version: "1.0.0",
     description: "Spawn a kinematic character-controller capsule (Rapier: grounded detection, slope limit, autostep, snap-to-ground, plus controller-integrated gravity + jump) at a position, register it as an entity, and return its entity id + body id. Drive it with player.move / player.jump.",
     category: "player",
     permissions: ["player.write"],
     input: spawnPlayerInput,
-    output: z.object({ entity: z.string(), bodyId: z.number(), position: Vec3, grounded: z.boolean() }),
+    output: z.object({ entity: z.string(), bodyId: z.number(), position: Vec3, grounded: z.boolean(), swimming: z.boolean(), submerged: z.boolean(), waterMode: WaterMode }),
     handler: (i, ctx) => {
       const physics = ctx.world.ops as unknown as PhysicsOps;
       const controller = new CharacterController(physics, i.position, {
@@ -343,6 +363,11 @@ export function registerPlayerSkills(
         runSpeed: i.runSpeed,
         gravity: i.gravity,
         jumpSpeed: i.jumpSpeed,
+        waterContact: opts?.waterContact,
+        swimSpeed: i.swimSpeed,
+        buoyancyGain: i.buoyancyGain,
+        waterDrag: i.waterDrag,
+        maxSwimVerticalSpeed: i.maxSwimVerticalSpeed,
       });
       const eid = spawnRenderable(ctx.world.ecs, inertTransform(), i.position[0], i.position[1], i.position[2]);
       if (eid >= MAX_ENTITIES) {
@@ -354,19 +379,19 @@ export function registerPlayerSkills(
       controllers.attach(entity, controller, { crouchSpeedScale: i.crouchSpeedScale });
       const p = controller.position;
       const position: [number, number, number] = [p[0], p[1], p[2]];
-      ctx.emit("player.spawned", { entity, bodyId: controller.bodyId, position, ...i.meta });
-      return { entity, bodyId: controller.bodyId, position, grounded: controller.isGrounded };
+      ctx.emit("player.spawned", { entity, bodyId: controller.bodyId, position, swimming: controller.isSwimming, submerged: controller.isSubmerged, waterMode: controller.waterMode, ...i.meta });
+      return { entity, bodyId: controller.bodyId, position, grounded: controller.isGrounded, swimming: controller.isSwimming, submerged: controller.isSubmerged, waterMode: controller.waterMode };
     },
   };
 
-  const movePlayer: SkillDefinition<z.infer<typeof movePlayerInput>, { moved: boolean; grounded: boolean; newPosition: [number, number, number] }> = {
+  const movePlayer: SkillDefinition<z.infer<typeof movePlayerInput>, { moved: boolean; grounded: boolean; newPosition: [number, number, number] } & PlayerWaterOutput> = {
     name: "player.move",
     version: "1.0.0",
-    description: "Advance a player's character controller ONE fixed step from an input command (forward/strafe axes rotated by yaw), resolving collisions, slopes, autostep, snap-to-ground, and gravity. Sprint (player.sprint) raises the speed; crouch (player.crouch) lowers it. Returns the corrected position + grounded.",
+    description: "Advance a player's character controller ONE fixed step from an input command (forward/strafe axes rotated by yaw), resolving ground or swim movement. Sprint raises ground speed but is ignored while swimming; crouch lowers horizontal input. Returns position, grounded, and water state.",
     category: "player",
     permissions: ["player.write"],
     input: movePlayerInput,
-    output: z.object({ moved: z.boolean(), grounded: z.boolean(), newPosition: Vec3 }),
+    output: z.object({ moved: z.boolean(), grounded: z.boolean(), newPosition: Vec3, swimming: z.boolean(), submerged: z.boolean(), waterMode: WaterMode }),
     handler: (i, ctx) => {
       const entry = controllers.get(i.entity);
       if (entry === undefined) throw new Error(`player.move: no character controller for '${i.entity}' (spawn one with player.spawn)`);
@@ -379,19 +404,19 @@ export function registerPlayerSkills(
       const p = entry.controller.position;
       const newPosition: [number, number, number] = [p[0], p[1], p[2]];
       const grounded = entry.controller.isGrounded;
-      ctx.emit("player.moved", { entity: i.entity, newPosition, grounded, ...i.meta });
-      return { moved: true, grounded, newPosition };
+      ctx.emit("player.moved", { entity: i.entity, newPosition, grounded, swimming: entry.controller.isSwimming, submerged: entry.controller.isSubmerged, waterMode: entry.controller.waterMode, ...i.meta });
+      return { moved: true, grounded, newPosition, swimming: entry.controller.isSwimming, submerged: entry.controller.isSubmerged, waterMode: entry.controller.waterMode };
     },
   };
 
-  const jumpPlayer: SkillDefinition<z.infer<typeof jumpPlayerInput>, { jumped: boolean; grounded: boolean; newPosition: [number, number, number] }> = {
+  const jumpPlayer: SkillDefinition<z.infer<typeof jumpPlayerInput>, { jumped: boolean; grounded: boolean; newPosition: [number, number, number] } & PlayerWaterOutput> = {
     name: "player.jump",
     version: "1.0.0",
-    description: "Trigger a jump on the player's character controller — only takes effect when grounded. Sets the controller's upward velocity (fed through move_character + gravity), NOT a force impulse (a kinematic body ignores impulses). Advances one fixed step; returns whether it jumped + the new position.",
+    description: "Apply the player's vertical action for one fixed step: jump when grounded or accelerate toward the surface while swimming. Uses controller velocity, not a force impulse (kinematic bodies ignore impulses).",
     category: "player",
     permissions: ["player.write"],
     input: jumpPlayerInput,
-    output: z.object({ jumped: z.boolean(), grounded: z.boolean(), newPosition: Vec3 }),
+    output: z.object({ jumped: z.boolean(), grounded: z.boolean(), newPosition: Vec3, swimming: z.boolean(), submerged: z.boolean(), waterMode: WaterMode }),
     handler: (i, ctx) => {
       const entry = controllers.get(i.entity);
       if (entry === undefined) throw new Error(`player.jump: no character controller for '${i.entity}' (spawn one with player.spawn)`);
@@ -403,15 +428,16 @@ export function registerPlayerSkills(
       ctx.world.ops.op_physics_step();
       const p = entry.controller.position;
       const newPosition: [number, number, number] = [p[0], p[1], p[2]];
-      ctx.emit("player.jumped", { entity: i.entity, jumped: wasGrounded, grounded: entry.controller.isGrounded, newPosition, ...i.meta });
-      return { jumped: wasGrounded, grounded: entry.controller.isGrounded, newPosition };
+      const jumped = wasGrounded && !entry.controller.isSwimming;
+      ctx.emit("player.jumped", { entity: i.entity, jumped, grounded: entry.controller.isGrounded, newPosition, swimming: entry.controller.isSwimming, submerged: entry.controller.isSubmerged, waterMode: entry.controller.waterMode, ...i.meta });
+      return { jumped, grounded: entry.controller.isGrounded, newPosition, swimming: entry.controller.isSwimming, submerged: entry.controller.isSubmerged, waterMode: entry.controller.waterMode };
     },
   };
 
   const sprintPlayer: SkillDefinition<z.infer<typeof sprintPlayerInput>, { sprinting: boolean }> = {
     name: "player.sprint",
     version: "1.0.0",
-    description: "Toggle sprint for a player entity. While on, player.move runs the controller at run speed (a real, faster move) instead of walk speed.",
+    description: "Toggle sprint for a player entity. While on, ground movement uses run speed instead of walk speed; swimming deliberately ignores it.",
     category: "player",
     permissions: ["player.write"],
     input: sprintPlayerInput,

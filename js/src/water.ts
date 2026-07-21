@@ -25,32 +25,23 @@
 //     byte-identical across authoring (analytic, bake-resolution) and replay (the cache's
 //     sub-tile bilinear read) — only the cosmetic shading shifts imperceptibly.
 //
-//     WHY NOT a real scene-depth texture: it is feasible at the WebGPU primitive level
-//     here (deno_webgpu 0.218 / wgpu-core 29 accept depth formats with TEXTURE_BINDING,
-//     and three's WebGPU backend already allocates its depth textures sampleable), BUT
-//     sampling scene depth from the water pass means restructuring the forward render
-//     into a depth pre-pass / MRT (you cannot sample the depth attachment the current
-//     transparent pass is writing). That is an unproven render-pipeline lift, whereas the
-//     terrain heightfield gives the IDENTICAL "true water-column depth" with zero pipeline
-//     risk and full determinism — so we take the terrain path. (If no terrain is supplied,
-//     e.g. a bare lake, we fall back to the legacy VIEW-DISTANCE proxy below.)
+//   - REAL SCENE OPTICS by quality: Balanced samples the renderer's opaque viewport colour
+//     through `viewportSafeUV`, whose depth comparison rejects foreground pixels before applying
+//     normal-driven distortion. Cinematic additionally owns a planar reflector for standing water.
+//     These renderer-managed snapshots avoid sampling the attachment currently being written;
+//     Performance retains the deterministic terrain-depth-only fallback.
 //   - ANIMATED WAVE NORMALS: a summed field of four crossing directional waves drives
 //     a true bump `normalNode` (+ a matching vertex displacement), so the surface
 //     visibly undulates and the sky-IBL reflection breaks up and travels across it.
 //     Cellular (no single direction) → no candy-cane stripes. Plus a faint roughness
 //     shimmer. All animation is driven by the TSL `time` node — it lives ENTIRELY in
 //     the render graph (a per-frame GPU uniform), never in the sim/world-log, so
-//     determinism and replay parity are untouched. Refraction/caustics + a true
-//     scene-depth read remain a later upgrade (a backend depth-texture path); the
-//     shoreline wet-edge/foam is rendered ground-truth on the sand (terrain/render.ts).
+//     determinism and replay parity are untouched.
 
 import * as THREE from "../build/three.bundle.mjs";
-
-// TSL node graph helpers, bundled under the `TSL` namespace of the three webgpu
-// build. Typed loosely (the fluent node API is dynamic: every op returns a chainable
-// node) — the graph is validated by the live WebGPU shader compile (in-tab UAT).
-// deno-lint-ignore no-explicit-any
-const T = (THREE as any).TSL;
+import { buildVariableRiverRibbonGeometry, buildWaterFootprintGeometry, type WaterPoint2 } from "./render/water/geometry.ts";
+import { attachWaterMaterialAuxiliaries, createWaterMaterial, type WaterDepthTextureBinding } from "./render/water/material.ts";
+import type { WaterSceneOptics } from "./render/quality.ts";
 
 /** Terrain-heightfield coupling for TRUE water-column-depth shading. The caller
  *  supplies a height query + the world-XZ rectangle it is valid over; the water
@@ -83,6 +74,18 @@ export interface WaterOptions {
    *  opaque deep by actual depth, with a clean shoreline). Omit for the legacy
    *  view-distance proxy (e.g. a bare lake with no heightfield to hand in). */
   depth?: WaterDepthOptions;
+  /** Overview PEEK render: from 2 km up the whole coarse-grid plane is in frame, so the near-mirror
+   *  sky reflection aliases into a grid of specular glints ("sun-glitter" fireflies). In peek mode the
+   *  surface goes calmer + rougher so the reflection is diffuse (no glint grid) — mirror detail is
+   *  invisible at that distance anyway. Absent/false keeps the pretty near-mirror eye-level water. */
+  peek?: boolean;
+  /** Optional plane center in world XZ. Legacy calls remain centered at the origin. */
+  center?: readonly [number, number];
+  /** Execution-quality tessellation override. Omission preserves the legacy size-derived value. */
+  segments?: number;
+  /** Execution-quality wave count in [0,4]. Omission preserves the four-wave look. */
+  waveCount?: number;
+  sceneOptics?: WaterSceneOptics;
 }
 
 /** A large plane so an ocean reads as endless within the default camera far (200). */
@@ -104,9 +107,12 @@ export interface WaterMesh {
 /** A baked region depth field: a single-channel texture of NORMALISED water-column
  *  depth (0 = at/above the waterline → 1 = the region's deepest floor) plus the world-XZ
  *  rectangle it covers, so the shader can map a fragment's world (x,z) → texel. */
-interface BakedDepth {
-  texture: unknown; // THREE.DataTexture (loose to satisfy the WaterMesh test stubs)
+export interface BakedDepth {
+  texture: THREE.DataTexture;
   bounds: { minX: number; minZ: number; maxX: number; maxZ: number };
+  coverageChannel?: boolean;
+  /** Normalisation divisor in metres (1.0 in the texture = this depth). */
+  maxDepthM?: number;
 }
 
 /** Bake the terrain heightfield into a normalised water-column-depth texture by sampling
@@ -154,7 +160,7 @@ export function bakeWaterDepth(depth: WaterDepthOptions, seaLevel: number): Bake
   texture.wrapS = THREE.ClampToEdgeWrapping;
   texture.wrapT = THREE.ClampToEdgeWrapping;
   texture.needsUpdate = true;
-  return { texture, bounds: depth.bounds };
+  return { texture, bounds: depth.bounds, maxDepthM: range };
 }
 
 /** Build a render-only water surface mesh at sea-level `level`. The returned mesh is
@@ -168,148 +174,149 @@ export function buildWaterSurface(opts: WaterOptions): WaterMesh {
   // A flat XZ plane, tessellated so the time-driven vertex ripple has vertices to
   // move (PlaneGeometry is XY-facing; rotated flat like the baseline ground below).
   // Segment count scales with size but is capped — cheap even for a 400-unit ocean.
-  const segments = Math.max(8, Math.min(128, Math.round(size / 4)));
+  const segments = Math.max(8, Math.min(256, Math.round(opts.segments ?? size / 4)));
   const geometry = new THREE.PlaneGeometry(size, size, segments, segments);
+  let baked: BakedDepth | undefined;
+  let material: THREE.Material | undefined;
+  try {
+    baked = opts.depth === undefined ? undefined : bakeWaterDepth(opts.depth, opts.level);
+    material = createWaterMaterial({
+      color,
+      kind: "ocean",
+      orientation: "xy",
+      depth: baked === undefined ? undefined : { ...baked, outsideAsDeep: true },
+      peek: opts.peek,
+      waveCount: opts.waveCount,
+      sceneOptics: opts.sceneOptics,
+      edgeFadeHalfSizeM: size / 2,
+    });
+    const mesh = new THREE.Mesh(geometry, material) as unknown as WaterMesh;
+    attachWaterMaterialAuxiliaries(mesh as unknown as THREE.Mesh);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(opts.center?.[0] ?? 0, opts.level, opts.center?.[1] ?? 0);
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    (mesh as unknown as THREE.Mesh).renderOrder = 1;
+    mesh.name = "limina:water";
+    return mesh;
+  } catch (error) {
+    material?.dispose();
+    baked?.texture.dispose();
+    geometry.dispose();
+    throw error;
+  }
+}
 
-  // Body gradient endpoints in LINEAR render space. The requested sRGB `color` is the
-  // DEEP water (so world.addWater(color) still tints the body); SHALLOW is a brighter,
-  // greener turquoise derived from it — the two are blended by the view facing angle.
-  const base = new THREE.Color(color); // ColorManagement → linear components
-  const deepV = T.vec3(base.r, base.g, base.b);
-  const shallowV = T.vec3(
-    Math.min(1, base.r * 1.7 + 0.05),
-    Math.min(1, base.g * 1.45 + 0.20),
-    Math.min(1, base.b * 1.15 + 0.10),
-  );
+export interface WaterBodySurfaceOptions {
+  id: string;
+  kind: string;
+  level: number;
+  footprint: {
+    points: readonly WaterPoint2[];
+    holes?: readonly (readonly WaterPoint2[])[];
+  };
+  color?: number;
+  depth?: WaterDepthTextureBinding;
+  waveCount?: number;
+  sceneOptics?: WaterSceneOptics;
+}
 
-  // Low roughness + no metalness so the gradient-sky IBL (scene.environment) reflects
-  // off the surface (a dielectric, not chrome). `transparent` lets the underwater sand
-  // tint through; the node graph below drives color/roughness/opacity/emissive/position.
-  const material = new THREE.MeshStandardNodeMaterial({
-    color,
-    roughness: 0.1,
-    metalness: 0.0,
-    transparent: true,
-    opacity: 0.85,
+/** Build one authored standing-water polygon. Geometry is feature-local for large-world precision. */
+export function buildWaterBodySurface(options: WaterBodySurfaceOptions): THREE.Mesh {
+  let built: ReturnType<typeof buildWaterFootprintGeometry> | undefined;
+  let material: THREE.Material | undefined;
+  try {
+    built = buildWaterFootprintGeometry({ outer: options.footprint.points, holes: options.footprint.holes });
+    material = createWaterMaterial({
+      color: options.color ?? DEFAULT_WATER_COLOR,
+      kind: "basin",
+      orientation: "xz",
+      depth: options.depth,
+      waveCount: options.waveCount,
+      sceneOptics: options.sceneOptics,
+    });
+    const mesh = new THREE.Mesh(built.geometry, material);
+    attachWaterMaterialAuxiliaries(mesh);
+    mesh.position.set(built.origin[0], options.level, built.origin[1]);
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.renderOrder = 2;
+    mesh.name = "limina:water-body";
+    mesh.userData.waterBodyId = options.id;
+    mesh.userData.waterBodyKind = options.kind;
+    mesh.userData.waterBounds = built.bounds;
+    return mesh;
+  } catch (error) {
+    material?.dispose();
+    built?.geometry.dispose();
+    options.depth?.texture.dispose();
+    throw error;
+  }
+}
+
+/** Options for one river ribbon (see buildRiverRibbon). */
+export interface RiverOptions {
+  /** Channel centerline in world meters, [[x,z], ...] (>= 2 points). */
+  points: [number, number][];
+  /** Water surface width (meters). Slightly narrower than the terrain carve so the
+   *  ribbon's edges tuck into the banks instead of floating past them. */
+  widthM: number;
+  /** Optional canonical per-point widths. When present, length must match points. */
+  widthsM?: readonly number[];
+  /** Tint (sRGB hex). Default: the sea surface color. */
+  color?: number;
+  /** Terrain surface height at (x,z) — the CARVED channel floor along the centerline. */
+  sampleHeight: (x: number, z: number) => number;
+  /** Canonical per-point water surface elevations. Supplying this bypasses the legacy lift. */
+  surfaceElevationsM?: readonly number[];
+  /** Sea plane Y. Near/below it the ribbon drops to just above the plane (no lip at the mouth). */
+  seaLevel: number;
+  waveCount?: number;
+  sceneOptics?: WaterSceneOptics;
+  class?: "river" | "stream";
+  order?: number;
+}
+
+/** Build a RENDER-ONLY river: a triangle-strip ribbon draped along the channel the map
+ *  rasterizer carved, its surface floating ~1.2 m above the LOCAL channel floor (i.e. below
+ *  the banks), descending with the terrain. Same contract as buildWaterSurface: purely
+ *  cosmetic, recomputed from the logged request on replay, never sim state. A flat sea
+ *  plane cannot render a river crossing elevated ground — this is the water system's
+ *  terrain-following counterpart. */
+export function buildRiverRibbon(opts: RiverOptions): WaterMesh {
+  const widthsM = opts.widthsM ?? opts.points.map(() => opts.widthM);
+  // Compatibility only: legacy scalar callers supplied a carved-floor sampler but no water-surface
+  // channel. Verified map paths now supply exact sampled elevations and never enter this branch.
+  const surfaceElevationsM = opts.surfaceElevationsM ?? opts.points.map(([x, z]) => {
+    const legacy = opts.sampleHeight(x, z) + 2.2;
+    return legacy < opts.seaLevel + 0.45 ? opts.seaLevel + 0.03 : legacy;
   });
-
-  // View facing: for a flat sea the surface normal is world-up, so the vertical
-  // component of the view direction is the facing ratio (1 = looking straight down,
-  // →0 at the grazing horizon). The Fresnel term off it drives the deep-water blend.
-  const facing = T.clamp(T.cameraPosition.sub(T.positionWorld).normalize().y, 0, 1);
-  const fresnel = T.oneMinus(facing).pow(4); // grazing → 1
-
-  // ── Animated surface (render-graph only, scrolled by the `time` node) ──────────────
-  // A summed field of FOUR crossing directional waves (non-axis-aligned, different
-  // wavelengths + speeds) → a cellular, travelling surface with no single direction
-  // (no candy-cane stripes). We carry both the HEIGHT and its analytic SLOPE (∂h/∂u,
-  // ∂h/∂v in the plane's local UV) so the same field drives a true bump NORMAL and a
-  // matching vertex displacement — the surface visibly undulates and the sky-IBL
-  // reflection breaks up and travels across it like real water.
-  const t = T.time;
-  const lx = T.positionLocal.x; // plane-local U (world X)
-  const ly = T.positionLocal.y; // plane-local V (world Z, before the -90° X rotation)
-  const waves = [
-    { dx: 0.80, dy: 0.60, f: 0.30, s: 0.90, a: 1.00 },
-    { dx: -0.60, dy: 0.80, f: 0.42, s: 1.10, a: 0.80 },
-    { dx: 0.50, dy: -0.85, f: 0.55, s: 0.70, a: 0.60 },
-    { dx: -0.90, dy: -0.40, f: 0.68, s: 1.30, a: 0.45 },
-  ];
-  // deno-lint-ignore no-explicit-any
-  let height: any = null, slopeU: any = null, slopeV: any = null;
-  for (const w of waves) {
-    const phase = lx.mul(w.dx * w.f).add(ly.mul(w.dy * w.f)).add(t.mul(w.s));
-    const sinP = phase.sin();
-    const cosP = phase.cos();
-    height = height === null ? sinP.mul(w.a) : height.add(sinP.mul(w.a));
-    slopeU = slopeU === null ? cosP.mul(w.a * w.f * w.dx) : slopeU.add(cosP.mul(w.a * w.f * w.dx));
-    slopeV = slopeV === null ? cosP.mul(w.a * w.f * w.dy) : slopeV.add(cosP.mul(w.a * w.f * w.dy));
+  const built = buildVariableRiverRibbonGeometry({ points: opts.points, widthsM, surfaceElevationsM });
+  let material: THREE.Material | undefined;
+  try {
+    material = createWaterMaterial({
+      color: opts.color ?? DEFAULT_WATER_COLOR,
+      kind: "river",
+      orientation: "xz",
+      waveCount: opts.waveCount,
+      sceneOptics: opts.sceneOptics,
+    });
+    const mesh = new THREE.Mesh(built.geometry, material) as unknown as WaterMesh;
+    attachWaterMaterialAuxiliaries(mesh as unknown as THREE.Mesh);
+    mesh.position.set(built.origin[0], built.origin[1], built.origin[2]);
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    (mesh as unknown as THREE.Mesh).renderOrder = 3;
+    mesh.name = "limina:river";
+    const object = mesh as unknown as THREE.Mesh;
+    object.userData.waterwayClass = opts.class ?? "river";
+    if (opts.order !== undefined) object.userData.waterwayOrder = opts.order;
+    object.userData.waterwayLengthM = built.lengthM;
+    object.userData.waterwayPointCount = built.pointCount;
+    return mesh;
+  } catch (error) {
+    material?.dispose();
+    built.geometry.dispose();
+    throw error;
   }
-
-  // Bump normal: tilt the plane's local +Z face normal by the wave slope, then take it
-  // to view space so MeshStandardNodeMaterial lights + reflects off the rippled surface.
-  // Strength tuned so it reads as water, not chop.
-  const NORMAL_STRENGTH = 0.34;
-  const bumpN = T.vec3(slopeU.mul(-NORMAL_STRENGTH), slopeV.mul(-NORMAL_STRENGTH), 1).normalize();
-  material.normalNode = T.transformNormalToView(bumpN);
-
-  // Gentle vertex displacement from the SAME height field (local Z → world up after the
-  // -90° X rotation) so the silhouette/grazing edge undulates in step with the normals.
-  material.positionNode = T.positionLocal.add(T.vec3(0, 0, height.mul(0.06)));
-
-  // Roughness: near-mirror calm tropical water with a faint shimmer off the wave height
-  // so the IBL reflection has extra life. Small range → clean.
-  const h01 = T.clamp(height.mul(0.18).add(0.5), 0, 1);
-  material.roughnessNode = T.float(0.05).add(h01.mul(0.07)); // 0.05 .. 0.12
-
-  // ── Depth-based colour + opacity ──────────────────────────────────────────────────
-  if (opts.depth !== undefined) {
-    // TRUE WATER-COLUMN DEPTH from the terrain heightfield. Bake the region's floor into
-    // a normalised-depth texture and read it at each fragment's WORLD (x,z): depth grows
-    // as the floor drops away from the sea level, so the colour/opacity track the actual
-    // shoreline contour (no camera-distance "surf" ring, no hard square shelf edge).
-    const baked = bakeWaterDepth(opts.depth, opts.level);
-    const { minX, minZ, maxX, maxZ } = baked.bounds;
-    const u = T.positionWorld.x.sub(minX).div(maxX - minX);
-    const v = T.positionWorld.z.sub(minZ).div(maxZ - minZ);
-    const sampled = T.texture(baked.texture, T.vec2(u, v)).r; // 0 shallow → 1 deepest floor
-    // Outside the baked region the floor is unknown → read it as deep open sea, so the
-    // finite heightfield edge AND the void beyond it dissolve into uniform deep water.
-    // A narrow feather (~0.025 of the region) avoids a hard line at the boundary.
-    const outU = T.max(u.mul(-1), u.sub(1));
-    const outV = T.max(v.mul(-1), v.sub(1));
-    const oob = T.clamp(T.max(outU, outV).mul(40), 0, 1);
-    const depth01 = T.mix(sampled, T.float(1.0), oob);
-
-    // ── Shallow→deep ramp (TUNABLE; render-only). All thresholds are in normalised
-    // water-column depth: 0 at the waterline → 1 at the region's deepest floor. ──────────
-    //   SHADE_SHALLOW : below this depth the body stays clear turquoise — the wet-sand
-    //                   shallows you can see straight through (holds the bright band so the
-    //                   coast doesn't snap to blue right at the line).
-    //   SHADE_DEEP    : by this depth the body is full deep blue. The turquoise→blue
-    //                   transition spans SHADE_SHALLOW..SHADE_DEEP.
-    //   FRESNEL_DEEPEN: extra deepening at the grazing horizon (more sky reflection, less
-    //                   body transmission). Small so the shallows stay bright top-down.
-    //   OPACITY_MIN   : the clear film at the waterline (you read the wet sand through it).
-    //   OPACITY_DEEP_AT / OPACITY_MAX: depth at which — and the value to which — the body
-    //                   becomes essentially opaque over the deep.
-    const SHADE_SHALLOW = 0.05;
-    const SHADE_DEEP = 0.42;
-    const FRESNEL_DEEPEN = 0.25;
-    const OPACITY_MIN = 0.22;
-    const OPACITY_DEEP_AT = 0.55;
-    const OPACITY_MAX = 0.97;
-
-    // Colour: a clear turquoise shallows band (≤ SHADE_SHALLOW) → deep blue by SHADE_DEEP,
-    // with a touch of grazing-Fresnel deepening on top (kept small so the shallows read
-    // bright). Because depth tracks the real shoreline contour, the band hugs the coast.
-    const colourDeep = T.smoothstep(SHADE_SHALLOW, SHADE_DEEP, depth01);
-    const deepness = T.clamp(colourDeep.add(fresnel.mul(FRESNEL_DEEPEN)), 0, 1);
-    material.colorNode = T.mix(shallowV, deepV, deepness);
-
-    // Opacity: a clear film at the waterline (you see the wet sand) → opaque over the deep.
-    // The shore reads soft+crisp because depth→0 smoothly up the beach slope, so the
-    // transparency tapers along the real contour rather than a camera-distance ring.
-    const opaque = T.smoothstep(0.0, OPACITY_DEEP_AT, depth01);
-    material.opacityNode = T.float(OPACITY_MIN).add(opaque.mul(OPACITY_MAX - OPACITY_MIN));
-  } else {
-    // FALLBACK (no heightfield supplied, e.g. a bare lake): the legacy geometric proxy —
-    // the water fragment's own VIEW DISTANCE stands in for depth. Clear near the camera,
-    // darkening with distance + at the grazing horizon. No depth buffer, deterministic.
-    const dist = T.positionView.z.mul(-1); // view-forward distance in world units
-    const distFactor = T.smoothstep(6.0, 55.0, dist); // 0 near → 1 far
-    const deepness = T.clamp(distFactor.mul(0.85).add(fresnel.mul(0.5)), 0, 1);
-    material.colorNode = T.mix(shallowV, deepV, deepness);
-    material.opacityNode = T.float(0.55).add(deepness.mul(0.43)); // 0.55 clear → 0.98 opaque
-  }
-
-  const mesh = new THREE.Mesh(geometry, material) as unknown as WaterMesh;
-  mesh.rotation.x = -Math.PI / 2;
-  mesh.position.set(0, opts.level, 0);
-  // Water does not cast/receive hard shadow maps in this first cut (it would read as
-  // dirty); reflections + tone come from the IBL environment.
-  mesh.castShadow = false;
-  mesh.receiveShadow = false;
-  mesh.name = "limina:water";
-  return mesh;
 }
